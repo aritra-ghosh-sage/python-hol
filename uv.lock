@@ -2707,6 +2707,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
     { name = "langgraph" },
+    { name = "numpy" },
     { name = "requests" },
     { name = "sentence-transformers" },
 ]
@@ -2732,6 +2733,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=1.1.12" },
     { name = "langchain-text-splitters", specifier = ">=1.1.1" },
     { name = "langgraph", specifier = ">=1.1.6" },
+    { name = "numpy", specifier = ">=2.4.4" },
     { name = "requests", specifier = ">=2.33.1" },
     { name = "sentence-transformers", specifier = ">=5.3.0" },
 ]
