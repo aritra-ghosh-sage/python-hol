@@ -1,0 +1,322 @@
+"""Hybrid RAG Library - Developer Guide
+
+This document provides an overview of the refactored hybrid RAG library
+structure, design decisions, and best practices followed.
+"""
+
+# Hybrid RAG Library - Refactoring Documentation
+
+## Overview
+
+The hybrid RAG library has been refactored to follow Python best practices for production-ready libraries. The code is now modular, well-documented, properly typed, and includes comprehensive error handling and logging.
+
+## Directory Structure
+
+```
+hybrid_rag/             # Main library package
+├── __init__.py         # Package initialization and public API
+├── config.py           # Configuration classes with validation
+├── constants.py        # Constants and default values
+├── exceptions.py       # Custom exception classes
+├── reranker.py         # Cross-encoder based reranking
+├── retriever.py        # Core hybrid retrieval engine
+└── vectordb.py         # Vector database initialization and utilities
+
+# Example and API files at root
+├── main_example.py     # Example usage of the library
+├── api.py              # FastAPI REST API wrapper
+└── hybrid_rag_flow.py  # Simplified example script
+```
+
+## Design Principles
+
+### 1. **Modularity**
+   - Each module has a single, well-defined responsibility
+   - Core logic separated from API layer
+   - Easy to test and extend
+
+### 2. **Type Safety**
+   - Comprehensive type hints throughout
+   - Pydantic models for request/response validation
+   - Better IDE support and error detection
+
+### 3. **Error Handling**
+   - Custom exception hierarchy for different error types
+   - Proper exception propagation with context
+   - Graceful degradation where appropriate
+
+### 4. **Logging**
+   - Module-level loggers instead of print statements
+   - Structured logging with appropriate levels
+   - Easy to configure and filter logs
+
+### 5. **Configuration**
+   - Dataclass-based configuration with validation
+   - Type-safe configuration parameters
+   - Post-init validation to catch invalid configs early
+
+### 6. **Documentation**
+   - Comprehensive docstrings (Google style)
+   - Type hints as documentation
+   - Usage examples in docstrings
+   - Module-level documentation
+
+## Module Descriptions
+
+### `config.py` - Configuration Management
+Defines `HybridRetrieverConfig` dataclass with:
+- **Semantic search parameters**: `semantic_top_k`, `semantic_weight`
+- **Keyword search parameters**: `keyword_top_k`, `keyword_weight`
+- **Fusion parameters**: `final_top_k`, `pre_rerank_top_k`
+- **Reranking**: `enable_rerank` toggle
+- **Validation**: Post-init validation of weights and ranges
+
+```python
+config = HybridRetrieverConfig(
+    semantic_weight=0.7,
+    keyword_weight=0.3,
+    enable_rerank=True
+)
+```
+
+### `constants.py` - Constants and Defaults
+Centralized default values:
+- `DEFAULT_PERSIST_DIRECTORY`: ChromaDB persistence location
+- `MIN_RELEVANCE_SCORE`: Score threshold for relevant documents
+- `STOP_WORDS`: Filtered keywords for keyword search
+
+### `exceptions.py` - Exception Hierarchy
+Custom exceptions for better error handling:
+- `HybridRAGException`: Base class for all library exceptions
+- `RetrieverNotInitializedError`: Retriever not ready
+- `RetrievalError`: Retrieval operation failed
+- `VectorDBError`: Vector database operation failed
+
+### `vectordb.py` - Vector Database Management
+Core functions:
+- `chunk_text()`: Split text into overlapping chunks
+- `initialize_vector_db()`: Set up ChromaDB collection with embeddings
+- `get_sample_documents()`: Load sample Google Maps documentation
+
+Features:
+- Local sentence-transformer embeddings (no external APIs)
+- Cosine distance metric for similarity
+- Persistent storage
+- Comprehensive error handling
+
+### `reranker.py` - Cross-Encoder Reranking
+`CrossEncoderReranker` class:
+- Loads pre-trained ms-marco cross-encoder model
+- Scores query-document pairs directly
+- Applies sigmoid normalization to logits
+- Returns sorted results by relevance
+
+### `retriever.py` - Core Hybrid Retrieval
+`HybridRetriever` class implements:
+- **Semantic search**: Embedding-based similarity search
+- **Keyword search**: Stop-word filtered keyword matching
+- **Score fusion**: Weighted combination of scores
+- **Reranking**: Optional cross-encoder reranking
+- **Deduplication**: Source-based result deduplication
+
+Pipeline stages:
+1. Query cleaning (remove special characters)
+2. Parallel semantic and keyword search
+3. Score fusion with configurable weights
+4. Optional cross-encoder reranking
+5. Deduplication and top-k selection
+
+### `__init__.py` - Public API
+Exports all public classes and functions:
+- `HybridRetriever`, `HybridRetrieverConfig`
+- `CrossEncoderReranker`
+- Exception classes
+- Utility functions
+
+## Best Practices Implemented
+
+### 1. **Type Hints**
+```python
+def retrieve(self, query: str) -> List[Dict[str, Any]]:
+    """Execute hybrid retrieval pipeline..."""
+```
+
+### 2. **Docstrings (Google Style)**
+```python
+def chunk_text(text: str, chunk_size: int = 500) -> List[str]:
+    """Split text into overlapping chunks.
+
+    Args:
+        text: The text string to split.
+        chunk_size: Target size of each chunk.
+
+    Returns:
+        List of text chunks.
+
+    Raises:
+        ValueError: If parameters are invalid.
+    """
+```
+
+### 3. **Logging Instead of Print**
+```python
+logger = logging.getLogger(__name__)
+logger.info("Vector DB initialized successfully")
+logger.debug("Detailed operation information")
+logger.error("Error occurred", exc_info=True)
+```
+
+### 4. **Configuration Validation**
+```python
+@dataclass
+class HybridRetrieverConfig:
+    def __post_init__(self) -> None:
+        """Validate parameters after initialization."""
+        if not (0 < self.semantic_top_k):
+            raise ValueError("semantic_top_k must be > 0")
+```
+
+### 5. **Error Handling**
+```python
+try:
+    results = retriever.retrieve(query)
+except RetrievalError as e:
+    logger.error(f"Retrieval failed: {e}")
+    raise
+```
+
+### 6. **`__all__` Exports**
+```python
+__all__ = [
+    "HybridRetriever",
+    "HybridRetrieverConfig",
+    # ... other public items
+]
+```
+
+## Usage Examples
+
+### Basic Usage
+```python
+from hybrid_rag import (
+    HybridRetriever,
+    HybridRetrieverConfig,
+    initialize_vector_db,
+    get_sample_documents,
+)
+
+# Initialize
+documents = get_sample_documents()
+collection = initialize_vector_db(documents)
+
+# Configure
+config = HybridRetrieverConfig(
+    semantic_weight=0.7,
+    keyword_weight=0.3,
+    enable_rerank=True,
+)
+
+# Create retriever
+retriever = HybridRetriever(collection, config)
+
+# Retrieve
+results = retriever.retrieve("Your query here")
+```
+
+### API Usage
+```python
+# Run the FastAPI server
+python api.py
+
+# Make requests
+curl -X POST http://localhost:8000/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"query": "How do I use offline maps?"}'
+```
+
+## Testing Considerations
+
+The refactored code is designed for easier testing:
+
+1. **Dependency Injection**: Configuration and collection passed to retriever
+2. **Logging**: Uses standard logging module for easy mocking
+3. **Exception Hierarchy**: Specific exceptions for better testing
+4. **Type Safety**: Type hints catch errors early
+
+Example test:
+```python
+def test_hybrid_retriever():
+    config = HybridRetrieverConfig()
+    collection = initialize_vector_db(get_sample_documents())
+    retriever = HybridRetriever(collection, config)
+    
+    results = retriever.retrieve("test query")
+    assert len(results) > 0
+    assert all("score" in r for r in results)
+```
+
+## Configuration Management
+
+### Environment-based Configuration
+```python
+import os
+
+batch_size = int(os.getenv("BATCH_SIZE", 32))
+config = HybridRetrieverConfig(
+    semantic_weight=float(os.getenv("SEMANTIC_WEIGHT", 0.7)),
+    enable_rerank=os.getenv("ENABLE_RERANK", "true").lower() == "true"
+)
+```
+
+### Logging Configuration
+```python
+import logging.config
+
+logging.config.dictConfig({
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        }
+    },
+})
+```
+
+## Performance Considerations
+
+1. **Caching**: ChromaDB handles internal caching of embeddings
+2. **Batching**: Process multiple queries in batch if needed
+3. **Reranking**: Optional for performance-critical scenarios
+4. **Model Size**: Using MiniLM models for efficiency
+
+## Future Enhancements
+
+1. Add async retrieval support
+2. Implement caching layer for frequent queries
+3. Add metrics/monitoring endpoints
+4. Support for custom embedding models
+5. Batch retrieval operations
+6. Configuration file support (YAML/JSON)
+
+## Migration from Old Code
+
+Changes from original `hybrid_rag_flow.py`:
+
+1. **Split into modules**: Organized code by responsibility
+2. **Removed print statements**: Use logging instead
+3. **Added type hints**: Comprehensive type annotations
+4. **Added error handling**: Custom exceptions and try-catch blocks
+5. **Added logging**: Module-level loggers with different levels
+6. **Configuration validation**: Validate parameters on initialization
+7. **Better docstrings**: Google-style with examples
+8. **API layer**: Separate FastAPI wrapper for REST interface
+
+## Compatibility
+
+- Python 3.9+
+- chromadb 0.3.24+
+- sentence-transformers 2.2.0+
+- fastapi 0.100.0+
+- pydantic 2.0.0+
+- uvicorn 0.23.0+
