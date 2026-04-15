@@ -2684,6 +2684,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pypdf"
+version = "6.10.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/79/f2730c42ec7891a75a2fcea2eb4f356872bcbc671b711418060424796612/pypdf-6.10.1.tar.gz", hash = "sha256:62e6ca7f65aaa28b3d192addb44f97296e4be1748f57ed0f4efb2d4915841880", size = 5315704, upload-time = "2026-04-14T12:55:20.996Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/04/e3aa7f1f14dbc53429cae34666261eb935d99bd61d24756ab94d7e0309da/pypdf-6.10.1-py3-none-any.whl", hash = "sha256:6331940d3bfe75b7e6601d35db7adabab5fc1d716efaeb384e3c0c3957d033de", size = 335606, upload-time = "2026-04-14T12:55:18.941Z" },
+]
+
+[[package]]
 name = "pypika"
 version = "0.51.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2760,6 +2769,8 @@ dependencies = [
     { name = "langgraph" },
     { name = "numpy" },
     { name = "pydantic" },
+    { name = "pypdf" },
+    { name = "python-dotenv" },
     { name = "requests" },
     { name = "sentence-transformers" },
     { name = "uvicorn" },
@@ -2790,6 +2801,8 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.1.6" },
     { name = "numpy", specifier = ">=2.4.4" },
     { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "pypdf", specifier = ">=4.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "requests", specifier = ">=2.33.1" },
     { name = "sentence-transformers", specifier = ">=5.3.0" },
     { name = "uvicorn", specifier = ">=0.44.0" },

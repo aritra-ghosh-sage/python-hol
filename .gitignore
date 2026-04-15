@@ -9,6 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
+# Environment variables
+.env
+.env.*
+
 *.bin
 COMPLETION_REPORT.md
 CONFIG_UPDATE_CHANGELOG.md

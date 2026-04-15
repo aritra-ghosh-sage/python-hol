@@ -2,9 +2,13 @@
 
 import logging
 import math
+import os
 from typing import Any, Dict, List
 
+from dotenv import load_dotenv
 from sentence_transformers import CrossEncoder
+
+load_dotenv()
 
 __all__ = ["CrossEncoderReranker"]
 
@@ -37,7 +41,8 @@ class CrossEncoderReranker:
         """
         try:
             logger.debug(f"Loading cross-encoder model: {self._MODEL_NAME}")
-            self.model = CrossEncoder(self._MODEL_NAME)
+            hf_token = os.environ.get("HF_TOKEN")
+            self.model = CrossEncoder(self._MODEL_NAME, token=hf_token)
             logger.info("Cross-encoder reranker initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize cross-encoder reranker: {e}")
