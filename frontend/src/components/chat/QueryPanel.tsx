@@ -13,7 +13,7 @@ export function QueryPanel() {
   useEffect(() => {
     if (process.env.NODE_ENV !== "production") {
       const client = getWSClient();
-      (window as any).__wsDebug = () => {
+      (window as unknown as Record<string, unknown>).__wsDebug = () => {
         const state = client.debugState();
         console.log("=== WebSocket Debug Info ===");
         console.log("Connection State:", state.connectionState);

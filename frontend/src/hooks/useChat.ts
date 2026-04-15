@@ -2,56 +2,24 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { getWSClient } from "@/lib/ws";
-import { ChatMessage, WsIncomingMessage, DocumentResult } from "@/lib/types";
+import { ChatMessage, WsIncomingMessage } from "@/lib/types";
 
 export function useChat() {
   const wsClient = useRef(getWSClient());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isConnected, setIsConnected] = useState(() =>
-    wsClient.current.isConnected()
-  );
+  const [isConnected, setIsConnected] = useState(false);
   const [connectionState, setConnectionState] = useState<
     "connecting" | "connected" | "disconnected" | "error"
-  >(() => wsClient.current.getConnectionState());
+  >("disconnected");
   const messageIdRef = useRef(0);
 
-  // Initialize WebSocket on component mount
+  // Sync state from singleton on mount
   useEffect(() => {
-    const client = wsClient.current;
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[useChat] Mounting, client connection state:", client.getConnectionState());
-    }
-
-    // Subscribe to status changes BEFORE connecting
-    const unsubscribeStatus = client.onStatusChange((status) => {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[useChat] Status changed to:", status);
-      }
-      setConnectionState(status);
-      setIsConnected(status === "connected");
-    });
-
-    // Subscribe to messages
-    const unsubscribeMessages = client.onMessage((msg: WsIncomingMessage) => {
-      handleWsMessage(msg);
-    });
-
-    // Connect to WebSocket AFTER handlers are registered
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[useChat] Calling client.connect()");
-    }
-    client.connect();
-
-    return () => {
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[useChat] Unmounting");
-      }
-      unsubscribeStatus();
-      unsubscribeMessages();
-      // Don't disconnect on unmount - keep connection alive
-    };
+    setIsConnected(wsClient.current.isConnected());
+    setConnectionState(wsClient.current.getConnectionState());
   }, []);
 
+  // Define message handler before useEffect so it can be used in the dependency array
   const handleWsMessage = useCallback((msg: WsIncomingMessage) => {
     if (msg.type === "status") {
       // Update loading message
@@ -103,6 +71,43 @@ export function useChat() {
       });
     }
   }, []);
+
+  // Initialize WebSocket on component mount
+  useEffect(() => {
+    const client = wsClient.current;
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[useChat] Mounting, client connection state:", client.getConnectionState());
+    }
+
+    // Subscribe to status changes BEFORE connecting
+    const unsubscribeStatus = client.onStatusChange((status) => {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[useChat] Status changed to:", status);
+      }
+      setConnectionState(status);
+      setIsConnected(status === "connected");
+    });
+
+    // Subscribe to messages
+    const unsubscribeMessages = client.onMessage((msg: WsIncomingMessage) => {
+      handleWsMessage(msg);
+    });
+
+    // Connect to WebSocket AFTER handlers are registered
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[useChat] Calling client.connect()");
+    }
+    client.connect();
+
+    return () => {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[useChat] Unmounting");
+      }
+      unsubscribeStatus();
+      unsubscribeMessages();
+      // Don't disconnect on unmount - keep connection alive
+    };
+  }, [handleWsMessage]);
 
   const sendQuery = useCallback(
     (query: string, enableRerank?: boolean) => {

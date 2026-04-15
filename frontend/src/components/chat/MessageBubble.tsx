@@ -53,7 +53,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                       >
                         {result.source}
                       </a>
-                      <span className="bg-blue-500/30 text-blue-300 px-2 py-0.5 rounded text-xs flex-shrink-0">
+                      <span
+                        className="bg-blue-500/30 text-blue-300 px-2 py-0.5 rounded text-xs flex-shrink-0 cursor-help"
+                        title={`Relevance: ${(result.score * 100).toFixed(0)}%`}
+                      >
                         {(result.score * 100).toFixed(0)}%
                       </span>
                     </div>

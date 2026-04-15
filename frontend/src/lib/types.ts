@@ -6,6 +6,7 @@ export interface DocumentResult {
   id: string;
   text: string;
   source: string;
+  /** Relevance score (0-1). After backend filtering, only scores >= 0.85 are shown. */
   score: number;
 }
 

@@ -356,6 +356,13 @@ async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
             # Restore original setting
             _config.enable_rerank = original_rerank
 
+        # Filter results by minimum score threshold (0.85)
+        min_score_threshold = 0.85
+        filtered_results = [r for r in results if r["score"] >= min_score_threshold]
+        logger.debug(
+            f"Filtered from {len(results)} to {len(filtered_results)} results (min_score={min_score_threshold})"
+        )
+
         # Convert results to response model
         doc_results = [
             DocumentResult(
@@ -364,10 +371,10 @@ async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
                 source=r["metadata"]["source"],
                 score=float(r["score"]),
             )
-            for r in results
+            for r in filtered_results
         ]
 
-        logger.info(f"Retrieval complete: {len(doc_results)} results")
+        logger.info(f"Retrieval complete: {len(doc_results)} results after filtering")
         return RetrievalResponse(
             query=request.query, results=doc_results, total_results=len(doc_results)
         )
@@ -436,10 +443,11 @@ async def retrieve_filtered(
         finally:
             _config.enable_rerank = original_rerank
 
-        # Filter results by minimum score
-        filtered_results = [r for r in results if r["score"] >= min_score]
+        # Filter results by minimum score, enforcing floor of 0.85 for chat quality
+        effective_min_score = max(0.85, min_score)
+        filtered_results = [r for r in results if r["score"] >= effective_min_score]
         logger.debug(
-            f"Filtered from {len(results)} to {len(filtered_results)} results"
+            f"Filtered from {len(results)} to {len(filtered_results)} results (min_score={effective_min_score})"
         )
 
         doc_results = [
@@ -452,7 +460,7 @@ async def retrieve_filtered(
             for r in filtered_results
         ]
 
-        logger.info(f"Filtered retrieval complete: {len(doc_results)} results")
+        logger.info(f"Filtered retrieval complete: {len(doc_results)} results after filtering")
         return RetrievalResponse(
             query=request.query, results=doc_results, total_results=len(doc_results)
         )
@@ -651,6 +659,13 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 finally:
                     _config.enable_rerank = original_rerank
 
+                # Filter results by minimum score threshold (0.85)
+                min_score_threshold = 0.85
+                filtered_results = [r for r in results if r["score"] >= min_score_threshold]
+                logger.debug(
+                    f"Filtered from {len(results)} to {len(filtered_results)} results (min_score={min_score_threshold})"
+                )
+
                 # Convert results to response model
                 doc_results = [
                     DocumentResult(
@@ -659,15 +674,15 @@ async def websocket_chat(websocket: WebSocket) -> None:
                         source=r["metadata"]["source"],
                         score=float(r["score"]),
                     )
-                    for r in results
+                    for r in filtered_results
                 ]
 
-                # Send results
+                # Send results (total_results reflects post-filter count)
                 results_msg = WsResultsMessage(
                     query=query, results=doc_results, total_results=len(doc_results)
                 )
                 await websocket.send_json(results_msg.model_dump())
-                logger.info(f"WebSocket query succeeded: {query[:50]}... ({len(doc_results)} results)")
+                logger.info(f"WebSocket query succeeded: {query[:50]}... ({len(doc_results)} results after filtering)")
 
             except RetrievalError as e:
                 logger.error(f"WebSocket retrieval error: {e}")

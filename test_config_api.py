@@ -26,7 +26,7 @@ def create_session():
     return session
 
 
-def test_api(base_url: str = "http://localhost:8000", wait_for_startup: bool = False) -> int:
+def run_api_tests(base_url: str = "http://localhost:8000", wait_for_startup: bool = False) -> int:
     """Test the config update API endpoints.
     
     Args:
@@ -184,4 +184,4 @@ if __name__ == "__main__":
     parser.add_argument("--wait", action="store_true", help="Wait for API startup")
     args = parser.parse_args()
     
-    sys.exit(test_api(args.url, args.wait))
+    sys.exit(run_api_tests(args.url, args.wait))

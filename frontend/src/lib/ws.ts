@@ -5,10 +5,7 @@
 import {
   WsIncomingMessage,
   WsOutgoingMessage,
-  WsStatusMessage,
-  WsResultsMessage,
   WsErrorMessage,
-  DocumentResult,
 } from "./types";
 
 const WS_URL =
@@ -246,7 +243,7 @@ export function getWSClient(): WebSocketClient {
 
 // Expose debug on window for browser console access
 if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
-  (window as any).__wsDebug = () => {
+  (window as unknown as Record<string, unknown>).__wsDebug = () => {
     const client = getWSClient();
     const state = client.debugState();
     console.log("=== WebSocket Debug Info ===");
