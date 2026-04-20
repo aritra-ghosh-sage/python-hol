@@ -1,9 +1,16 @@
 """Pytest configuration and shared fixtures for all tests."""
 
 import logging
+import sys
+from pathlib import Path
 import pytest
 from typing import Generator
 from fastapi.testclient import TestClient
+
+# Ensure project root is importable when tests are run via uv/pytest.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import api
 from hybrid_rag import initialize_vector_db, get_sample_documents, HybridRetriever, HybridRetrieverConfig
@@ -17,6 +24,21 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+
+
+def _is_retriever_collection_healthy() -> bool:
+    """Return True when the global retriever has an accessible collection."""
+    if api._retriever is None:
+        return False
+
+    try:
+        collection = api._retriever.collection
+        # count() forces a round-trip to Chroma and surfaces stale/deleted handles.
+        _ = collection.count()
+        return True
+    except Exception as exc:
+        logger.warning("Retriever collection health check failed: %s", exc)
+        return False
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -43,8 +65,8 @@ def initialized_app() -> Generator[TestClient, None, None]:
     Yields:
         TestClient: A test client for the initialized app
     """
-    # Initialize retriever if not already done
-    if api._retriever is None:
+    # Initialize (or re-initialize) retriever if the collection handle is stale.
+    if not _is_retriever_collection_healthy():
         logger.info("Initializing retriever for test...")
         try:
             config = HybridRetrieverConfig(
