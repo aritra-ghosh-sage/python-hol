@@ -202,20 +202,30 @@ class TestL2EmbeddingCache:
         # For now, we test the principle: cached embeddings should not re-encode.
         
         from hybrid_rag import HybridRetriever, HybridRetrieverConfig
+        from unittest.mock import MagicMock
         
-        if _retriever is None:
-            pytest.skip("HybridRetriever not initialized")
+        config = HybridRetrieverConfig(enable_rerank=False)
+        collection = MagicMock()
+        collection.query.return_value = {
+            "ids": [["1"]],
+            "documents": [["test document"]],
+            "metadatas": [[{"source": "test"}]],
+            "distances": [[0.5]]
+        }
+        retriever = HybridRetriever(collection, config)
         
         # Retrieve same query twice
         query = "test query"
-        results1 = _retriever.retrieve(query)
-        results2 = _retriever.retrieve(query)
+        results1 = retriever.retrieve(query)
+        results2 = retriever.retrieve(query)
         
         # Results should be identical
         assert results1 == results2
         
         # Verify L2 cache is being used (check stats if available)
-        # Note: This is an integration test; full L2 testing requires unit tests
+        stats = retriever._get_embedding_cache_stats()
+        assert stats["hits"] == 1
+        assert stats["misses"] == 1
 
 
 # =============================================================================
