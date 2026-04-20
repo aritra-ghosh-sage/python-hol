@@ -1,0 +1,40 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.12, pytest-9.0.3, pluggy-1.6.0 -- /home/aritraghosh/projects/python-hol/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/aritraghosh/projects/python-hol
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.13.0, langsmith-0.7.29
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 29 items
+
+tests/test_cache_integration.py::test_cache_settings_from_env_memory PASSED [  3%]
+tests/test_cache_integration.py::test_cache_settings_from_env_redis PASSED [  6%]
+tests/test_cache_integration.py::test_create_cache_backend_memory PASSED [ 10%]
+tests/test_cache_integration.py::test_create_cache_backend_validates_settings PASSED [ 13%]
+tests/test_cache_integration.py::test_cache_stats_response_model PASSED  [ 17%]
+tests/test_cache_integration.py::test_ingest_request_with_type PASSED    [ 20%]
+tests/test_cache_integration.py::test_middleware_is_registered_before_routes PASSED [ 24%]
+tests/test_cache_integration.py::test_middleware_excluded_paths PASSED   [ 27%]
+tests/test_cache_integration.py::test_config_endpoint_clears_cache_on_update PASSED [ 31%]
+tests/test_cache_integration.py::test_config_endpoint_returns_status_with_cache_header PASSED [ 34%]
+tests/test_cache_integration.py::test_ingest_endpoint_has_ingest_type_parameter PASSED [ 37%]
+tests/test_cache_integration.py::test_ingest_endpoint_conditional_cache_clear_update PASSED [ 41%]
+tests/test_cache_integration.py::test_ingest_endpoint_preserves_cache_on_add PASSED [ 44%]
+tests/test_cache_integration.py::test_cache_stats_endpoint_exists_and_returns_200 PASSED [ 48%]
+tests/test_cache_integration.py::test_cache_stats_endpoint_returns_all_fields PASSED [ 51%]
+tests/test_cache_integration.py::test_cache_stats_hit_rate_calculation PASSED [ 55%]
+tests/test_cache_integration.py::test_cache_stats_endpoint_never_fails PASSED [ 58%]
+tests/test_cache_integration.py::test_cache_status_response_header PASSED [ 62%]
+tests/test_cache_integration.py::test_cache_timestamp_response_header PASSED [ 65%]
+tests/test_cache_integration.py::test_cache_operations_fail_open PASSED  [ 68%]
+tests/test_cache_integration.py::test_config_clear_logs_operation PASSED [ 72%]
+tests/test_cache_integration.py::test_ingest_type_logs_operation PASSED  [ 75%]
+tests/test_cache_integration.py::test_cache_stats_endpoint_has_docstring PASSED [ 79%]
+tests/test_cache_integration.py::test_cache_stats_response_model_has_docstring PASSED [ 82%]
+tests/test_cache_integration.py::test_ingest_request_updated_model_has_docstring PASSED [ 86%]
+tests/test_cache_integration.py::test_retrieve_endpoint_works_with_cache_middleware PASSED [ 89%]
+tests/test_cache_integration.py::test_cache_hit_miss_flow PASSED         [ 93%]
+tests/test_cache_integration.py::test_config_update_invalidates_cache PASSED [ 96%]
+tests/test_cache_integration.py::test_all_acceptance_criteria_implemented PASSED [100%]
+
+============================== 29 passed in 5.33s ==============================

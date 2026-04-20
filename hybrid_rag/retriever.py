@@ -1,10 +1,14 @@
 """Core hybrid retrieval engine combining semantic and keyword search."""
 
+import hashlib
 import logging
 import re
 from typing import Any, Dict, List
 
+import cachetools
+import numpy as np
 from chromadb.api.models.Collection import Collection
+from sentence_transformers import SentenceTransformer
 
 from .config import HybridRetrieverConfig
 from .constants import STOP_WORDS
@@ -71,6 +75,24 @@ class HybridRetriever:
             logger.warning(f"Failed to initialize reranker, reranking disabled: {e}")
             self.reranker = None
 
+        # Initialize encoder for embedding queries
+        try:
+            logger.debug("Initializing SentenceTransformer encoder")
+            self.encoder: SentenceTransformer = SentenceTransformer(
+                "all-MiniLM-L6-v2"
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize encoder: {e}")
+            raise
+
+        # Initialize L2 embedding cache
+        self._embedding_cache: cachetools.LRUCache[str, np.ndarray] = (
+            cachetools.LRUCache(maxsize=5000)
+        )
+        self._embedding_cache_hits: int = 0
+        self._embedding_cache_misses: int = 0
+        logger.debug("L2 embedding cache initialized with capacity 5000")
+
     def update_config(self, **kwargs: Any) -> HybridRetrieverConfig:
         """Update the retriever's configuration with new values.
 
@@ -103,6 +125,88 @@ class HybridRetriever:
         except (ValueError, TypeError) as e:
             logger.error(f"Configuration update failed: {e}")
             raise
+
+    def _get_or_encode_embedding(self, query_text: str) -> np.ndarray:
+        """Get or compute embedding for query text with L2 caching.
+
+        Uses SHA-256 hash of query text as cache key. Checks cache first,
+        returns cached embedding on hit. On miss, encodes query using
+        SentenceTransformer model and caches result.
+
+        Args:
+            query_text: The query string to encode.
+
+        Returns:
+            np.ndarray: The embedding vector for the query text.
+
+        Example:
+            >>> embedding = retriever._get_or_encode_embedding("What is RAG?")
+            >>> print(embedding.shape)
+            (384,)
+            >>> # Call again with same query - returns cached result
+            >>> cached_embedding = retriever._get_or_encode_embedding("What is RAG?")
+            >>> np.array_equal(embedding, cached_embedding)
+            True
+        """
+        # Compute cache key from query text
+        cache_key: str = hashlib.sha256(query_text.encode()).hexdigest()
+
+        # Check cache
+        if cache_key in self._embedding_cache:
+            self._embedding_cache_hits += 1
+            cached_embedding: np.ndarray = self._embedding_cache[cache_key]
+            logger.debug(
+                f"Embedding cache hit for query hash: {cache_key[:16]}... "
+                f"(total hits: {self._embedding_cache_hits})"
+            )
+            return cached_embedding
+
+        # Cache miss - encode the query
+        self._embedding_cache_misses += 1
+        logger.debug(
+            f"Embedding cache miss for query hash: {cache_key[:16]}... "
+            f"(total misses: {self._embedding_cache_misses})"
+        )
+
+        embedding: np.ndarray = self.encoder.encode(query_text)  # type: ignore[assignment]
+        # Store in cache
+        self._embedding_cache[cache_key] = embedding
+
+        return embedding
+
+    def _get_embedding_cache_stats(self) -> Dict[str, Any]:
+        """Get statistics about the L2 embedding cache.
+
+        Returns cache hit/miss counts, current size, capacity, and hit rate.
+
+        Returns:
+            Dict with keys:
+                - hits (int): Total cache hits
+                - misses (int): Total cache misses
+                - size (int): Current number of cached embeddings
+                - capacity (int): Maximum capacity of cache
+                - hit_rate (float): Hit rate as hits / (hits + misses),
+                                   or 0.0 if no activity
+
+        Example:
+            >>> stats = retriever._get_embedding_cache_stats()
+            >>> print(f"Cache hit rate: {stats['hit_rate']:.2%}")
+            >>> print(f"Cached embeddings: {stats['size']}/{stats['capacity']}")
+        """
+        total_accesses: int = self._embedding_cache_hits + self._embedding_cache_misses
+        hit_rate: float = (
+            self._embedding_cache_hits / total_accesses
+            if total_accesses > 0
+            else 0.0
+        )
+
+        return {
+            "hits": self._embedding_cache_hits,
+            "misses": self._embedding_cache_misses,
+            "size": len(self._embedding_cache),
+            "capacity": self._embedding_cache.maxsize,
+            "hit_rate": hit_rate,
+        }
 
     def _dedupe_by_source(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Remove duplicate documents from the same source URL.
@@ -166,8 +270,12 @@ class HybridRetriever:
         """
         try:
             logger.debug(f"Performing semantic search for query: {query[:50]}...")
+            
+            # Get or encode embedding (with caching)
+            query_embedding = self._get_or_encode_embedding(query)
+            
             res = self.collection.query(
-                query_texts=[query],
+                query_embeddings=[query_embedding.tolist()],
                 n_results=self.config.semantic_top_k,
                 include=["documents", "distances", "metadatas"],
             )

@@ -151,6 +151,139 @@ config = HybridRetrieverConfig(
 
 **Note**: `semantic_weight + keyword_weight` must equal 1.0
 
+## Configuring Cache
+
+The system includes automatic multi-layer caching for improved performance on repeated queries. No configuration is required—caching works out-of-the-box with sensible defaults.
+
+### Out-of-the-Box Caching
+
+By default, the system uses in-process TTL caching:
+- **Cache Backend**: Memory (development-friendly)
+- **TTL**: 3600 seconds (1 hour)
+- **Max Size**: 10000 entries with automatic LRU eviction
+
+### Environment Variables
+
+To customize caching behavior, set these environment variables in `.env.local`:
+
+```bash
+# Use in-memory cache (default, good for development)
+CACHE_BACKEND=memory
+CACHE_TTL_SECONDS=3600
+CACHE_MAX_SIZE=10000
+
+# Or use Redis for production deployments
+CACHE_BACKEND=redis
+REDIS_URL=redis://localhost:6379
+CACHE_TTL_SECONDS=1800
+CACHE_KEY_PREFIX=hybrid_rag_cache:
+```
+
+See `.env.local.example` for all available cache configuration options.
+
+### Monitoring Cache Performance
+
+Check cache statistics to understand hit rates and optimize performance:
+
+```bash
+# Get cache statistics
+curl http://localhost:8000/cache/stats
+```
+
+Response includes:
+- `hits`: Total cache hits
+- `misses`: Total cache misses  
+- `hit_rate`: Calculated as hits/(hits+misses)
+- `size`: Current number of cached entries
+- `backend`: Which cache backend is active
+
+Example response:
+```json
+{
+  "backend": "memory",
+  "hits": 1500,
+  "misses": 350,
+  "hit_rate": 0.811,
+  "size": 125,
+  "max_size": 10000,
+  "ttl_seconds": 3600,
+  "timestamp": "2026-04-20T10:30:45Z"
+}
+```
+
+### Bulk Document Ingestion
+
+When ingesting many documents, preserve the cache to avoid invalidation:
+
+```bash
+# Preserve cache (recommended for bulk adds)
+curl -X POST http://localhost:8000/documents \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ingest_type": "add",
+    "source_type": "text",
+    "content": "Your document content here...",
+    "source_label": "bulk_import_1"
+  }'
+
+# Clear cache (for config changes - default behavior)
+curl -X POST http://localhost:8000/config \
+  -H "Content-Type: application/json" \
+  -d '{"semantic_weight": 0.8, "keyword_weight": 0.2}'
+```
+
+The `ingest_type` parameter controls cache behavior:
+- `"add"`: Preserve existing cache for incremental document additions
+- `"update"`: Clear cache after ingestion (default, ensures accuracy after bulk updates)
+
+### Clearing Cache
+
+Cache is automatically invalidated when configuration changes:
+
+```bash
+# Update configuration - cache automatically cleared
+curl -X PUT http://localhost:8000/config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "semantic_weight": 0.8,
+    "keyword_weight": 0.2,
+    "enable_rerank": false
+  }'
+```
+
+### Advanced: Production Redis Setup
+
+For production deployments with multiple instances:
+
+1. **Start Redis server**:
+   ```bash
+   docker run -d -p 6379:6379 redis:latest
+   ```
+
+2. **Configure environment**:
+   ```bash
+   export CACHE_BACKEND=redis
+   export REDIS_URL=redis://cache-server:6379/0
+   export CACHE_TTL_SECONDS=1800
+   export CACHE_KEY_PREFIX=myapp:
+   ```
+
+3. **Start API with Redis caching**:
+   ```bash
+   python api.py
+   ```
+
+4. **Monitor cache health**:
+   ```bash
+   # Via HTTP
+   curl http://localhost:8000/cache/stats
+   
+   # Or via Redis CLI
+   redis-cli INFO stats
+   ```
+
+For detailed production configuration, see [docs/CACHE_DEPLOYMENT.md](../docs/CACHE_DEPLOYMENT.md).
+
 ## Error Handling
 
 The library defines custom exceptions:

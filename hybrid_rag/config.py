@@ -1,9 +1,20 @@
 """Configuration classes and models for hybrid retrieval."""
 
-from dataclasses import dataclass, field, replace
-from typing import Any, Dict, Optional
+from __future__ import annotations
 
-__all__ = ["HybridRetrieverConfig", "DEFAULT_CONFIG"]
+import os
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+
+if TYPE_CHECKING:
+    from .cache import CacheBackend
+
+__all__ = [
+    "HybridRetrieverConfig",
+    "DEFAULT_CONFIG",
+    "CacheSettings",
+    "create_cache_backend",
+]
 
 
 @dataclass
@@ -134,3 +145,191 @@ DEFAULT_CONFIG = HybridRetrieverConfig(
     keyword_weight=0.3,
     enable_rerank=True,
 )
+
+
+@dataclass
+class CacheSettings:
+    """Configuration for cache backend and behavior.
+
+    Configures the caching layer for the hybrid retrieval pipeline, supporting both
+    in-memory caching (for local development) and Redis caching (for distributed systems).
+
+    The cache stores query results and intermediate computations to improve performance
+    across multiple retrievals of the same or similar queries.
+
+    Attributes:
+        backend: Cache backend to use. Either 'memory' for in-process TTL cache,
+            or 'redis' for distributed Redis-backed caching.
+            Defaults to 'memory' for development, 'redis' for production.
+        ttl_seconds: Time-to-live for cached entries in seconds. Defaults to 3600 (1 hour).
+            Set to 0 for indefinite caching (not recommended for production).
+        redis_url: Connection URL for Redis backend (e.g., 'redis://localhost:6379').
+            Required if backend='redis', ignored if backend='memory'.
+            Defaults to None.
+        key_prefix: Prefix prepended to all cache keys to avoid collisions in shared Redis.
+            Defaults to 'hybrid_rag_cache:'.
+        max_size: Maximum number of entries in in-memory cache before eviction.
+            Ignored if backend='redis'. Defaults to 10000.
+
+    Example:
+        >>> # In-memory cache for local development
+        >>> settings = CacheSettings(
+        ...     backend="memory",
+        ...     ttl_seconds=3600,
+        ...     max_size=10000
+        ... )
+        >>>
+        >>> # Redis cache for production
+        >>> settings = CacheSettings(
+        ...     backend="redis",
+        ...     redis_url="redis://prod-cache:6379/0",
+        ...     key_prefix="myapp:",
+        ...     ttl_seconds=1800
+        ... )
+    """
+
+    backend: Literal["memory", "redis"] = field(
+        default="memory",
+        metadata={"description": "Cache backend: 'memory' or 'redis'"},
+    )
+    ttl_seconds: int = field(
+        default=3600,
+        metadata={"description": "Time-to-live for cache entries in seconds"},
+    )
+    redis_url: Optional[str] = field(
+        default=None,
+        metadata={"description": "Redis connection URL (required for redis backend)"},
+    )
+    key_prefix: str = field(
+        default="hybrid_rag_cache:",
+        metadata={"description": "Prefix for cache keys in Redis"},
+    )
+    max_size: int = field(
+        default=10000,
+        metadata={"description": "Max size for in-memory cache"},
+    )
+
+    def __post_init__(self) -> None:
+        """Validate cache settings after initialization.
+
+        Raises:
+            ValueError: If configuration is invalid:
+                - backend='redis' but redis_url is None
+                - ttl_seconds <= 0
+                - max_size <= 0
+        """
+        # Validate redis configuration
+        if self.backend == "redis" and not self.redis_url:
+            raise ValueError(
+                "redis_url is required when backend='redis'. "
+                f"Got backend='{self.backend}', redis_url={self.redis_url}"
+            )
+
+        # Validate ttl_seconds
+        if self.ttl_seconds <= 0:
+            raise ValueError(
+                f"ttl_seconds must be > 0, got {self.ttl_seconds}"
+            )
+
+        # Validate max_size
+        if self.max_size <= 0:
+            raise ValueError(
+                f"max_size must be > 0, got {self.max_size}"
+            )
+
+    @classmethod
+    def from_env(cls) -> CacheSettings:
+        """Create CacheSettings from environment variables.
+
+        Reads:
+            CACHE_BACKEND: 'memory' or 'redis' (default: 'memory')
+            REDIS_URL: Connection URL for Redis (required if CACHE_BACKEND='redis')
+            CACHE_TTL_SECONDS: TTL in seconds (default: 3600)
+            CACHE_KEY_PREFIX: Prefix for cache keys (default: 'hybrid_rag_cache:')
+            CACHE_MAX_SIZE: Max in-memory cache size (default: 10000)
+
+        Returns:
+            CacheSettings instance configured from environment.
+
+        Raises:
+            ValueError: If configuration from environment is invalid.
+
+        Example:
+            >>> # With environment variables set:
+            >>> # CACHE_BACKEND=redis
+            >>> # REDIS_URL=redis://localhost:6379
+            >>> settings = CacheSettings.from_env()
+        """
+        backend: Literal["memory", "redis"] = (
+            os.getenv("CACHE_BACKEND", "memory")  # type: ignore[assignment]
+        )
+        redis_url = os.getenv("REDIS_URL")
+        ttl_seconds = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
+        key_prefix = os.getenv("CACHE_KEY_PREFIX", "hybrid_rag_cache:")
+        max_size = int(os.getenv("CACHE_MAX_SIZE", "10000"))
+
+        return cls(
+            backend=backend,
+            redis_url=redis_url,
+            ttl_seconds=ttl_seconds,
+            key_prefix=key_prefix,
+            max_size=max_size,
+        )
+
+
+def create_cache_backend(settings: CacheSettings) -> CacheBackend:
+    """Factory function to create a cache backend from settings.
+
+    Creates and returns the appropriate cache backend (InMemoryCache or RedisCache)
+    based on the provided CacheSettings configuration.
+
+    Args:
+        settings: CacheSettings instance with backend configuration.
+
+    Returns:
+        CacheBackend: Initialized cache backend instance.
+            - InMemoryCache if backend='memory'
+            - RedisCache if backend='redis'
+
+    Raises:
+        ValueError: If settings validation fails.
+        ImportError: If required dependencies for the backend are missing.
+
+    Example:
+        >>> from hybrid_rag.config import CacheSettings, create_cache_backend
+        >>>
+        >>> # Create in-memory cache
+        >>> settings = CacheSettings(backend="memory", ttl_seconds=3600)
+        >>> cache = create_cache_backend(settings)
+        >>> cache.set("key", {"value": 123})
+        >>>
+        >>> # Create Redis cache
+        >>> settings = CacheSettings(
+        ...     backend="redis",
+        ...     redis_url="redis://localhost:6379",
+        ...     key_prefix="app:"
+        ... )
+        >>> cache = create_cache_backend(settings)
+        >>> cache.set("key", {"value": 123})
+    """
+    from .cache import CacheBackend, InMemoryCache, RedisCache
+
+    if settings.backend == "memory":
+        return InMemoryCache(
+            ttl_seconds=settings.ttl_seconds,
+            max_size=settings.max_size,
+        )
+    elif settings.backend == "redis":
+        # redis_url is guaranteed to be not None by __post_init__ validation
+        assert settings.redis_url is not None
+        return RedisCache(
+            redis_url=settings.redis_url,
+            key_prefix=settings.key_prefix,
+            ttl_seconds=settings.ttl_seconds,
+        )
+    else:
+        raise ValueError(
+            f"Unknown cache backend: {settings.backend}. "
+            "Must be 'memory' or 'redis'."
+        )
+

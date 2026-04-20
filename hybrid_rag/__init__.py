@@ -53,6 +53,11 @@ __all__ = [
     "RetrieverNotInitializedError",
     "RetrievalError",
     "VectorDBError",
+    "CacheBackend",
+    "InMemoryCache",
+    "RedisCache",
+    "CacheSettings",
+    "create_cache_backend",
     "chunk_text",
     "initialize_vector_db",
     "get_sample_documents",
@@ -63,7 +68,13 @@ __all__ = [
 ]
 
 # Public API imports
-from .config import DEFAULT_CONFIG, HybridRetrieverConfig
+from .cache import CacheBackend, InMemoryCache, RedisCache
+from .config import (
+    DEFAULT_CONFIG,
+    CacheSettings,
+    HybridRetrieverConfig,
+    create_cache_backend,
+)
 from .constants import (
     DEFAULT_PERSIST_DIRECTORY,
     MIN_RELEVANCE_SCORE,

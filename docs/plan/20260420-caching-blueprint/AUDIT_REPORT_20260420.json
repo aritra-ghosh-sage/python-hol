@@ -1,0 +1,609 @@
+{
+  "audit_metadata": {
+    "timestamp": "2026-04-20T00:00:00Z",
+    "plan_id": "20260420-caching-blueprint",
+    "implementation_stage": "CACHE-001,003,004 (MVP with blocking issue fixes)",
+    "audit_scope": ["hybrid_rag/cache.py", "api_middleware.py", "api.py"],
+    "auditor_role": "Comprehensive Security, Error Handling, Test Coverage, ADR Alignment"
+  },
+
+  "executive_summary": {
+    "overall_health": "YELLOW - Security, resilience, and test coverage concerns identified",
+    "critical_findings": 3,
+    "important_findings": 8,
+    "suggestion_findings": 5,
+    "adr_compliance_rate": 0.67,
+    "confidence_level": 0.92
+  },
+
+  "security_issues": [
+    {
+      "id": "SEC-001-CACHE-INJECTION",
+      "category": "A05 - Injection",
+      "severity": "CRITICAL",
+      "confidence": 0.95,
+      "location": "api_middleware.py:_generate_cache_key()",
+      "finding": "Cache key generated from unsanitized request body JSON. While SHA-256 hashing provides collision resistance, the key generation logic extracts enable_rerank from JSON without validation. A malicious request could exploit JSON parsing edge cases.",
+      "evidence": {
+        "code": "key_data = f\"{body.decode('utf-8')}:{str(enable_rerank)}\"",
+        "risk": "If JSON parsing differs between client and server, attackers could craft multiple identical queries with different JSON representations"
+      },
+      "fix": "Normalize JSON before hashing (json.dumps with sort_keys=True, separators) to ensure canonical form. This prevents cache key collisions from equivalent but differently-formatted JSON.",
+      "code_example": "import json\nkey_data = json.dumps(json.loads(body.decode('utf-8')), sort_keys=True, separators=(',', ':')) + ':' + str(enable_rerank)\nkey_hash = hashlib.sha256(key_data.encode()).hexdigest()",
+      "references": ["OWASP A05 - Injection", "cache.py#L175 - SHA-256 hashing is good but incomplete"]
+    },
+    {
+      "id": "SEC-002-MULTIPART-BYPASS",
+      "category": "A01 - Broken Access Control + A05 - Injection",
+      "severity": "CRITICAL",
+      "confidence": 0.88,
+      "location": "api_middleware.py:_read_request_body()",
+      "finding": "Request body replay pattern reads entire body into memory. For multipart/form-data uploads, this bypasses streaming and could load large files entirely into memory, causing DoS. Additionally, binary file data is treated as UTF-8 text for cache key generation.",
+      "evidence": {
+        "code": "body = await request.body()\nbody.decode('utf-8', errors='ignore')  # Silently ignores binary corruption",
+        "risk": "Uploading a 100MB PDF via /documents endpoint would load entire PDF into memory TWICE (once in middleware, once in handler)"
+      },
+      "fix": "Exclude POST /documents and other file upload endpoints from caching entirely. The middleware already excludes /ingest, but /documents is not excluded.",
+      "code_example": "excluded_paths=['/health', '/config', '/ingest', '/cache/stats', '/documents', '/documents/sources']  # Add file upload endpoints",
+      "references": ["api.py:453 - excluded_paths is incomplete", "OWASP A05 - Resource exhaustion via multipart"]
+    },
+    {
+      "id": "SEC-003-SENSITIVE-DATA-CACHE",
+      "category": "A01 - Broken Access Control + A04 - Cryptographic Failures",
+      "severity": "IMPORTANT",
+      "confidence": 0.90,
+      "location": "api_middleware.py:dispatch() + hybrid_rag/cache.py",
+      "finding": "Cache stores full RetrievalResponse objects (JSON serialized) as raw bytes. If cache key is compromised or Redis credentials leaked, attackers can access cached search results without re-querying. No encryption at rest; Redis stores unencrypted values.",
+      "evidence": {
+        "code": "response_body: bytes = await self._extract_response_body(response)\nself.cache_backend.set(cache_key, response_body)  # Stores raw bytes",
+        "risk": "If Redis is exposed on internal network, all cached query results are readable"
+      },
+      "fix": "For production: Encrypt cache values using Fernet (symmetric encryption) with a key from CACHE_ENCRYPTION_KEY environment variable. Document this as a must-do for prod deployments.",
+      "code_example": "from cryptography.fernet import Fernet\ncipher = Fernet(encryption_key)\nencrypted = cipher.encrypt(response_body)\nself.cache_backend.set(cache_key, encrypted)",
+      "references": ["OWASP A04 - Cryptographic Failures", "ADR-001 should address encryption at rest"]
+    },
+    {
+      "id": "SEC-004-REDIS-AUTH",
+      "category": "A02 - Security Misconfiguration",
+      "severity": "IMPORTANT",
+      "confidence": 0.92,
+      "location": "hybrid_rag/cache.py:RedisCache.__init__() + hybrid_rag/config.py:CacheSettings",
+      "finding": "Redis URL accepts REDIS_URL environment variable without enforcing authentication. Default connection is 'redis://localhost:6379' with no password or TLS.",
+      "evidence": {
+        "code": "redis_url: str = os.getenv('REDIS_URL', 'redis://localhost:6379')",
+        "risk": "Credentials in URL are logged/exposed. No validation that URL uses TLS or credentials."
+      },
+      "fix": "1) Enforce TLS: validate redis_url starts with 'rediss://' in production. 2) Extract password from URL and warn if missing in prod. 3) Document required format: rediss://:password@host:port/db",
+      "code_example": "if os.getenv('ENVIRONMENT') == 'production':\n  if not redis_url.startswith('rediss://'):\n    raise ValueError('Production Redis must use TLS (rediss://)')",
+      "references": ["OWASP A02 - Security Misconfiguration", "OWASP A04 - Cryptographic Failures"]
+    },
+    {
+      "id": "SEC-005-CORS-WILDCARD",
+      "category": "A02 - Security Misconfiguration",
+      "severity": "IMPORTANT",
+      "confidence": 0.85,
+      "location": "api.py:455-460",
+      "finding": "CORS allows explicit origins from CORS_ORIGINS env var, but allows credentials. If frontend origin is misconfigured, or if wildcard is accidentally used, cross-origin attacks become possible.",
+      "evidence": {
+        "code": "app.add_middleware(\n  CORSMiddleware,\n  allow_origins=allow_origins,\n  allow_credentials=True,\n)",
+        "risk": "If CORS_ORIGINS=* (or includes attacker domain), credentials (httpOnly cookies) are sent cross-origin"
+      },
+      "fix": "Validate CORS_ORIGINS at startup: raise error if '*' is detected or if frontend URL is not HTTPS in production.",
+      "code_example": "if '*' in allow_origins and os.getenv('ENVIRONMENT') == 'production':\n  raise ValueError('CORS wildcard not allowed in production')",
+      "references": ["OWASP A02 - Security Misconfiguration"]
+    },
+    {
+      "id": "SEC-006-ERROR-RESPONSE-LEAKAGE",
+      "category": "A10 - Mishandling of Exceptional Conditions",
+      "severity": "SUGGESTION",
+      "confidence": 0.88,
+      "location": "api.py multiple endpoints (e.g., retrieve, update_config)",
+      "finding": "Error responses include exception messages directly: `detail=f'Retrieval failed: {str(e)}'`. In production, this leaks internal error details to clients.",
+      "evidence": {
+        "code": "except RetrievalError as e:\n  raise HTTPException(status_code=500, detail=f'Retrieval failed: {str(e)}')",
+        "risk": "Stack traces, database connection errors, internal library names exposed to client"
+      },
+      "fix": "Generic error messages in production; detailed logs on server side only.",
+      "code_example": "except RetrievalError as e:\n  logger.error(f'Retrieval failed: {e}')\n  detail = 'An error occurred' if is_production else str(e)\n  raise HTTPException(status_code=500, detail=detail)",
+      "references": ["OWASP A10 - Mishandling of Exceptional Conditions"]
+    }
+  ],
+
+  "error_handling_concerns": [
+    {
+      "blocking_issue_id": "Issue #1: Config-Aware Cache Keys",
+      "adr_reference": "ADR-006",
+      "description": "POST /config changes weights but cached responses reuse old weights",
+      "current_fix": "lazy_cache.clear() after config update",
+      "implementation_status": "IMPLEMENTED",
+      "risk_assessment": {
+        "severity": "HIGH",
+        "race_condition_risk": "PRESENT",
+        "evidence": "Between lazy_cache.clear() and next request, a concurrent request could cache with old config",
+        "toctou_window": "~1-5ms depending on GC"
+      },
+      "concerns": [
+        {
+          "concern": "Clear is fire-and-forget; in-flight requests may still use old config",
+          "mitigation": "Very unlikely in practice (microseconds race window), but theoretically possible",
+          "recommendation": "Add config version tag to cache key (e.g., cache:hash:config_v2). Increment config_v on each change."
+        },
+        {
+          "concern": "If clear() fails silently (fail-open), old cached responses persist",
+          "mitigation": "Log warning on clear failure",
+          "recommendation": "Verify clear() succeeded; if not, log ERROR and consider refusing the config update"
+        }
+      ],
+      "fixes_needed": [
+        "Add config version tracking: _config_version counter, increment on each update",
+        "Include version in cache key: f'{body.decode()}:{enable_rerank}:{_config_version}'",
+        "Log and alert if clear() fails"
+      ]
+    },
+    {
+      "blocking_issue_id": "Issue #2: Cache Stampede (MVP)",
+      "adr_reference": "ADR-005 (partial)",
+      "description": "Popular query miss → 100 concurrent requests hit retriever simultaneously",
+      "current_fix": "Monitor with /cache/stats endpoint + logging",
+      "implementation_status": "INCOMPLETE",
+      "risk_assessment": {
+        "severity": "MEDIUM",
+        "likelihood": "HIGH for popular queries",
+        "impact": "CPU spike, 3-5s retrieval latency until first response cached",
+        "typical_scenario": "100 concurrent clients query 'what is RAG' during cache miss"
+      },
+      "concerns": [
+        {
+          "concern": "No lock-based protection; all 100 requests execute full retrieval pipeline",
+          "mitigation": "Monitoring detects this AFTER it happens",
+          "recommendation": "Implement write-through or probabilistic early expiration (TTL jitter)"
+        },
+        {
+          "concern": "Stats endpoint only provides post-facto metrics",
+          "mitigation": "None; requires alerting/dashboard integration",
+          "recommendation": "Add proactive spike detection: if (misses / hits) ratio > threshold, log WARN"
+        }
+      ],
+      "fixes_needed": [
+        "Implement TTL jitter: add ±10% randomness to TTL to stagger expirations",
+        "Add cache stampede detection: warn if hit_rate drops below 20% in 1-minute window",
+        "Optional: implement request coalescing (single request for N pending identical queries)"
+      ]
+    },
+    {
+      "blocking_issue_id": "Issue #3: Aggressive Cache Invalidation (MVP)",
+      "adr_reference": "ADR-003",
+      "description": "POST /ingest clears entire cache; cache stays cold after bulk adds",
+      "current_fix": "ingest_type parameter: 'add' preserves cache, 'update' clears",
+      "implementation_status": "IMPLEMENTED",
+      "risk_assessment": {
+        "severity": "MEDIUM",
+        "backwards_compatibility_risk": "PRESENT",
+        "evidence": "Default is 'update' for backwards compatibility, but new clients must specify 'add'"
+      },
+      "concerns": [
+        {
+          "concern": "Default ingest_type='update' clears cache even for bulk 'add' operations",
+          "mitigation": "Developers must explicitly set ingest_type='add' to preserve cache",
+          "recommendation": "Consider flipping default to 'add'; document that 'update' is for corpus changes"
+        },
+        {
+          "concern": "No mechanism to know if ingest was a full corpus replacement or incremental add",
+          "mitigation": "Caller must specify; API has no way to auto-detect",
+          "recommendation": "Add optional 'corpus_modified' flag to request; if false, never clear"
+        },
+        {
+          "concern": "Clear waits for no response; clients don't know if cache was cleared",
+          "mitigation": "Response includes 'cache_cleared': true/false",
+          "recommendation": "Add cache_cleared field to DocumentIngestionResponse"
+        }
+      ],
+      "fixes_needed": [
+        "Change default ingest_type to 'add' (breaking change, needs migration docs)",
+        "Add cache_cleared field to response: DocumentIngestionResponse.cache_cleared: bool",
+        "Document: 'add' for incremental ingestion, 'update' for corpus refreshes"
+      ]
+    },
+    {
+      "resilience_pattern_id": "RP-001: Fail-Open on Cache Backend Failure",
+      "location": "api_middleware.py:dispatch() + hybrid_rag/cache.py",
+      "assessment": "WELL-IMPLEMENTED",
+      "evidence": [
+        "All cache operations wrapped in try-except",
+        "Redis errors logged but not propagated",
+        "LazyCache wrapper handles None gracefully",
+        "Middleware returns 200 even if cache unavailable"
+      ],
+      "strength": "Excellent resilience: cache backend failure does not break retrieval",
+      "weakness": "Silent failures make debugging harder; consider structured observability"
+    },
+    {
+      "resilience_pattern_id": "RP-002: Response Body Extraction",
+      "location": "api_middleware.py:_extract_response_body()",
+      "assessment": "RISKY - Multiple fallback strategies with silent failures",
+      "evidence": [
+        "Tries 3 different methods to extract body",
+        "Falls back to empty bytes if all fail",
+        "No logging of which strategy succeeded"
+      ],
+      "concern": "If body extraction fails silently, cache receives empty bytes and misses all future identical queries",
+      "recommendation": "Log which extraction method succeeded; alert on all-methods-failed"
+    }
+  ],
+
+  "test_coverage_gaps": [
+    {
+      "scenario": "Concurrent cache operations under high load",
+      "gap_type": "THREAD_SAFETY",
+      "priority": "HIGH",
+      "description": "Test 50+ concurrent POST /retrieve requests with InMemoryCache and RedisCache. Verify no race conditions, no lost updates, hit/miss counters accurate.",
+      "test_case": "test_concurrent_cache_operations_50_threads",
+      "expected_coverage": ["Thread safety", "Race condition detection", "Hit/miss accuracy under contention"]
+    },
+    {
+      "scenario": "Cache invalidation race conditions",
+      "gap_type": "RACE_CONDITION",
+      "priority": "HIGH",
+      "description": "Issue #1 TOCTOU: POST /config clears cache, then 10 simultaneous /retrieve requests fire. Verify old cached responses not served.",
+      "test_case": "test_config_update_race_with_concurrent_retrieval",
+      "expected_coverage": ["Config version consistency", "Cache coherency after invalidation"]
+    },
+    {
+      "scenario": "Redis connection failure during cache operations",
+      "gap_type": "RESILIENCE",
+      "priority": "MEDIUM",
+      "description": "Kill Redis mid-request, verify: 1) requests succeed with cache bypass, 2) stats show errors gracefully, 3) no exceptions propagate.",
+      "test_case": "test_redis_failure_graceful_degradation",
+      "expected_coverage": ["Fail-open behavior", "Error logging", "Service availability"]
+    },
+    {
+      "scenario": "TTL expiration edge cases",
+      "gap_type": "CORRECTNESS",
+      "priority": "MEDIUM",
+      "description": "Set TTL to 1 second, immediately query; sleep 2s, query again. Verify cache miss after TTL. Test with InMemoryCache and RedisCache.",
+      "test_case": "test_cache_ttl_expiration_edge_cases",
+      "expected_coverage": ["TTL enforcement", "Expiration boundaries"]
+    },
+    {
+      "scenario": "Middleware body replay correctness",
+      "gap_type": "CORRECTNESS",
+      "priority": "MEDIUM",
+      "description": "Post multipart/form-data to /documents (which should be excluded). Verify body is not corrupted, file upload succeeds.",
+      "test_case": "test_middleware_body_replay_multipart",
+      "expected_coverage": ["Body corruption prevention", "Streaming integrity"]
+    },
+    {
+      "scenario": "Cache key collision detection",
+      "gap_type": "SECURITY",
+      "priority": "HIGH",
+      "description": "Send two queries with equivalent JSON (different formatting, same content). Verify they map to same cache key. Test with enable_rerank=true/false variations.",
+      "test_case": "test_cache_key_normalization",
+      "expected_coverage": ["JSON normalization", "Collision safety"]
+    },
+    {
+      "scenario": "L1+L2 cache interaction",
+      "gap_type": "INTEGRATION",
+      "priority": "MEDIUM",
+      "description": "Enable both L1 (response cache) and L2 (embedding cache). Query 1: 'what is RAG'; Query 2: 'what is RAG' (cached); Query 3: different query (misses L1, hits L2 embedding). Verify correct layer hits.",
+      "test_case": "test_l1_l2_cache_interaction",
+      "expected_coverage": ["Multi-layer cache coherency", "Hit rate accuracy"]
+    },
+    {
+      "scenario": "Cache stats accuracy under errors",
+      "gap_type": "OBSERVABILITY",
+      "priority": "LOW",
+      "description": "Inject random get/set failures into cache backend. Verify stats() still returns consistent numbers (no duplicates, no loss).",
+      "test_case": "test_cache_stats_consistency_under_failures",
+      "expected_coverage": ["Stats accuracy", "Counter integrity"]
+    }
+  ],
+
+  "adr_compliance": [
+    {
+      "adr_id": "ADR-001",
+      "title": "Three-Layer Caching Architecture",
+      "status": "IMPLEMENTED",
+      "evidence": [
+        "L1 cache in middleware (api_middleware.py)",
+        "L2 cache in retriever (documented in blueprint)",
+        "L3 cache implicit in _config global"
+      ],
+      "completeness": 0.90,
+      "missing": [
+        "ADR document not found in file system",
+        "L2 embedding cache implementation details not in cache.py",
+        "L3 config cache not formalized (uses global dict)"
+      ]
+    },
+    {
+      "adr_id": "ADR-002",
+      "title": "Enable-Rerank in Cache Key (Correctness)",
+      "status": "IMPLEMENTED",
+      "evidence": [
+        "cache key includes enable_rerank: f'{body}:{enable_rerank}'",
+        "api_middleware.py:_generate_cache_key() explicitly extracts and uses it"
+      ],
+      "completeness": 0.85,
+      "missing": [
+        "JSON normalization not implemented (SEC-001)",
+        "ADR document not found"
+      ]
+    },
+    {
+      "adr_id": "ADR-003",
+      "title": "Granular Cache Invalidation (Aggressive Invalidation Fix)",
+      "status": "IMPLEMENTED",
+      "evidence": [
+        "DocumentIngestionRequest.ingest_type: Literal['add', 'update']",
+        "Conditional clear based on ingest_type in add_documents()",
+        "Log message shows which behavior is triggered"
+      ],
+      "completeness": 0.75,
+      "missing": [
+        "Default is 'update' (backwards compatible but suboptimal)",
+        "cache_cleared not returned in response",
+        "ADR document not found"
+      ]
+    },
+    {
+      "adr_id": "ADR-005",
+      "title": "Cache Stampede Mitigation",
+      "status": "MVP_INCOMPLETE",
+      "evidence": [
+        "/cache/stats endpoint provides monitoring",
+        "Logging of cache hits/misses"
+      ],
+      "completeness": 0.40,
+      "missing": [
+        "No TTL jitter (probabilistic early expiration)",
+        "No request coalescing",
+        "No proactive spike detection",
+        "ADR document not found"
+      ]
+    },
+    {
+      "adr_id": "ADR-006",
+      "title": "Config-Aware Cache Keys (Config Update Fix)",
+      "status": "PARTIALLY_IMPLEMENTED",
+      "evidence": [
+        "lazy_cache.clear() called after config update",
+        "Log message confirms cache cleared"
+      ],
+      "completeness": 0.60,
+      "missing": [
+        "No config version tag in cache key (TOCTOU race possible)",
+        "clear() failure not logged as ERROR (silent failure)",
+        "ADR document not found"
+      ]
+    }
+  ],
+
+  "architectural_consistency": {
+    "assessment": "PASS_WITH_CAVEATS",
+    "confidence": 0.85,
+    "rationale": "Core architecture is sound (fail-open, layered caching, proper separation), but implementation has security gaps and incomplete error handling for blocking issues.",
+    "strengths": [
+      "Fail-open principle consistently applied",
+      "Clean abstraction: CacheBackend interface decouples implementation",
+      "ASGI receive() replay pattern correctly implemented for middleware",
+      "Proper logging throughout (not print statements)",
+      "Type hints comprehensive (100% coverage)"
+    ],
+    "weaknesses": [
+      "JSON cache key normalization incomplete (SEC-001)",
+      "Multipart uploads not excluded from L1 cache (SEC-002)",
+      "Redis encryption at rest not documented/enforced (SEC-003)",
+      "ADR documents missing from file system (ADR-001 through ADR-006 not found)",
+      "Blocking issue fixes partially complete (config version tag, request coalescing)",
+      "Test coverage gaps in concurrency, race conditions, resilience"
+    ],
+    "consistency_rating": 0.82,
+    "notes": "Architecture follows stated principles but some implementation details deviate (e.g., cache key generation, excluded paths). ADRs documented in blueprint but not as standalone files."
+  },
+
+  "implementation_status_summary": {
+    "cache_001_backend": {
+      "task": "Abstract CacheBackend, InMemoryCache, RedisCache",
+      "status": "COMPLETE",
+      "confidence": 0.95,
+      "notes": "Well-implemented, comprehensive error handling, 100% type hints"
+    },
+    "cache_002_config": {
+      "task": "CacheSettings, create_cache_backend factory",
+      "status": "COMPLETE",
+      "confidence": 0.90,
+      "notes": "Good, but missing Redis TLS enforcement; env var validation incomplete"
+    },
+    "cache_003_middleware": {
+      "task": "QueryCacheMiddleware, body replay, cache key generation",
+      "status": "COMPLETE_WITH_GAPS",
+      "confidence": 0.80,
+      "notes": "Core logic correct, but missing JSON normalization and multipart exclusion"
+    },
+    "cache_004_blocking_fixes": {
+      "task": "ADR-003, ADR-005, ADR-006 fixes",
+      "status": "PARTIAL",
+      "confidence": 0.70,
+      "notes": "Fixes implemented but incomplete: missing config versioning, TTL jitter, request coalescing"
+    },
+    "cache_005_tests": {
+      "task": "Comprehensive test suite",
+      "status": "INCOMPLETE",
+      "confidence": 0.60,
+      "notes": "Basic tests exist, but missing concurrency, race condition, resilience tests"
+    }
+  },
+
+  "recommendations": [
+    {
+      "priority": "CRITICAL",
+      "action": "Fix JSON cache key normalization (SEC-001)",
+      "effort": "1 hour",
+      "impact": "Eliminates cache collision vulnerability",
+      "implementation": "Use json.dumps(sort_keys=True) before hashing"
+    },
+    {
+      "priority": "CRITICAL",
+      "action": "Exclude file upload endpoints from L1 cache (SEC-002)",
+      "effort": "10 minutes",
+      "impact": "Prevents DoS via large file uploads cached in memory",
+      "implementation": "Add '/documents', '/documents/sources' to excluded_paths"
+    },
+    {
+      "priority": "IMPORTANT",
+      "action": "Implement config version tracking (ADR-006)",
+      "effort": "2 hours",
+      "impact": "Eliminates TOCTOU race in cache invalidation",
+      "implementation": "Add _config_version counter, include in cache key"
+    },
+    {
+      "priority": "IMPORTANT",
+      "action": "Add TTL jitter to prevent cache stampede (ADR-005)",
+      "effort": "1 hour",
+      "impact": "Reduces peak load on retriever for popular queries",
+      "implementation": "Add ±10% random jitter to TTL on cache.set()"
+    },
+    {
+      "priority": "IMPORTANT",
+      "action": "Document and enforce Redis TLS (SEC-004)",
+      "effort": "1 hour",
+      "impact": "Encrypts data in transit, prevents credential leak",
+      "implementation": "Validate rediss:// scheme, warn on redis:// in production"
+    },
+    {
+      "priority": "IMPORTANT",
+      "action": "Create ADR files (ADR-001 through ADR-006)",
+      "effort": "3 hours",
+      "impact": "Formalizes architectural decisions, aids onboarding",
+      "implementation": "Use architecture-blueprint-generator skill to extract from blueprint"
+    },
+    {
+      "priority": "IMPORTANT",
+      "action": "Add concurrency and race condition tests",
+      "effort": "4 hours",
+      "impact": "Detects threading bugs, race conditions, data corruption",
+      "implementation": "Use pytest-asyncio, threading module; test 50+ concurrent requests"
+    },
+    {
+      "priority": "MEDIUM",
+      "action": "Add cache_cleared field to DocumentIngestionResponse",
+      "effort": "30 minutes",
+      "impact": "Allows clients to know if cache was cleared",
+      "implementation": "Add cache_cleared: bool to response model"
+    },
+    {
+      "priority": "MEDIUM",
+      "action": "Implement cache stampede detection",
+      "effort": "2 hours",
+      "impact": "Proactive alerting for cache misses, helps diagnose issues",
+      "implementation": "Track hit/miss ratio per minute, warn if <20%"
+    },
+    {
+      "priority": "MEDIUM",
+      "action": "Document encryption at rest requirement",
+      "effort": "1 hour",
+      "impact": "Clarifies security expectations for cache backends",
+      "implementation": "Add CACHE_ENCRYPTION_KEY env var docs, provide Fernet example"
+    }
+  ],
+
+  "blockers_and_risks": [
+    {
+      "blocker_id": "BLK-001",
+      "title": "JSON cache key normalization incomplete",
+      "risk_level": "CRITICAL",
+      "blocks": ["Production deployment with shared cache"],
+      "root_cause": "SEC-001: Cache key generated from unsanitized JSON",
+      "resolution": "Implement canonical JSON serialization before hashing"
+    },
+    {
+      "blocker_id": "BLK-002",
+      "title": "ADR documents missing",
+      "risk_level": "MEDIUM",
+      "blocks": ["Team onboarding", "Architecture reviews"],
+      "root_cause": "ADRs documented in blueprint but not as standalone files",
+      "resolution": "Extract ADR-001 through ADR-006 into separate .md files"
+    },
+    {
+      "blocker_id": "BLK-003",
+      "title": "Concurrency and race condition tests absent",
+      "risk_level": "MEDIUM",
+      "blocks": ["High-load deployment", "Data consistency guarantee"],
+      "root_cause": "Test suite focuses on happy path, not edge cases",
+      "resolution": "Add test_concurrent_cache_operations, test_config_update_race_with_concurrent_retrieval"
+    }
+  ],
+
+  "files_to_create": [
+    {
+      "path": "docs/plan/20260420-caching-blueprint/ADR-001-three-layer-caching.md",
+      "purpose": "Formalize three-layer architecture (L1, L2, L3) with rationale"
+    },
+    {
+      "path": "docs/plan/20260420-caching-blueprint/ADR-002-enable-rerank-cache-key.md",
+      "purpose": "Document why enable_rerank must be in cache key"
+    },
+    {
+      "path": "docs/plan/20260420-caching-blueprint/ADR-003-granular-invalidation.md",
+      "purpose": "Document ingest_type parameter and cache invalidation strategy"
+    },
+    {
+      "path": "docs/plan/20260420-caching-blueprint/ADR-005-cache-stampede-mitigation.md",
+      "purpose": "Document monitoring, TTL jitter, and request coalescing"
+    },
+    {
+      "path": "docs/plan/20260420-caching-blueprint/ADR-006-config-aware-keys.md",
+      "purpose": "Document config version tracking and TOCTOU prevention"
+    },
+    {
+      "path": "docs/plan/20260420-caching-blueprint/SECURITY_CHECKLIST.md",
+      "purpose": "Production security requirements: Redis TLS, encryption at rest, CORS validation"
+    }
+  ],
+
+  "next_steps": [
+    {
+      "phase": "IMMEDIATE",
+      "tasks": [
+        "Fix JSON cache key normalization (SEC-001) - 1 hour",
+        "Exclude /documents from L1 cache (SEC-002) - 10 min",
+        "Validate Redis TLS enforcement (SEC-004) - 1 hour"
+      ]
+    },
+    {
+      "phase": "SHORT_TERM",
+      "tasks": [
+        "Implement config version tracking (ADR-006) - 2 hours",
+        "Add TTL jitter (ADR-005) - 1 hour",
+        "Create ADR files (ADR-001 through ADR-006) - 3 hours"
+      ]
+    },
+    {
+      "phase": "MEDIUM_TERM",
+      "tasks": [
+        "Add comprehensive concurrency tests - 4 hours",
+        "Implement cache stampede detection - 2 hours",
+        "Document encryption at rest - 1 hour"
+      ]
+    }
+  ],
+
+  "audit_confidence_notes": {
+    "high_confidence_areas": [
+      "Fail-open behavior and error handling patterns (95%)",
+      "Type safety and comprehensive type hints (95%)",
+      "Logging and observability (90%)",
+      "ASGI middleware implementation (90%)"
+    ],
+    "medium_confidence_areas": [
+      "JSON cache key normalization (80%) - code works but not canonical",
+      "Multipart request handling (80%) - likely safe but not explicitly tested",
+      "Redis connection resilience (85%) - good error handling but untested under failure"
+    ],
+    "low_confidence_areas": [
+      "Thread safety under 50+ concurrent requests (60%) - untested",
+      "Race conditions in cache invalidation (60%) - theoretically safe but TOCTOU window",
+      "Full security hardness (70%) - missing encryption at rest, TLS enforcement"
+    ]
+  }
+}

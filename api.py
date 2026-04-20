@@ -3,13 +3,36 @@
 This module provides a production-ready REST API for the hybrid RAG library,
 including health checks, retrieval endpoints, configuration management,
 document ingestion, and WebSocket-based chat.
+
+CACHING ARCHITECTURE:
+    L1 Response Cache: FastAPI middleware intercepts POST /retrieve requests and
+        caches full responses for identical queries. Reduces embedding computations.
+    L2 Embedding Cache: Integrated into HybridRetriever as an LRU cache for
+        embedding computations. Hits on semantically similar queries reduce model
+        inference latency.
+    L3 Vector Storage: Persistent ChromaDB vector store serves as the base layer.
+
+Configuration:
+    Cache behavior is configured via environment variables (see .env.local.example):
+    - CACHE_BACKEND: 'memory' (development) or 'redis' (production)
+    - REDIS_URL: Connection string for Redis backend (required if CACHE_BACKEND=redis)
+    - CACHE_TTL_SECONDS: Time-to-live for cache entries (default: 3600)
+    - CACHE_KEY_PREFIX: Prefix for cache keys (default: 'hybrid_rag_cache:')
+    - CACHE_MAX_SIZE: Max entries in memory cache (default: 10000)
+
+Monitoring:
+    - GET /cache/stats: Returns cache hit rate, current size, and backend info
+    - All cache failures are non-blocking (fail-open): cache issues never break requests
+
+For detailed caching documentation, see docs/CACHE_DEPLOYMENT.md and docs/CACHE_PERF_REPORT.md
 """
 
 import base64
 import io
 import logging
 import os
-from typing import List, Literal, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional
 from contextlib import asynccontextmanager
 
 import requests
@@ -27,6 +50,9 @@ from hybrid_rag import (
     get_sample_documents,
     chunk_text,
 )
+from hybrid_rag.cache import CacheBackend
+from hybrid_rag.config import CacheSettings, create_cache_backend
+from api_middleware import QueryCacheMiddleware
 
 with_pdf_support = True
 try:
@@ -43,9 +69,10 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["app", "initialize_retriever"]
 
-# Global retriever instance
+# Global retriever and cache instances
 _retriever: Optional[HybridRetriever] = None
 _config: Optional[HybridRetrieverConfig] = None
+_cache: Optional[CacheBackend] = None
 
 
 # Pydantic models for request/response validation
@@ -128,7 +155,17 @@ class ConfigUpdateRequest(BaseModel):
 
 
 class DocumentIngestionRequest(BaseModel):
-    """Request model for adding custom documents."""
+    """Request model for adding custom documents.
+    
+    Attributes:
+        source_type: Type of data source: 'text', 'url', or 'file'.
+        content: Text content, URL, or base64-encoded file.
+        filename: Original filename for file uploads.
+        source_label: User-friendly label for the data source.
+        ingest_type: Type of ingest operation: 'add' or 'update'.
+            - 'add': Preserve existing cache (for bulk additions)
+            - 'update': Clear cache after ingestion (default for backwards compatibility)
+    """
 
     source_type: Literal["text", "url", "file"] = Field(
         ..., description="Type of data source: 'text', 'url', or 'file'"
@@ -141,6 +178,10 @@ class DocumentIngestionRequest(BaseModel):
     )
     source_label: Optional[str] = Field(
         None, description="User-friendly label for the data source"
+    )
+    ingest_type: Literal["add", "update"] = Field(
+        default="update",
+        description="Ingest type: 'add' preserves cache, 'update' clears cache"
     )
 
 
@@ -166,6 +207,47 @@ class SourcesResponse(BaseModel):
     sources: List[DocumentSource] = Field(
         ..., description="List of available document sources"
     )
+
+
+class CacheStatsResponse(BaseModel):
+    """Response model for cache statistics.
+    
+    Contains detailed cache performance metrics for monitoring and debugging.
+    Implements fail-open principle: never raises errors, always provides best-effort stats.
+    
+    Attributes:
+        backend: Cache backend identifier ('memory' or 'redis').
+        hits: Total number of cache hits since initialization.
+        misses: Total number of cache misses since initialization.
+        hit_rate: Cache hit rate as a float (0.0-1.0).
+            Calculated as: hits / (hits + misses), or 0.0 if no activity.
+        size: Current number of entries in the cache.
+        max_size: Maximum capacity of the cache in entries.
+        ttl_seconds: Configured time-to-live for cache entries in seconds.
+        timestamp: When these statistics were captured (UTC datetime).
+    
+    Example:
+        >>> response = CacheStatsResponse(
+        ...     backend="memory",
+        ...     hits=1500,
+        ...     misses=350,
+        ...     hit_rate=0.811,
+        ...     size=125,
+        ...     max_size=10000,
+        ...     ttl_seconds=3600,
+        ...     timestamp=datetime.now(timezone.utc)
+        ... )
+        >>> print(f"Hit rate: {response.hit_rate:.1%}")  # 81.1%
+    """
+
+    backend: str = Field(..., description="Cache backend ('memory' or 'redis')")
+    hits: int = Field(..., ge=0, description="Total cache hits")
+    misses: int = Field(..., ge=0, description="Total cache misses")
+    hit_rate: float = Field(..., ge=0.0, le=1.0, description="Cache hit rate (0.0-1.0)")
+    size: int = Field(..., ge=0, description="Current cache size in entries")
+    max_size: int = Field(..., ge=0, description="Maximum cache capacity")
+    ttl_seconds: int = Field(..., ge=0, description="Configured TTL in seconds")
+    timestamp: datetime = Field(..., description="When stats were captured (UTC)")
 
 
 class WsMessageBase(BaseModel):
@@ -250,17 +332,45 @@ def initialize_retriever() -> None:
 # @app.on_event("startup")
 @asynccontextmanager
 async def startup_event(app: FastAPI):
-    """Application startup event handler."""
+    """Application startup event handler.
+    
+    Initializes both the hybrid retriever and the cache backend from environment settings.
+    Both are stored as globals and cleaned up on shutdown.
+    
+    Raises:
+        Exception: If initialization fails, critical exception is logged.
+    """
+    global _retriever, _config, _cache
     try:
+        # Initialize retriever
         initialize_retriever()
+        
+        # Initialize cache from environment settings
+        try:
+            cache_settings = CacheSettings.from_env()
+            _cache = create_cache_backend(cache_settings)
+            logger.info(f"✓ Cache initialized: backend={cache_settings.backend}, ttl={cache_settings.ttl_seconds}s")
+        except Exception as e:
+            logger.error(f"Cache initialization failed: {e}. Continuing without cache.")
+            _cache = None
+        
         yield
     except Exception as e:
         logger.critical(f"Failed to start application: {e}")
         raise
-    global _retriever, _config
-    _retriever = None
-    _config = None
-    logger.info("Application shutdown complete")
+    finally:
+        # Cleanup on shutdown
+        if _cache is not None:
+            try:
+                _cache.clear()
+                logger.info("Cache cleared on shutdown")
+            except Exception as e:
+                logger.warning(f"Error clearing cache on shutdown: {e}")
+        
+        _retriever = None
+        _config = None
+        _cache = None
+        logger.info("Application shutdown complete")
 
 
 # FastAPI application
@@ -273,6 +383,80 @@ app = FastAPI(
     lifespan=startup_event
 )
 
+class LazyCache(CacheBackend):
+    """Lazy cache wrapper that defers to the global _cache variable.
+    
+    This allows middleware registration before _cache is initialized,
+    with the middleware using the actual cache once it's available at startup.
+    
+    If _cache is None, this implementation is a no-op (fail-open principle).
+    """
+
+    def get(self, key: str) -> Optional[Any]:
+        """Retrieve from cache if available."""
+        if _cache is None:
+            return None
+        try:
+            return _cache.get(key)
+        except Exception as e:
+            logger.warning(f"Cache get failed: {e}")
+            return None
+
+    def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> None:
+        """Store in cache if available."""
+        if _cache is None:
+            return
+        try:
+            _cache.set(key, value, ttl_seconds)
+        except Exception as e:
+            logger.warning(f"Cache set failed: {e}")
+
+    def delete(self, key: str) -> None:
+        """Delete from cache if available."""
+        if _cache is None:
+            return
+        try:
+            _cache.delete(key)
+        except Exception as e:
+            logger.warning(f"Cache delete failed: {e}")
+
+    def clear(self) -> None:
+        """Clear cache if available."""
+        if _cache is None:
+            return
+        try:
+            _cache.clear()
+        except Exception as e:
+            logger.warning(f"Cache clear failed: {e}")
+
+    def stats(self) -> Dict[str, Any]:
+        """Get stats from cache if available."""
+        if _cache is None:
+            return {
+                "backend": "none",
+                "hits": 0,
+                "misses": 0,
+                "size": 0,
+                "max_size": 0,
+                "ttl_seconds": 0,
+            }
+        try:
+            return _cache.stats()
+        except Exception as e:
+            logger.warning(f"Cache stats failed: {e}")
+            return {
+                "backend": "error",
+                "hits": 0,
+                "misses": 0,
+                "size": 0,
+                "max_size": 0,
+                "ttl_seconds": 0,
+            }
+
+
+# Create lazy cache wrapper for middleware
+lazy_cache = LazyCache()
+
 # Add CORS middleware
 allow_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
 app.add_middleware(
@@ -283,6 +467,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 logger.info(f"CORS enabled for origins: {allow_origins}")
+
+# Register cache middleware BEFORE routes (important for ASGI chain order)
+app.add_middleware(
+    QueryCacheMiddleware,
+    cache_backend=lazy_cache,
+    excluded_paths=["/health", "/config", "/documents", "/cache/stats"],
+)
+logger.info("QueryCacheMiddleware registered with lazy cache wrapper")
 
 @app.get(
     "/health",
@@ -579,6 +771,17 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
         # Create updated configuration (validates automatically in __post_init__)
         _config = _config.update(**update_dict)
 
+        # Clear cache to invalidate all L1 entries (ADR-006 - Fix for blocking issue #1)
+        # This ensures the new configuration is used for subsequent queries
+        if _cache is not None:
+            try:
+                lazy_cache.clear()  # Use lazy_cache to defer to global _cache
+                logger.info("Config updated; cache cleared")
+            except Exception as e:
+                logger.warning(f"Failed to clear cache after config update: {e}")
+        else:
+            logger.debug("Config updated; cache not initialized")
+
         logger.info("Configuration updated successfully")
         return ConfigResponse(
             semantic_top_k=_config.semantic_top_k,
@@ -607,6 +810,97 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
         raise HTTPException(
             status_code=500,
             detail=f"Configuration update failed: {str(e)}",
+        )
+
+
+@app.get(
+    "/cache/stats",
+    response_model=CacheStatsResponse,
+    tags=["Cache"],
+    summary="Get cache statistics",
+)
+async def get_cache_stats() -> CacheStatsResponse:
+    """Get cache statistics for monitoring and debugging.
+
+    Returns detailed statistics about the cache backend including hit rate,
+    current size, and configuration. Implements fail-open principle: never fails,
+    always returns 200 with best-effort stats.
+
+    The endpoint is useful for:
+    - Monitoring cache performance (hit rate, hit/miss counts)
+    - Debugging cache behavior
+    - Verifying cache configuration (backend type, TTL, capacity)
+    - Tracking cache usage patterns
+
+    Returns:
+        CacheStatsResponse with complete cache statistics.
+        If cache is not initialized or errors occur, returns zero stats.
+
+    Example:
+        GET /cache/stats
+        Response: {
+            "backend": "memory",
+            "hits": 1500,
+            "misses": 350,
+            "hit_rate": 0.811,
+            "size": 125,
+            "max_size": 10000,
+            "ttl_seconds": 3600,
+            "timestamp": "2026-04-20T14:30:45.123456"
+        }
+    """
+    # Fix for blocking issue #2: Always return 200 with stats (fail-open principle)
+    try:
+        if _cache is None:
+            # Cache not initialized, return zero stats
+            return CacheStatsResponse(
+                backend="none",
+                hits=0,
+                misses=0,
+                hit_rate=0.0,
+                size=0,
+                max_size=0,
+                ttl_seconds=0,
+                timestamp=datetime.now(timezone.utc),
+            )
+
+        # Get stats from cache
+        stats = lazy_cache.stats()
+
+        # Calculate hit rate
+        hits = stats.get("hits", 0)
+        misses = stats.get("misses", 0)
+        total = hits + misses
+        hit_rate = (hits / total) if total > 0 else 0.0
+
+        logger.debug(
+            f"Cache stats retrieved: backend={stats.get('backend')}, "
+            f"hits={hits}, misses={misses}, hit_rate={hit_rate:.2%}"
+        )
+
+        return CacheStatsResponse(
+            backend=stats.get("backend", "unknown"),
+            hits=hits,
+            misses=misses,
+            hit_rate=hit_rate,
+            size=stats.get("size", 0),
+            max_size=stats.get("max_size", 0),
+            ttl_seconds=stats.get("ttl_seconds", 0),
+            timestamp=datetime.now(timezone.utc),
+        )
+
+    except Exception as e:
+        # Fail-open: always return 200 even on error
+        logger.warning(f"Error retrieving cache stats: {e}")
+        return CacheStatsResponse(
+            backend="error",
+            hits=0,
+            misses=0,
+            hit_rate=0.0,
+            size=0,
+            max_size=0,
+            ttl_seconds=0,
+            timestamp=datetime.now(timezone.utc),
         )
 
 
@@ -766,6 +1060,9 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
         text_content = ""
         source_label = request.source_label or request.source_type
 
+        # Log ingest type (ADR-003 - Fix for blocking issue #3)
+        logger.info(f"Ingest type: {request.ingest_type}; cache {'will be cleared' if request.ingest_type == 'update' else 'will be preserved'}")
+
         if request.source_type == "text":
             text_content = request.content
             logger.info(f"Ingesting text document: {source_label}")
@@ -845,6 +1142,21 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
             logger.info(
                 f"Added {len(chunks)} chunks to collection from source: {source_label}"
             )
+
+            # Conditional cache clear based on ingest_type (ADR-003 - Fix for blocking issue #3)
+            # - 'update': Clear cache to ensure new documents are retrieved
+            # - 'add': Preserve cache for bulk additions
+            if request.ingest_type == "update":
+                if _cache is not None:
+                    try:
+                        lazy_cache.clear()
+                        logger.info(f"Ingest complete (type='update'); cache cleared")
+                    except Exception as e:
+                        logger.warning(f"Failed to clear cache after ingest: {e}")
+                else:
+                    logger.debug("Ingest complete (type='update'); cache not initialized")
+            else:  # ingest_type == 'add'
+                logger.info(f"Ingest complete (type='add'); cache preserved")
 
             return DocumentIngestionResponse(
                 status="success",

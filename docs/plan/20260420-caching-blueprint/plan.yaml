@@ -1,0 +1,355 @@
+plan_id: "20260420-caching-blueprint"
+objective: "Implement 3-layer hybrid RAG caching system with MVP-simple fixes for 3 blocking issues"
+status: "planning"
+created: "2026-04-20"
+complexity: "medium"
+timeline_estimate: "1-2 weeks"
+
+constraints:
+  - "MVP: Keep implementation simple; defer lock-based stampede fix to v1.1"
+  - "Maintain architecture integrity; no scope creep"
+  - "Use existing dependencies: cachetools, redis-py, fastapi"
+  - "100% type hints (per project standards)"
+  - "All new code must have comprehensive docstrings (Google style)"
+  - "Test coverage >= 85% for cache module"
+
+blocking_issues_mvp_fixes:
+  issue_1_config_aware_keys:
+    title: "Config-Aware Cache Keys"
+    problem: "POST /config changes semantic_weight but cached responses computed with old weights still served"
+    fix: "Clear entire L1 cache on POST /config (ADR-006)"
+    implementation: "1 line in /config handler: cache.clear() after config update"
+  
+  issue_2_cache_stampede:
+    title: "Cache Stampede (Thundering Herd)"
+    problem: "Popular query miss → 100 concurrent requests hit retriever pipeline simultaneously"
+    fix: "MVP: Monitor with /cache/stats endpoint + logging (defer lock-based fix to v1.1)"
+    implementation: "Add /cache/stats endpoint; track hit/miss/latency metrics"
+  
+  issue_3_aggressive_invalidation:
+    title: "Aggressive Cache Invalidation on Ingest"
+    problem: "Full cache.clear() on every POST /ingest removes ALL entries; cache stays cold if ingest is frequent"
+    fix: "Add ingest_type parameter to /ingest; clear only on 'update' (ADR-003)"
+    implementation: "Add ingest_type: Literal['add', 'update'] param; if ingest_type=='update' then cache.clear()"
+
+waves:
+  - wave: 1
+    title: "Core Caching Module & Config"
+    description: "Implement CacheBackend ABC, cache backends, and config integration"
+    parallel_safe: true
+    tasks:
+      - task_id: "CACHE-001"
+        title: "Create cache.py with CacheBackend ABC and implementations"
+        description: |
+          Implement abstract CacheBackend base class and two implementations:
+          - InMemoryCache: thread-safe using cachetools.TTLCache + threading.Lock
+          - RedisCache: redis-py with connection pooling, JSON serialization, fail-open error handling
+        agent: "gem-implementer"
+        effort_hours: 1.5
+        dependencies: []
+        artifacts:
+          - filename: "hybrid_rag/cache.py"
+            description: "Cache backends with 100% type hints, comprehensive docstrings"
+        acceptance_criteria:
+          - "CacheBackend ABC with 5 methods: get, set, delete, clear, stats"
+          - "InMemoryCache thread-safe with TTLCache"
+          - "RedisCache with connection pooling and fail-open error handling"
+          - "All classes pass type checking (mypy)"
+          - "Google-style docstrings with examples"
+      
+      - task_id: "CACHE-002"
+        title: "Add CacheSettings to config.py"
+        description: |
+          Extend config.py with CacheSettings dataclass:
+          - backend: 'redis' | 'memory'
+          - ttl_seconds: int
+          - redis_url: Optional[str]
+          - key_prefix: str
+          - include validation in __post_init__
+        agent: "gem-implementer"
+        effort_hours: 0.75
+        dependencies: []
+        artifacts:
+          - filename: "hybrid_rag/config.py"
+            description: "Add CacheSettings with validation"
+        acceptance_criteria:
+          - "CacheSettings dataclass with proper defaults"
+          - "Validation in __post_init__ (backend/url consistency)"
+          - "Factory function: create_cache_backend(settings) → CacheBackend"
+  
+  - wave: 2
+    title: "Middleware & API Integration"
+    description: "Implement QueryCacheMiddleware and integrate cache into FastAPI"
+    parallel_safe: false
+    tasks:
+      - task_id: "CACHE-003"
+        title: "Create middleware.py with QueryCacheMiddleware"
+        description: |
+          Implement ASGI middleware for L1 response caching:
+          - Intercept POST /retrieve requests
+          - Generate stable cache key from request body (SHA-256)
+          - Replay request body using ASGI receive() pattern
+          - Add X-Cache: HIT|MISS header to response
+          - Include ADR-002: include enable_rerank in cache key
+        agent: "gem-implementer"
+        effort_hours: 2.0
+        dependencies: ["CACHE-001"]
+        artifacts:
+          - filename: "api_middleware.py" (or api.py update)
+            description: "QueryCacheMiddleware with body replay"
+        acceptance_criteria:
+          - "Middleware intercepts POST /retrieve"
+          - "Cache key includes request body + enable_rerank flag"
+          - "Body replay pattern working without consuming stream"
+          - "X-Cache header in all responses"
+          - "Fail-open on cache errors"
+      
+      - task_id: "CACHE-004"
+        title: "Update api.py: cache initialization, POST /config, POST /ingest changes"
+        description: |
+          Integrate cache into FastAPI app:
+          1. Initialize cache backend from CacheSettings in app startup
+          2. Register QueryCacheMiddleware in app
+          3. Add cache.clear() to POST /config handler (ADR-006 fix for blocking issue #1)
+          4. Add ingest_type: Literal['add', 'update'] parameter to POST /ingest (ADR-003 fix for blocking issue #3)
+          5. Add conditional cache.clear() in /ingest handler: if ingest_type=='update' then cache.clear()
+          6. Add GET /cache/stats endpoint for monitoring (MVP fix for blocking issue #2)
+        agent: "gem-implementer"
+        effort_hours: 1.5
+        dependencies: ["CACHE-001", "CACHE-002", "CACHE-003"]
+        artifacts:
+          - filename: "api.py"
+            description: "Updated with cache init, middleware, endpoint changes"
+        acceptance_criteria:
+          - "Cache initialized on app startup"
+          - "Middleware registered before routes"
+          - "POST /config calls cache.clear()"
+          - "POST /ingest has ingest_type parameter with conditional clear"
+          - "/cache/stats endpoint returns {hits, misses, size, backend}"
+          - "All 3 blocking issues addressed via code"
+  
+  - wave: 3
+    title: "Retriever L2 Cache Integration"
+    description: "Add embedding cache inside HybridRetriever"
+    parallel_safe: true
+    tasks:
+      - task_id: "CACHE-005"
+        title: "Update hybrid_rag/retriever.py: Add L2 embedding cache"
+        description: |
+          Integrate L2 embedding cache inside HybridRetriever:
+          1. Add _embedding_cache: LRUCache instance to __init__
+          2. Create _get_or_encode_embedding() wrapper method
+          3. Use SHA-256(query_text) as cache key
+          4. Replace direct calls to self.encoder.encode(query) with wrapper
+          5. Add cache stats tracking (hits/misses/size)
+        agent: "gem-implementer"
+        effort_hours: 1.0
+        dependencies: []
+        artifacts:
+          - filename: "hybrid_rag/retriever.py"
+            description: "Add L2 embedding cache with wrapper"
+        acceptance_criteria:
+          - "_embedding_cache: LRUCache instance in __init__"
+          - "_get_or_encode_embedding(query_text) method with SHA-256 key"
+          - "All encode() calls routed through wrapper"
+          - "Cache stats available via stats() method"
+  
+  - wave: 4
+    title: "Testing: Unit & Integration"
+    description: "Comprehensive test coverage for cache module"
+    parallel_safe: true
+    tasks:
+      - task_id: "TEST-001"
+        title: "Create test_cache_unit.py: Unit tests for cache backends"
+        description: |
+          Unit tests for CacheBackend implementations (InMemoryCache, RedisCache):
+          - Test get/set/delete/clear/stats methods
+          - Test TTL expiration
+          - Test concurrent access (InMemoryCache threading)
+          - Test error handling (Redis unavailable)
+          - Test JSON serialization/deserialization
+          - Mock Redis for unit tests (not integration)
+        agent: "gem-implementer"
+        effort_hours: 1.5
+        dependencies: ["CACHE-001"]
+        artifacts:
+          - filename: "tests/test_cache_unit.py"
+            description: "Unit tests with 85%+ coverage"
+        acceptance_criteria:
+          - ">= 20 test cases covering all methods"
+          - "Coverage >= 85% for cache.py module"
+          - "All tests pass without Redis"
+          - "Thread-safety tests for InMemoryCache"
+      
+      - task_id: "TEST-002"
+        title: "Create test_cache_integration.py: Integration tests with fakeredis"
+        description: |
+          Integration tests with fakeredis (Redis mock):
+          - Test InMemoryCache and RedisCache interchangeably
+          - Test cache hit/miss scenarios
+          - Test cache invalidation (clear)
+          - Test concurrent requests hitting same cache
+          - Test fail-open on Redis connection errors
+        agent: "gem-implementer"
+        effort_hours: 1.5
+        dependencies: ["CACHE-001", "CACHE-004"]
+        artifacts:
+          - filename: "tests/test_cache_integration.py"
+            description: "Integration tests with fakeredis"
+        acceptance_criteria:
+          - ">= 15 test cases covering hit/miss/clear scenarios"
+          - "Both backend implementations tested"
+          - "All tests pass with fakeredis"
+      
+      - task_id: "TEST-003"
+        title: "Create test_middleware.py: QueryCacheMiddleware tests"
+        description: |
+          Test QueryCacheMiddleware behavior:
+          - Test L1 cache hit on repeated POST /retrieve
+          - Test cache miss on first call
+          - Test X-Cache header values
+          - Test cache invalidation on POST /config
+          - Test cache invalidation on POST /ingest with ingest_type='update'
+          - Test cache preservation on POST /ingest with ingest_type='add'
+          - Test body replay pattern works correctly
+        agent: "gem-implementer"
+        effort_hours: 1.5
+        dependencies: ["CACHE-003", "CACHE-004"]
+        artifacts:
+          - filename: "tests/test_middleware.py"
+            description: "Middleware integration tests"
+        acceptance_criteria:
+          - ">= 12 test cases covering all middleware scenarios"
+          - "Cache hit/miss verified via X-Cache header"
+          - "All 3 blocking issue fixes verified in tests"
+          - "Body replay tested to ensure request integrity"
+      
+      - task_id: "TEST-004"
+        title: "Create test_embeddings_cache.py: L2 embedding cache tests"
+        description: |
+          Test HybridRetriever L2 embedding cache:
+          - Test embedding cache hit/miss
+          - Test cache key generation (SHA-256 of query)
+          - Test cache stats tracking
+          - Test concurrent embedding encodes
+        agent: "gem-implementer"
+        effort_hours: 1.0
+        dependencies: ["CACHE-005"]
+        artifacts:
+          - filename: "tests/test_embeddings_cache.py"
+            description: "L2 embedding cache tests"
+        acceptance_criteria:
+          - ">= 10 test cases"
+          - "Cache hit rate verification"
+          - "Stats tracking validated"
+  
+  - wave: 5
+    title: "E2E System Tests & Validation"
+    description: "Full system testing with all layers integrated"
+    parallel_safe: false
+    tasks:
+      - task_id: "TEST-005"
+        title: "Create test_system_e2e.py: End-to-end API tests"
+        description: |
+          Full system tests with all cache layers integrated:
+          - Test POST /retrieve with L1 cache and L2 embedding cache
+          - Test cache behavior under concurrent load
+          - Test cache statistics via GET /cache/stats
+          - Test invalidation cascade (config → L1 clear, ingest → L1 clear, etc.)
+          - Test failure scenarios (Redis down, etc.)
+          - Verify no performance regression
+        agent: "gem-implementer"
+        effort_hours: 2.0
+        dependencies: ["CACHE-001", "CACHE-004", "CACHE-005", "TEST-001", "TEST-002", "TEST-003"]
+        artifacts:
+          - filename: "tests/test_system_e2e.py"
+            description: "E2E system integration tests"
+        acceptance_criteria:
+          - ">= 15 test cases covering full system"
+          - "Cache layers working together correctly"
+          - "Performance benchmarks documented"
+          - "All tests pass (pytest -v)"
+          - "System flow not broken by cache integration"
+      
+      - task_id: "TEST-006"
+        title: "Run full test suite and performance benchmarks"
+        description: |
+          Run all tests and gather performance data:
+          - pytest tests/ -v (all test files)
+          - Coverage report: pytest --cov=hybrid_rag --cov=api tests/
+          - Benchmark: measure cache hit rates, latency with/without cache
+          - Document results in CACHE_PERF_REPORT.md
+        agent: "gem-implementer"
+        effort_hours: 1.0
+        dependencies: ["TEST-001", "TEST-002", "TEST-003", "TEST-004", "TEST-005"]
+        artifacts:
+          - filename: "docs/CACHE_PERF_REPORT.md"
+            description: "Performance benchmarks and test results"
+        acceptance_criteria:
+          - "All tests pass (pytest exit code 0)"
+          - "Coverage >= 85% for cache module"
+          - "Benchmarks show cache benefits: L1 hit latency < 5ms"
+          - "System flow validated: POST /retrieve → L1 + L2 cache hit"
+  
+  - wave: 6
+    title: "Documentation & Deployment Prep"
+    description: "Update docs, examples, and prepare for deployment"
+    parallel_safe: true
+    tasks:
+      - task_id: "DOC-001"
+        title: "Update README and API documentation"
+        description: |
+          Document caching system for users:
+          1. Update README.md with cache configuration section
+          2. Add .env.local.example with cache settings (CACHE_BACKEND, REDIS_URL, etc.)
+          3. Document GET /cache/stats endpoint in API docs
+          4. Document ingest_type parameter in POST /ingest docs
+          5. Add cache configuration examples to QUICK_START.md
+        agent: "gem-implementer"
+        effort_hours: 1.0
+        dependencies: ["CACHE-004"]
+        artifacts:
+          - filename: "README.md, .env.local.example, docs/QUICK_START.md"
+            description: "User-facing documentation"
+        acceptance_criteria:
+          - "Cache configuration clearly documented"
+          - "ingest_type parameter explained with examples"
+          - "GET /cache/stats endpoint documented"
+          - ".env.local.example has all cache settings"
+      
+      - task_id: "DOC-002"
+        title: "Create deployment guide for caching (dev vs prod)"
+        description: |
+          Document deployment scenarios:
+          - Dev setup: InMemoryCache (no Redis needed)
+          - Prod setup: RedisCache with multi-instance coordination
+          - Environment variable reference
+          - Troubleshooting section
+        agent: "gem-implementer"
+        effort_hours: 0.75
+        dependencies: ["CACHE-004"]
+        artifacts:
+          - filename: "docs/CACHE_DEPLOYMENT.md"
+            description: "Deployment and configuration guide"
+        acceptance_criteria:
+          - "Dev and prod setups clearly documented"
+          - "Environment variables reference complete"
+          - "Troubleshooting covers common issues"
+
+summary:
+  total_tasks: 14
+  effort_estimate: "17 hours"
+  timeline_estimate: "1-2 weeks (depending on parallelization)"
+  critical_path: "CACHE-001 → CACHE-003 → CACHE-004 → TEST-005 → TEST-006"
+  waves_total: 6
+  can_parallelize_waves: [1, 3, 4, 6]
+  must_serialize_waves: [2, 5]
+
+notes:
+  - "All Python code requires 100% type hints (per project standards)"
+  - "All public functions require Google-style docstrings with examples"
+  - "Tests must use fakeredis for Redis mocking (not external Redis)"
+  - "Fail-open principle: cache failures never propagate to API responses"
+  - "All 3 blocking issues addressed via MVP-simple solutions from blueprint ADRs"
+  - "L2 embedding cache always in-process (per ADR-005)"
+  - "Cache stampede monitoring: v1.1 will add lock-based recompute if data justifies"

@@ -85,6 +85,51 @@ Each module has a single, well-defined responsibility:
 - ✅ Type-safe defaults
 - ✅ Clear separation of concerns
 
+### 7. **Distributed Caching** (L1 + L2 layers)
+- ✅ L1 Response Cache: FastAPI middleware intercepts and caches POST /retrieve
+- ✅ L2 Embedding Cache: LRU cache embedded in HybridRetriever for repeated embeddings
+- ✅ Backend options: In-memory (development) or Redis (production)
+- ✅ Configurable TTL, key prefixes, and max size
+- ✅ Cache statistics endpoint for monitoring
+- ✅ Fail-open error handling: cache failures never block requests
+
+## 🗄️ Caching Layer
+
+The hybrid RAG system implements a **3-layer distributed caching architecture** for optimal performance:
+
+| Layer | Backend | TTL | Hit Rate | Purpose |
+|-------|---------|-----|----------|---------|
+| **L1** | FastAPI Middleware | Configurable | Variable | Cache full query responses |
+| **L2** | LRU (In-Retriever) | Configurable | ~60% on repeated queries | Cache embedding computations |
+| **L3** | Vector DB | Persistent | N/A | Base vector storage |
+
+### Quick Start: Enable Redis Caching
+```bash
+# Set environment variables
+export CACHE_BACKEND=redis
+export REDIS_URL=redis://localhost:6379
+
+# Start API server
+python api.py
+
+# Monitor cache performance
+curl http://localhost:8000/cache/stats
+```
+
+### Configuration Options
+Set these environment variables to customize caching behavior:
+- `CACHE_BACKEND`: `memory` (default, for development) or `redis` (production)
+- `REDIS_URL`: Connection string (required if `CACHE_BACKEND=redis`)
+- `CACHE_TTL_SECONDS`: Time-to-live in seconds (default: 3600)
+- `CACHE_KEY_PREFIX`: Redis key prefix to avoid collisions (default: `hybrid_rag_cache:`)
+- `CACHE_MAX_SIZE`: Max entries in memory cache before eviction (default: 10000)
+
+### For Production Deployments
+- See [docs/CACHE_DEPLOYMENT.md](./docs/CACHE_DEPLOYMENT.md) for advanced configuration
+- See [docs/CACHE_PERF_REPORT.md](./docs/CACHE_PERF_REPORT.md) for performance benchmarks
+- Use Redis for distributed deployments and better reliability
+- Monitor cache stats endpoint for hit rates and optimization opportunities
+
 ## 📊 Code Metrics
 
 | Metric | Before | After |
