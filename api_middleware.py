@@ -62,7 +62,7 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
     Attributes:
         cache_backend: CacheBackend instance for storing/retrieving cached responses.
         excluded_paths: List of URL paths that should NOT be cached.
-            Defaults to ['/health', '/config', '/ingest', '/cache/stats'].
+            Defaults to ['/health', '/config', '/ingest', '/documents', '/documents/sources', '/cache/stats'].
 
     Example:
         >>> from hybrid_rag.cache import InMemoryCache
@@ -88,7 +88,7 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
             app: The ASGI application to wrap.
             cache_backend: CacheBackend instance for caching responses.
             excluded_paths: List of URL paths to exclude from caching.
-                Defaults to ['/health', '/config', '/ingest', '/cache/stats'].
+                Defaults to ['/health', '/config', '/ingest', '/documents', '/documents/sources', '/cache/stats'].
 
         Example:
             >>> from hybrid_rag.cache import InMemoryCache
@@ -105,6 +105,8 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
             "/health",
             "/config",
             "/ingest",
+            "/documents",
+            "/documents/sources",
             "/cache/stats",
         ]
         logger.info(
@@ -118,6 +120,7 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         A request is cached if:
         - Method is POST
         - Path is exactly '/retrieve'
+        - Content-Type is not multipart/form-data
         - Path is not in excluded_paths
 
         Args:
@@ -128,6 +131,11 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         """
         # Only cache POST requests to /retrieve
         if request.method != "POST" or request.url.path != "/retrieve":
+            return False
+
+        # Never process multipart/form-data through cache/body decoding path.
+        content_type = request.headers.get("content-type", "").lower()
+        if content_type.startswith("multipart/form-data"):
             return False
 
         # Check if path is excluded
@@ -176,18 +184,30 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         Returns:
             SHA-256 hash of the cache key components, prefixed with 'cache:'.
         """
-        # Parse the body to extract enable_rerank if not provided
         try:
-            if enable_rerank is None:
-                body_dict = json.loads(body.decode("utf-8"))
-                enable_rerank = body_dict.get("enable_rerank", False)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            # If we can't parse, just use body as-is
-            enable_rerank = False
+            decoded_body = body.decode("utf-8")
+            body_data: Any = json.loads(decoded_body)
 
-        # Create cache key from body + enable_rerank
-        key_data = f"{body.decode('utf-8')}:{str(enable_rerank)}"
-        key_hash = hashlib.sha256(key_data.encode()).hexdigest()
+            # Canonicalize JSON so semantically equivalent payloads hash identically.
+            canonical_json = json.dumps(
+                body_data,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+            if enable_rerank is None:
+                if isinstance(body_data, dict):
+                    enable_rerank = bool(body_data.get("enable_rerank", False))
+                else:
+                    enable_rerank = False
+
+            key_data = f"{canonical_json}:{str(enable_rerank)}"
+            key_hash = hashlib.sha256(key_data.encode("utf-8")).hexdigest()
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            # Fail-open fallback: hash raw bytes to avoid exceptions on malformed payloads.
+            rerank_marker = "none" if enable_rerank is None else str(enable_rerank)
+            fallback_data = body + b":" + rerank_marker.encode("utf-8")
+            key_hash = hashlib.sha256(fallback_data).hexdigest()
 
         return f"cache:{key_hash}"
 

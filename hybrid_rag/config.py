@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from .cache import CacheBackend
@@ -224,6 +225,22 @@ class CacheSettings:
                 "redis_url is required when backend='redis'. "
                 f"Got backend='{self.backend}', redis_url={self.redis_url}"
             )
+
+        # Enforce secure Redis configuration in production only.
+        environment = os.getenv("ENVIRONMENT", "").strip().lower()
+        if environment == "production" and self.backend == "redis" and self.redis_url:
+            parsed_redis_url = urlparse(self.redis_url)
+            if parsed_redis_url.scheme != "rediss":
+                raise ValueError(
+                    "Production Redis URL must use TLS with the 'rediss://' scheme. "
+                    f"Got redis_url='{self.redis_url}'"
+                )
+
+            if not parsed_redis_url.password:
+                raise ValueError(
+                    "Production Redis URL must include authentication credentials/password. "
+                    f"Got redis_url='{self.redis_url}'"
+                )
 
         # Validate ttl_seconds
         if self.ttl_seconds <= 0:

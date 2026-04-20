@@ -482,6 +482,48 @@ class TestCacheSettings:
         assert settings.backend == "redis"
         assert settings.redis_url == "redis://localhost:6379/0"
 
+    def test_production_rejects_non_tls_redis_url(self, monkeypatch: pytest.MonkeyPatch):
+        """Production environment rejects redis:// URLs (must be rediss://)."""
+        from hybrid_rag.config import CacheSettings
+
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        with pytest.raises(ValueError, match="rediss://"):
+            CacheSettings(
+                backend="redis",
+                redis_url="redis://localhost:6379/0",
+            )
+
+    def test_production_rejects_redis_url_without_auth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Production environment rejects Redis URLs missing auth/password."""
+        from hybrid_rag.config import CacheSettings
+
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        with pytest.raises(ValueError, match="password"):
+            CacheSettings(
+                backend="redis",
+                redis_url="rediss://localhost:6379/0",
+            )
+
+    def test_non_production_allows_local_redis_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Non-production keeps backward-compatible local redis:// behavior."""
+        from hybrid_rag.config import CacheSettings
+
+        monkeypatch.setenv("ENVIRONMENT", "development")
+
+        settings = CacheSettings(
+            backend="redis",
+            redis_url="redis://localhost:6379/0",
+        )
+
+        assert settings.backend == "redis"
+        assert settings.redis_url == "redis://localhost:6379/0"
+
     def test_all_validation_errors_are_value_errors(self):
         """All validation errors are ValueError with clear messages."""
         from hybrid_rag.config import CacheSettings

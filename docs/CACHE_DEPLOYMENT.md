@@ -207,13 +207,13 @@ Create `.env` in the project root (never commit this file):
 ```bash
 # Production cache configuration
 CACHE_BACKEND=redis
-REDIS_URL=redis://redis-instance.internal:6379/0
+REDIS_URL=rediss://:strong-password@redis-instance.internal:6379/0
 CACHE_TTL_SECONDS=86400
 CACHE_KEY_PREFIX=prod_hybrid_rag:
 CACHE_MAX_SIZE=100000
 
-# Optional: Redis password authentication
-# REDIS_URL=redis://:password@redis-instance.internal:6379/0
+# Production requirement: REDIS_URL must use TLS and include auth
+# Format: rediss://:password@host:port/db
 ```
 
 **Configuration Notes:**
@@ -221,7 +221,7 @@ CACHE_MAX_SIZE=100000
 | Setting | Recommended Value | Rationale |
 |---------|-------------------|-----------|
 | `CACHE_BACKEND` | `redis` | Multi-instance deployments |
-| `REDIS_URL` | `redis://redis:6379/0` | Direct connection (use docker hostname in containers) |
+| `REDIS_URL` | `rediss://:password@redis:6379/0` | TLS + authentication required in production |
 | `CACHE_TTL_SECONDS` | `86400` (24 hours) | Standard production TTL; adjust based on data freshness |
 | `CACHE_KEY_PREFIX` | `prod_hybrid_rag:` | Namespace to avoid collisions with other apps |
 | `CACHE_MAX_SIZE` | `100000` | Larger than development; adjust based on Redis memory |
@@ -275,7 +275,7 @@ INFO:hybrid_rag.retriever:Hybrid retriever initialized with caching enabled
 | Variable | Type | Default | Required? | Description |
 |----------|------|---------|-----------|-------------|
 | `CACHE_BACKEND` | string | `'memory'` | No | Cache backend implementation: `'memory'` (local) or `'redis'` (distributed) |
-| `REDIS_URL` | string | `None` | If `backend=redis` | Redis connection URL (format: `redis://[:password@]host[:port][/db]`) |
+| `REDIS_URL` | string | `None` | If `backend=redis` | Redis connection URL (format: `rediss://[:password@]host[:port][/db]` in production) |
 | `CACHE_TTL_SECONDS` | int | `3600` | No | Time-to-live for cache entries in seconds; set to 0 for indefinite caching |
 | `CACHE_KEY_PREFIX` | string | `'hybrid_rag_cache:'` | No | Namespace prefix for all cache keys (useful in shared Redis instances) |
 | `CACHE_MAX_SIZE` | int | `10000` | No | Maximum number of entries in InMemoryCache before LRU eviction (ignored for Redis) |
