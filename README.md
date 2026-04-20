@@ -1,5 +1,27 @@
 # Hybrid RAG Library - Complete Refactoring Overview
 
+# RAG Support Agent
+
+## Project Vision
+Intelligent system that retrieves and synthesizes answers from live HTML documentation.
+
+## Current Status
+- Pipeline exists: Crawl → Chunk → Embed → Retrieve
+- Confirmed: Section-level chunking, OpenAI text-embedding-3-small
+- TODO: Framework choice, HuggingFaceEndpoint integration, ranking optimization
+
+## Key Metrics
+- Retrieval precision target: >85%
+- Latency target: <2 seconds (p95)
+- Doc update frequency: Weekly (200-400 articles)
+
+## Tech Stack (TBD items in brackets)
+- Language: Python 3.11
+- Embeddings: OpenAI text-embedding-3-small
+- Vector Store: [pgvector OR Pinecone OR chroma (for development)]
+- Orchestration: [LangChain OR LlamaIndex OR Smolagents]
+- LLM: Claude Sonnet 4.6
+
 ## 🎯 Project Completion Summary
 
 The monolithic `hybrid_rag_flow.py` has been successfully refactored into a **production-ready Python library** following industry best practices for code organization, type safety, error handling, and documentation.
