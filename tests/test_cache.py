@@ -341,6 +341,91 @@ class TestRedisCache:
         assert "app:key1" in call_args
 
 
+class TestRedisCacheProductionGuardrails:
+    """SEC-004: Direct RedisCache constructor enforces production security policy."""
+
+    def test_production_rejects_non_tls_url(self, monkeypatch: pytest.MonkeyPatch):
+        """Production rejects redis:// URL — TLS required via rediss://."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(ValueError, match="rediss://"):
+            RedisCache(redis_url="redis://localhost:6379")
+
+    def test_production_rejects_non_tls_url_with_host(self, monkeypatch: pytest.MonkeyPatch):
+        """Production rejects redis:// even with explicit host and port."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(ValueError, match="rediss://"):
+            RedisCache(redis_url="redis://prod-cache.internal:6379/0")
+
+    def test_production_rejects_tls_url_without_password(self, monkeypatch: pytest.MonkeyPatch):
+        """Production rejects rediss:// URL when no password is present."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(ValueError, match="password"):
+            RedisCache(redis_url="rediss://prod-cache.internal:6380")
+
+    def test_production_rejects_tls_url_with_username_only(self, monkeypatch: pytest.MonkeyPatch):
+        """Production rejects rediss:// with username but no password."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(ValueError, match="password"):
+            RedisCache(redis_url="rediss://user@prod-cache.internal:6380")
+
+    def test_production_accepts_tls_url_with_password(self, monkeypatch: pytest.MonkeyPatch):
+        """Production accepts rediss:// with password — valid secure configuration."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with patch("hybrid_rag.cache.redis.ConnectionPool"):
+            with patch("hybrid_rag.cache.redis.Redis"):
+                # Should NOT raise
+                cache = RedisCache(redis_url="rediss://:s3cr3tpassword@prod-cache.internal:6380")
+                assert cache is not None
+
+    def test_production_accepts_tls_url_with_user_and_password(self, monkeypatch: pytest.MonkeyPatch):
+        """Production accepts rediss:// with both username and password."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with patch("hybrid_rag.cache.redis.ConnectionPool"):
+            with patch("hybrid_rag.cache.redis.Redis"):
+                cache = RedisCache(redis_url="rediss://user:s3cr3t@prod-cache.internal:6380/1")
+                assert cache is not None
+
+    def test_non_production_accepts_non_tls_url(self, monkeypatch: pytest.MonkeyPatch):
+        """Non-production allows redis:// for local/dev workflows."""
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        with patch("hybrid_rag.cache.redis.ConnectionPool"):
+            with patch("hybrid_rag.cache.redis.Redis"):
+                cache = RedisCache(redis_url="redis://localhost:6379")
+                assert cache is not None
+
+    def test_non_production_allows_no_env_var(self, monkeypatch: pytest.MonkeyPatch):
+        """Absent ENVIRONMENT env var is backward-compatible (non-prod)."""
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        with patch("hybrid_rag.cache.redis.ConnectionPool"):
+            with patch("hybrid_rag.cache.redis.Redis"):
+                cache = RedisCache(redis_url="redis://localhost:6379")
+                assert cache is not None
+
+    def test_staging_allows_non_tls_url(self, monkeypatch: pytest.MonkeyPatch):
+        """Staging environment allows redis:// for compatibility."""
+        monkeypatch.setenv("ENVIRONMENT", "staging")
+        with patch("hybrid_rag.cache.redis.ConnectionPool"):
+            with patch("hybrid_rag.cache.redis.Redis"):
+                cache = RedisCache(redis_url="redis://staging-cache:6379")
+                assert cache is not None
+
+    def test_fail_open_runtime_behavior_unchanged_in_production(self, monkeypatch: pytest.MonkeyPatch):
+        """After valid production init, runtime operation failures still fail-open."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with patch("hybrid_rag.cache.redis.ConnectionPool"):
+            with patch("hybrid_rag.cache.redis.Redis") as mock_redis_cls:
+                mock_conn = MagicMock()
+                mock_conn.get = MagicMock(side_effect=Exception("Redis timeout"))
+                mock_conn.setex = MagicMock(side_effect=Exception("Redis timeout"))
+                mock_redis_cls.return_value = mock_conn
+
+                cache = RedisCache(redis_url="rediss://:password@prod-cache:6380")
+                # Runtime errors must still fail-open (no exception raised)
+                result = cache.get("some-key")
+                assert result is None
+                cache.set("some-key", "value")  # must not raise
+
+
 class TestCacheIntegration:
     """Integration tests for both cache backends."""
 

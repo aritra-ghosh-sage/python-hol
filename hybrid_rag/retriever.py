@@ -423,7 +423,9 @@ class HybridRetriever:
         logger.debug(f"Fusion produced {len(fused)} results")
         return fused
 
-    def retrieve(self, query: str) -> List[Dict[str, Any]]:
+    def retrieve(
+        self, query: str, enable_rerank: bool | None = None
+    ) -> List[Dict[str, Any]]:
         """Execute hybrid retrieval pipeline to find most relevant documents.
 
         Performs semantic and keyword search, fuses results with configured weights,
@@ -439,6 +441,8 @@ class HybridRetriever:
 
         Args:
             query: User search query string.
+            enable_rerank: Optional per-request override for reranking behavior.
+                If None, uses the retriever configuration value.
 
         Returns:
             List of relevant documents with scores, deduplicated by source.
@@ -470,8 +474,15 @@ class HybridRetriever:
             # Fuse results
             fused = self._fusion(semantic, keyword)
 
+            # Apply per-request override without mutating global retriever configuration.
+            rerank_enabled = (
+                self.config.enable_rerank
+                if enable_rerank is None
+                else enable_rerank
+            )
+
             # Optionally rerank results
-            if self.config.enable_rerank and self.reranker is not None:
+            if rerank_enabled and self.reranker is not None:
                 logger.debug("Applying cross-encoder reranking")
                 candidates = sorted(
                     fused, key=lambda x: x["score"], reverse=True

@@ -1,0 +1,331 @@
+plan_id: "20260420"
+objective: "close unresolved critical issues SEC-002 and SEC-004"
+complexity: "medium"
+created_at: "2026-04-21"
+created_by: "gem-planner"
+status: "pending"
+research_confidence: "high"
+plan_metrics:
+  wave_1_task_count: 1
+  total_dependencies: 4
+  risk_score: "medium"
+tldr: |
+  Extension DAG focused only on unresolved critical blockers SEC-002 and SEC-004.
+  The plan adds a security contract lock task, parallel implementation tasks for middleware
+  request gating and Redis direct-init policy enforcement, and a final independent reviewer
+  validation gate with targeted regression tests and command-level evidence.
+open_questions: []
+gaps:
+  - description: "Repository-level PRD.yaml was not found; acceptance criteria derived from verified unresolved items, existing 20260420 plan artifacts, and failing tests."
+    refinement_requests:
+      - query: "If an authoritative PRD path exists for cache security acceptance criteria, provide it for future planning rounds."
+        source_hint: "docs/ or quality/"
+pre_mortem:
+  overall_risk_level: "medium"
+  critical_failure_modes:
+    - scenario: "Content-type gating is implemented too broadly and unintentionally bypasses valid JSON retrieval requests."
+      likelihood: "medium"
+      impact: "high"
+      mitigation: "Restrict bypass to non-JSON media types and retain explicit support for application/json and application/*+json media types."
+    - scenario: "Redis constructor security checks differ from config-level policy and create inconsistent production behavior by entry path."
+      likelihood: "medium"
+      impact: "high"
+      mitigation: "Define and test a single ENVIRONMENT x URL policy matrix for direct constructor behavior parity."
+  assumptions:
+    - "SEC-001 is already resolved and excluded from this extension DAG."
+    - "SEC-003 remains deferred and excluded from this extension DAG."
+    - "Fail-open cache runtime behavior remains a non-negotiable invariant."
+implementation_specification:
+  code_structure: "Security scope lock in wave 1, parallel code/test remediations in wave 2, independent closure validation in wave 3."
+  affected_areas:
+    - "api_middleware.py"
+    - "hybrid_rag/cache.py"
+    - "tests/test_query_cache_middleware.py"
+    - "tests/test_cache.py"
+    - "docs/plan/20260420/notes.md"
+  component_details:
+    - component: "QueryCacheMiddleware request eligibility gating"
+      responsibility: "Bypass cache/body processing for non-JSON /retrieve requests before body read or key generation."
+      interfaces:
+        - "QueryCacheMiddleware._should_cache_request(request) -> bool"
+        - "QueryCacheMiddleware.dispatch(request, call_next) -> Response"
+      dependencies:
+        - component: "HTTP content-type parsing"
+          relationship: "Determines cache path eligibility"
+      integration_points:
+        - "POST /retrieve non-JSON rejection path"
+        - "POST /retrieve JSON cache path"
+    - component: "RedisCache constructor production guardrails"
+      responsibility: "Enforce production-only TLS/auth requirements on direct RedisCache initialization."
+      interfaces:
+        - "RedisCache.__init__(redis_url, key_prefix, ttl_seconds)"
+      dependencies:
+        - component: "ENVIRONMENT variable"
+          relationship: "Controls strictness boundary"
+      integration_points:
+        - "Direct RedisCache constructor call sites"
+        - "Policy parity with configuration-level expectations"
+    - component: "Security regression test evidence"
+      responsibility: "Provide deterministic test proof for SEC-002 and SEC-004 closure."
+      interfaces:
+        - "pytest tests/test_query_cache_middleware.py"
+        - "pytest tests/test_cache.py"
+      dependencies:
+        - component: "middleware and cache constructor changes"
+          relationship: "Must be in place before final review gate"
+      integration_points:
+        - "failing non-JSON bypass regression"
+        - "direct constructor production hardening regression"
+contracts:
+  - from_task: "SEC-CRIT-SPEC-LOCK"
+    to_task: "SEC-002-IMPLEMENT"
+    interface: "SEC-002 acceptance contract and exact non-JSON bypass test expectations"
+    format: "Checklist with test-name mapping"
+  - from_task: "SEC-CRIT-SPEC-LOCK"
+    to_task: "SEC-004-IMPLEMENT"
+    interface: "SEC-004 direct constructor production policy matrix"
+    format: "ENVIRONMENT x redis_url matrix"
+  - from_task: "SEC-002-IMPLEMENT"
+    to_task: "SEC-CRIT-FINAL-VALIDATION"
+    interface: "Middleware patch and targeted test evidence"
+    format: "pytest output summary + acceptance mapping"
+  - from_task: "SEC-004-IMPLEMENT"
+    to_task: "SEC-CRIT-FINAL-VALIDATION"
+    interface: "Redis constructor patch and targeted test evidence"
+    format: "pytest output summary + acceptance mapping"
+tasks:
+  - id: "SEC-CRIT-SPEC-LOCK"
+    title: "Lock unresolved critical security acceptance contract"
+    description: |
+      Create a tight implementation contract for only unresolved SEC-002 and SEC-004:
+      - SEC-002: non-JSON /retrieve requests must bypass cache body/key processing.
+      - SEC-004: direct RedisCache constructor in production must enforce TLS/auth.
+      Freeze test and command expectations to prevent scope creep into SEC-001/SEC-003.
+    wave: 1
+    agent: "gem-reviewer"
+    prototype: false
+    covers: ["SEC-002", "SEC-004"]
+    priority: "high"
+    status: "pending"
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: "docs/plan/20260420/plan.yaml"
+        description: "Existing 20260420 baseline plan and prior contracts"
+      - path: "docs/plan/20260420/notes.md"
+        description: "Clarified blocking/deferred security scope"
+      - path: "docs/plan/20260420-caching-blueprint/AUDIT_REPORT_20260420.json"
+        description: "Security finding evidence and rationale"
+    diagnosis:
+      root_cause: "Unresolved critical scope requires explicit contract lock to avoid mixing resolved/deferred items."
+      fix_recommendations: "Constrain implementation and validation to SEC-002 and SEC-004 only, with deterministic test mapping."
+      injected_at: "2026-04-21"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Extension DAG for unresolved critical issues only"
+        timestamp: "2026-04-21"
+    estimated_effort: "small"
+    estimated_files: 3
+    estimated_lines: 120
+    focus_area: "security-governance"
+    verification:
+      - "SEC-002 and SEC-004 acceptance criteria are explicitly testable"
+      - "SEC-001 and SEC-003 are explicitly excluded from implementation scope"
+      - "Expected validation commands are locked for downstream tasks"
+    acceptance_criteria:
+      - "Implementation contract covers only SEC-002 and SEC-004"
+      - "Every acceptance criterion has a mapped test target and command"
+    failure_modes:
+      - scenario: "Ambiguous acceptance wording causes implementer churn and rework."
+        likelihood: "medium"
+        impact: "medium"
+        mitigation: "Bind each criterion to specific existing or newly required test names and command filters."
+    requires_review: true
+    review_depth: "full"
+    review_security_sensitive: true
+
+  - id: "SEC-002-IMPLEMENT"
+    title: "Remediate SEC-002 non-JSON cache-path bypass in middleware"
+    description: |
+      Update middleware gating so non-JSON /retrieve requests bypass cache operations
+      before request body read or cache key generation. Preserve JSON eligibility for:
+      - application/json
+      - application/*+json
+      Strengthen tests to prove bypass behavior and preserve fail-open behavior.
+    wave: 2
+    agent: "gem-implementer"
+    prototype: false
+    covers: ["SEC-002"]
+    priority: "high"
+    status: "pending"
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: ["SEC-CRIT-SPEC-LOCK"]
+    conflicts_with: []
+    context_files:
+      - path: "api_middleware.py"
+        description: "Request eligibility, body read, and cache key invocation path"
+      - path: "tests/test_query_cache_middleware.py"
+        description: "SEC-002 regression tests and media-type eligibility tests"
+      - path: "docs/plan/20260420-caching-blueprint/AUDIT_REPORT_20260420.json"
+        description: "SEC-002 evidence context"
+    diagnosis:
+      root_cause: "Non-JSON requests still reach middleware body/key processing in the /retrieve path."
+      fix_recommendations: "Apply strict pre-body eligibility checks and validate with targeted regression tests."
+      injected_at: "2026-04-21"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Unresolved critical SEC-002 closure"
+        timestamp: "2026-04-21"
+    estimated_effort: "medium"
+    estimated_files: 2
+    estimated_lines: 220
+    focus_area: "middleware-security"
+    verification:
+      - "Targeted test: tests/test_query_cache_middleware.py::TestExcludedPaths::test_non_json_request_bypasses_cache_before_body_processing"
+      - "Targeted test: tests/test_query_cache_middleware.py::TestExcludedPaths::test_multipart_request_bypasses_cache_and_body_processing"
+      - "Targeted test: tests/test_query_cache_middleware.py::TestExcludedPaths::test_application_json_charset_is_cache_eligible"
+      - "Targeted test: tests/test_query_cache_middleware.py::TestExcludedPaths::test_application_suffix_json_is_cache_eligible"
+      - "Expected command: source .venv/bin/activate && PYTHONPATH=. pytest -q tests/test_query_cache_middleware.py -k \"non_json_request_bypasses_cache_before_body_processing or multipart_request_bypasses_cache_and_body_processing or application_json_charset_is_cache_eligible or application_suffix_json_is_cache_eligible\""
+      - "Expected command: source .venv/bin/activate && PYTHONPATH=. pytest -q tests/test_query_cache_middleware.py -k \"fail_open\""
+    acceptance_criteria:
+      - "Non-JSON /retrieve requests do not call middleware body read or cache key generation"
+      - "Multipart /retrieve requests do not call middleware body read or cache key generation"
+      - "application/json and application/*+json remain cache-eligible"
+      - "Fail-open behavior remains unchanged for cache backend errors"
+    failure_modes:
+      - scenario: "Media-type parser incorrectly rejects application/json; charset requests."
+        likelihood: "medium"
+        impact: "high"
+        mitigation: "Use normalized media-type extraction and explicit eligibility tests for charset and +json cases."
+      - scenario: "Bypass logic inadvertently affects non-/retrieve routes."
+        likelihood: "low"
+        impact: "medium"
+        mitigation: "Keep route/method guard as first eligibility condition and verify with existing endpoint tests."
+    tech_stack: ["Python", "FastAPI", "Starlette", "pytest"]
+    test_coverage: "Focused middleware regression coverage for SEC-002"
+
+  - id: "SEC-004-IMPLEMENT"
+    title: "Remediate SEC-004 direct RedisCache constructor production hardening"
+    description: |
+      Add production-only direct-constructor validation so insecure redis:// URLs and
+      rediss:// URLs without auth are rejected when ENVIRONMENT=production. Preserve
+      non-production compatibility and existing runtime fail-open semantics for operation
+      failures.
+    wave: 2
+    agent: "gem-implementer"
+    prototype: false
+    covers: ["SEC-004"]
+    priority: "high"
+    status: "pending"
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: ["SEC-CRIT-SPEC-LOCK"]
+    conflicts_with: []
+    context_files:
+      - path: "hybrid_rag/cache.py"
+        description: "Direct RedisCache constructor path to harden"
+      - path: "tests/test_cache.py"
+        description: "Constructor policy and compatibility regressions"
+      - path: "docs/plan/20260420-caching-blueprint/AUDIT_REPORT_20260420.json"
+        description: "SEC-004 finding evidence"
+    diagnosis:
+      root_cause: "Direct RedisCache construction path allows insecure production URL patterns without TLS/auth enforcement."
+      fix_recommendations: "Mirror production policy in constructor and enforce via targeted direct-init tests."
+      injected_at: "2026-04-21"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Unresolved critical SEC-004 closure"
+        timestamp: "2026-04-21"
+    estimated_effort: "medium"
+    estimated_files: 2
+    estimated_lines: 230
+    focus_area: "redis-security"
+    verification:
+      - "Targeted test: tests/test_cache.py::TestRedisCache::test_direct_constructor_rejects_non_tls_in_production"
+      - "Targeted test: tests/test_cache.py::TestRedisCache::test_direct_constructor_rejects_tls_without_auth_in_production"
+      - "Targeted test: tests/test_cache.py::TestRedisCache::test_direct_constructor_allows_non_production_local_redis"
+      - "Targeted test: tests/test_cache.py::TestRedisCache::test_fail_open_on_redis_connection_error"
+      - "Expected command: source .venv/bin/activate && PYTHONPATH=. pytest -q tests/test_cache.py -k \"direct_constructor_rejects_non_tls_in_production or direct_constructor_rejects_tls_without_auth_in_production or direct_constructor_allows_non_production_local_redis or fail_open_on_redis_connection_error\""
+    acceptance_criteria:
+      - "ENVIRONMENT=production rejects direct RedisCache(redis://...)"
+      - "ENVIRONMENT=production rejects direct RedisCache(rediss://...) without password"
+      - "Non-production direct initialization remains backward compatible"
+      - "Fail-open runtime behavior remains unchanged for cache operation failures"
+    failure_modes:
+      - scenario: "Password parsing bug incorrectly rejects valid rediss URLs with credentials."
+        likelihood: "medium"
+        impact: "high"
+        mitigation: "Use robust URL parsing and add explicit with-auth and without-auth test pairs."
+      - scenario: "Strict policy accidentally enforced in non-production."
+        likelihood: "medium"
+        impact: "high"
+        mitigation: "Guard checks behind ENVIRONMENT=production and retain non-production compatibility tests."
+    tech_stack: ["Python", "redis-py", "pytest"]
+    test_coverage: "Focused direct-constructor policy coverage for SEC-004"
+
+  - id: "SEC-CRIT-FINAL-VALIDATION"
+    title: "Final reviewer validation for unresolved critical security closure"
+    description: |
+      Perform independent final validation that SEC-002 and SEC-004 are closed with
+      test-backed evidence and no regression of fail-open behavior. Validate contracts
+      from wave 1 and wave 2 are satisfied, and record closure status for plan 20260420.
+    wave: 3
+    agent: "gem-reviewer"
+    prototype: false
+    covers: ["SEC-002", "SEC-004"]
+    priority: "high"
+    status: "pending"
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: ["SEC-002-IMPLEMENT", "SEC-004-IMPLEMENT"]
+    conflicts_with: []
+    context_files:
+      - path: "api_middleware.py"
+        description: "SEC-002 implementation evidence"
+      - path: "hybrid_rag/cache.py"
+        description: "SEC-004 implementation evidence"
+      - path: "tests/test_query_cache_middleware.py"
+        description: "SEC-002 regression results"
+      - path: "tests/test_cache.py"
+        description: "SEC-004 regression results"
+    diagnosis:
+      root_cause: "Critical issues remain open until independent reviewer confirms acceptance criteria and contract fulfillment."
+      fix_recommendations: "Run targeted commands, map results to acceptance criteria, and publish closure matrix."
+      injected_at: "2026-04-21"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Required final reviewer validation task for security closure"
+        timestamp: "2026-04-21"
+    estimated_effort: "small"
+    estimated_files: 3
+    estimated_lines: 180
+    focus_area: "security-verification"
+    verification:
+      - "Expected command: source .venv/bin/activate && PYTHONPATH=. pytest -q tests/test_query_cache_middleware.py -k \"non_json_request_bypasses_cache_before_body_processing or multipart_request_bypasses_cache_and_body_processing or application_json_charset_is_cache_eligible or application_suffix_json_is_cache_eligible or fail_open\""
+      - "Expected command: source .venv/bin/activate && PYTHONPATH=. pytest -q tests/test_cache.py -k \"direct_constructor_rejects_non_tls_in_production or direct_constructor_rejects_tls_without_auth_in_production or direct_constructor_allows_non_production_local_redis or fail_open_on_redis_connection_error\""
+      - "Expected command: source .venv/bin/activate && PYTHONPATH=. pytest -q --noconftest tests/test_api_shared_retrieval.py tests/test_query_cache_middleware.py -k \"shared_facade or request_local_rerank or fail_open\""
+      - "Contract checks passed for SEC-CRIT-SPEC-LOCK -> implementation tasks -> final validation"
+    acceptance_criteria:
+      - "SEC-002 is marked closed with passing targeted middleware tests"
+      - "SEC-004 is marked closed with passing targeted direct-constructor tests"
+      - "No regression in fail-open behavior is detected"
+      - "Final reviewer validation report is complete and decision-ready"
+    failure_modes:
+      - scenario: "Final validation misses one required criterion due to incomplete command filters."
+        likelihood: "low"
+        impact: "medium"
+        mitigation: "Maintain a criterion-to-command checklist and require explicit reviewer sign-off per criterion."
+    requires_review: true
+    review_depth: "full"
+    review_security_sensitive: true

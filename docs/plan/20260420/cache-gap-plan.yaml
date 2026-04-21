@@ -1,0 +1,390 @@
+plan_id: "20260420-cache-gap"
+objective: "Close cache-flow architecture gaps from plan 20260420 by enforcing HTTP/WS cache parity, consistent invalidation semantics, and concurrency-safe retrieval execution"
+created_at: "2026-04-21"
+created_by: "gem-planner"
+status: "completed"
+research_confidence: "high"
+plan_metrics:
+  wave_1_task_count: 1
+  total_dependencies: 5
+  risk_score: "high"
+tldr: |
+  The current implementation has channel divergence: REST uses L1 response cache while WebSocket bypasses it and calls the retriever directly.
+  This plan introduces a shared retrieval facade and cache policy contract so REST and WS behave consistently, then hardens middleware
+  request eligibility and removes request-time mutation of global config that can corrupt behavior under concurrency.
+open_questions:
+  - question: "Should WS share the exact same L1 response cache as /retrieve, or remain uncached with explicit product-level acceptance of divergence?"
+    context: "This decision affects latency, consistency, and cache hit-rate semantics across channels."
+    type: "decision_blocker"
+    affects: ["CACHE-PARITY-IMPLEMENT", "CACHE-PARITY-TESTS"]
+  - question: "For ingest_type=add, should previous query answers be treated as eventually consistent or immediately invalidated?"
+    context: "Current behavior can produce stale REST hits while WS may return fresh data."
+    type: "decision_blocker"
+    affects: ["CACHE-CONSISTENCY-POLICY", "CACHE-PARITY-IMPLEMENT"]
+gaps:
+  - description: "No explicit architecture contract defines cross-channel cache consistency between REST and WS."
+    refinement_requests:
+      - query: "Find explicit product requirement for consistency guarantees between REST and chat transport."
+        source_hint: "docs/PRD.yaml or docs/plan artifacts"
+  - description: "No existing tests assert parity (or justified non-parity) between REST and WS retrieval paths."
+    refinement_requests:
+      - query: "Identify expected cache behavior contract for WS in tests and docs."
+        source_hint: "tests/ and docs/CACHE_*.md"
+pre_mortem:
+  overall_risk_level: "high"
+  critical_failure_modes:
+    - scenario: "Refactor introduces behavioral drift between REST and WS response shape or filtering."
+      likelihood: "medium"
+      impact: "high"
+      mitigation: "Use one shared retrieval facade and contract tests comparing REST vs WS outputs for equivalent requests."
+    - scenario: "Concurrency defects remain due to global config mutation for enable_rerank overrides."
+      likelihood: "high"
+      impact: "critical"
+      mitigation: "Remove global config mutation; pass rerank mode as request-local execution parameter."
+    - scenario: "Cache hardening rejects valid JSON requests with charset or vendor media type variants."
+      likelihood: "medium"
+      impact: "medium"
+      mitigation: "Adopt explicit JSON media-type allowlist with tests for application/json and +json variants."
+  assumptions:
+    - "REST endpoint /retrieve remains the canonical external retrieval API."
+    - "Backward-compatible WS message contract is required."
+    - "Fail-open behavior for cache runtime failures must be preserved."
+implementation_specification:
+  code_structure: "Introduce a transport-agnostic retrieval service layer with cache policy hooks, then route REST and WS through it; add tests and docs to enforce one parity contract."
+  affected_areas:
+    - "api.py"
+    - "api_middleware.py"
+    - "tests/test_query_cache_middleware.py"
+    - "tests/test_ws.py"
+    - "tests/test_system_e2e.py"
+    - "docs/CACHE_DEPLOYMENT.md"
+  component_details:
+    - component: "Shared retrieval facade"
+      responsibility: "Provide one retrieval execution path for REST and WS with identical rerank, filtering, and cache-policy semantics."
+      interfaces:
+        - "retrieve_documents(query: str, enable_rerank: bool | None, transport: str) -> RetrievalResponse payload"
+      dependencies:
+        - component: "HybridRetriever"
+          relationship: "Retrieval execution"
+        - component: "Cache backend"
+          relationship: "Optional response-cache access and invalidation"
+      integration_points:
+        - "POST /retrieve"
+        - "WebSocket /ws/chat"
+    - component: "Cache policy contract"
+      responsibility: "Define and enforce keying, transport inclusion, and invalidation semantics across channels."
+      interfaces:
+        - "cache_key(query, enable_rerank, config_fingerprint, corpus_version, transport_policy)"
+      dependencies:
+        - component: "api_middleware QueryCacheMiddleware"
+          relationship: "HTTP interception and response caching"
+      integration_points:
+        - "/retrieve middleware"
+        - "WS retrieval handling"
+    - component: "Concurrency-safe rerank override"
+      responsibility: "Eliminate global mutable config toggles during request processing."
+      interfaces:
+        - "request-local rerank override input"
+      dependencies:
+        - component: "HybridRetriever configuration handling"
+          relationship: "Execution policy"
+      integration_points:
+        - "REST retrieval handlers"
+        - "WS retrieval handler"
+contracts:
+  - from_task: "CACHE-CONSISTENCY-POLICY"
+    to_task: "CACHE-PARITY-IMPLEMENT"
+    interface: "Approved cross-channel cache behavior matrix"
+    format: "Markdown decision matrix"
+  - from_task: "CACHE-CONSISTENCY-POLICY"
+    to_task: "CACHE-MW-HARDEN"
+    interface: "JSON media-type eligibility rules and bypass policy"
+    format: "Rules checklist"
+  - from_task: "CACHE-PARITY-IMPLEMENT"
+    to_task: "CACHE-PARITY-TESTS"
+    interface: "Unified retrieval path and observable cache behavior hooks"
+    format: "Code diff + test fixtures"
+  - from_task: "CACHE-MW-HARDEN"
+    to_task: "CACHE-PARITY-TESTS"
+    interface: "Updated middleware gating behavior"
+    format: "Acceptance test list"
+  - from_task: "CACHE-PARITY-TESTS"
+    to_task: "CACHE-REVIEW-DOCS"
+    interface: "Parity validation report with pass/fail evidence"
+    format: "Test report summary"
+tasks:
+  - id: "CACHE-CONSISTENCY-POLICY"
+    title: "Define cross-channel cache consistency contract"
+    description: |
+      Produce a binding architecture decision for REST and WS cache behavior:
+      1) Decide whether WS shares L1 response cache with /retrieve or remains explicitly uncached.
+      2) Define ingest/config invalidation behavior for both channels.
+      3) Define key identity inputs (query, rerank mode, config/corpus version).
+      4) Freeze acceptance criteria for parity tests.
+    wave: 1
+    agent: "gem-reviewer"
+    prototype: false
+    covers: ["WS bypass gap", "channel consistency", "invalidation semantics"]
+    priority: "high"
+    status: "completed"
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: "docs/plan/20260420/plan.yaml"
+        description: "Current 20260420 scope and SEC-focused contracts"
+      - path: "api.py"
+        description: "Current REST and WS retrieval flows"
+      - path: "api_middleware.py"
+        description: "Current HTTP-only L1 cache middleware"
+    diagnosis:
+      root_cause: "No explicit architecture contract governs REST/WS cache parity."
+      fix_recommendations: "Finalize consistency policy before code changes to avoid rework."
+      injected_at: "2026-04-21"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Extension plan created from critic findings"
+        timestamp: "2026-04-21"
+    estimated_effort: "small"
+    estimated_files: 2
+    estimated_lines: 140
+    focus_area: "architecture"
+    verification:
+      - "Decision matrix includes REST and WS behavior for cache HIT/MISS, ingest add/update, and config change"
+      - "Acceptance criteria are testable and non-ambiguous"
+    acceptance_criteria:
+      - "Single approved parity policy exists"
+      - "Policy resolves channel inconsistency risk"
+    failure_modes:
+      - scenario: "Policy remains ambiguous and blocks implementation."
+        likelihood: "medium"
+        impact: "high"
+        mitigation: "Escalate unresolved questions as explicit blocker for wave 2."
+    requires_review: true
+    review_depth: "full"
+    review_security_sensitive: false
+
+  - id: "CACHE-PARITY-IMPLEMENT"
+    title: "Refactor REST and WS to shared retrieval facade"
+    description: |
+      Implement a transport-agnostic retrieval function/service so REST and WS no longer diverge.
+      Remove duplicated retrieval logic and route both handlers through one flow.
+      Eliminate request-time mutation of global _config.enable_rerank by using request-local
+      execution parameters.
+    wave: 2
+    agent: "gem-implementer"
+    prototype: false
+    covers: ["WS bypass gap", "global config mutation", "parity"]
+    priority: "high"
+    status: "completed"
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: ["CACHE-CONSISTENCY-POLICY"]
+    conflicts_with: []
+    context_files:
+      - path: "api.py"
+        description: "REST and WS handlers currently duplicate retrieval flow"
+      - path: "hybrid_rag/retriever.py"
+        description: "Retriever capabilities and rerank control surface"
+      - path: "docs/plan/20260420/cache-gap-plan.yaml"
+        description: "Parity policy and implementation scope"
+    diagnosis:
+      root_cause: "Transport-specific retrieval implementations drifted and bypassed shared cache policy."
+      fix_recommendations: "Adopt one shared facade for retrieval and rerank handling."
+      injected_at: "2026-04-21"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Critical architecture remediation"
+        timestamp: "2026-04-21"
+    estimated_effort: "large"
+    estimated_files: 3
+    estimated_lines: 280
+    focus_area: "backend-retrieval-flow"
+    verification:
+      - "REST and WS use same retrieval function"
+      - "No request path mutates global _config for rerank override"
+      - "Response schema compatibility preserved"
+    acceptance_criteria:
+      - "WS path no longer calls retriever directly outside shared facade"
+      - "Channel behavior is consistent with policy"
+      - "Concurrency-safe rerank behavior validated"
+    failure_modes:
+      - scenario: "Refactor breaks WS message sequence or shape."
+        likelihood: "medium"
+        impact: "high"
+        mitigation: "Use adapter layer preserving existing WS output contract."
+      - scenario: "Performance regression from abstraction overhead."
+        likelihood: "low"
+        impact: "medium"
+        mitigation: "Benchmark before/after and optimize hot path only if needed."
+    tech_stack: ["Python", "FastAPI", "WebSocket", "pytest"]
+    test_coverage: "Unit + integration tests for shared retrieval path"
+
+  - id: "CACHE-MW-HARDEN"
+    title: "Harden middleware request eligibility and key contract reuse"
+    description: |
+      Restrict middleware caching to JSON payloads and align keying semantics with the
+      shared cache policy.
+      Ensure media-type handling covers application/json and +json variants while bypassing
+      all non-JSON payloads before body processing.
+    wave: 2
+    agent: "gem-implementer"
+    prototype: false
+    covers: ["SEC-002 drift", "key semantics reuse"]
+    priority: "medium"
+    status: "completed"
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: ["CACHE-CONSISTENCY-POLICY"]
+    conflicts_with: []
+    context_files:
+      - path: "api_middleware.py"
+        description: "Current request gating and key generation"
+      - path: "tests/test_query_cache_middleware.py"
+        description: "Middleware behavior tests"
+    diagnosis:
+      root_cause: "Middleware currently bypasses multipart only, not all non-JSON request types."
+      fix_recommendations: "Apply explicit JSON eligibility checks with regression tests."
+      injected_at: "2026-04-21"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Security hardening aligned to critic findings"
+        timestamp: "2026-04-21"
+    estimated_effort: "small"
+    estimated_files: 2
+    estimated_lines: 180
+    focus_area: "middleware"
+    verification:
+      - "Non-JSON requests bypass cache path"
+      - "JSON requests still produce deterministic cache keys"
+    acceptance_criteria:
+      - "Gating behavior matches policy matrix"
+      - "No regression in HIT/MISS behavior for valid JSON requests"
+    failure_modes:
+      - scenario: "Charset or vendor JSON media types are incorrectly rejected."
+        likelihood: "medium"
+        impact: "medium"
+        mitigation: "Add tests for application/json;charset=utf-8 and application/*+json."
+    tech_stack: ["Python", "Starlette", "pytest"]
+    test_coverage: "Targeted middleware eligibility and key tests"
+
+  - id: "CACHE-PARITY-TESTS"
+    title: "Add REST-vs-WS cache parity and invalidation tests"
+    description: |
+      Add contract tests that issue equivalent queries via REST and WS and assert
+      expected parity (or intentional non-parity) per approved policy.
+      Include scenarios for repeated queries, config updates, ingest add/update,
+      and rerank overrides under concurrent load.
+    wave: 3
+    agent: "gem-implementer"
+    prototype: false
+    covers: ["missing parity tests", "invalidation parity", "concurrency"]
+    priority: "high"
+    status: "completed"
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: ["CACHE-PARITY-IMPLEMENT", "CACHE-MW-HARDEN"]
+    conflicts_with: []
+    context_files:
+      - path: "tests/test_ws.py"
+        description: "WS behavior tests"
+      - path: "tests/test_system_e2e.py"
+        description: "Integration/e2e baselines"
+      - path: "tests/test_query_cache_middleware.py"
+        description: "HTTP cache behavior baseline"
+    diagnosis:
+      root_cause: "No automated contract currently guards cross-transport cache behavior."
+      fix_recommendations: "Add explicit parity matrix tests and invalidation scenarios."
+      injected_at: "2026-04-21"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Quality gate for architecture fix"
+        timestamp: "2026-04-21"
+    estimated_effort: "medium"
+    estimated_files: 3
+    estimated_lines: 260
+    focus_area: "testing"
+    verification:
+      - "pytest targeted suites pass"
+      - "Parity matrix includes repeated query, config update, ingest add/update, rerank override"
+      - "Concurrency scenario proves no global config bleed"
+    acceptance_criteria:
+      - "Cross-channel cache behavior is test-enforced"
+      - "Regression guard exists for identified blocking gaps"
+    failure_modes:
+      - scenario: "Tests are flaky due to async timing variability."
+        likelihood: "medium"
+        impact: "medium"
+        mitigation: "Use deterministic synchronization and retry markers where justified."
+      - scenario: "Tests validate implementation details rather than contract outcomes."
+        likelihood: "low"
+        impact: "medium"
+        mitigation: "Assert externally observable behavior first, internals second."
+    tech_stack: ["Python", "pytest", "FastAPI TestClient", "websocket test client"]
+    test_coverage: "Contract-focused integration tests"
+
+  - id: "CACHE-REVIEW-DOCS"
+    title: "Security/architecture review and documentation sync"
+    description: |
+      Review the implementation against the approved cache policy and publish
+      operational documentation updates for REST/WS cache behavior, invalidation,
+      and observability expectations.
+    wave: 4
+    agent: "gem-documentation-writer"
+    prototype: false
+    covers: ["operational clarity", "architecture alignment"]
+    priority: "medium"
+    status: "completed"
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: ["CACHE-PARITY-TESTS"]
+    conflicts_with: []
+    context_files:
+      - path: "docs/CACHE_DEPLOYMENT.md"
+        description: "Cache operations and deployment behavior"
+      - path: "docs/CACHE_PERF_REPORT.md"
+        description: "Performance and hit-rate reporting"
+      - path: "docs/plan/20260420/notes.md"
+        description: "Plan outcomes and residual risks"
+    diagnosis:
+      root_cause: "Docs currently overstate cache architecture without clear WS parity status."
+      fix_recommendations: "Align docs to implemented and tested behavior."
+      injected_at: "2026-04-21"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Auto-included documentation closure task"
+        timestamp: "2026-04-21"
+    estimated_effort: "small"
+    estimated_files: 3
+    estimated_lines: 180
+    focus_area: "documentation"
+    verification:
+      - "Docs state exact REST vs WS cache behavior"
+      - "Invalidation semantics for config/ingest are documented"
+      - "Residual risks and observability metrics are listed"
+    acceptance_criteria:
+      - "Architecture docs match runtime behavior"
+      - "Operators can reason about cache behavior per transport"
+    failure_modes:
+      - scenario: "Documentation lags implementation and causes incorrect operational assumptions."
+        likelihood: "medium"
+        impact: "medium"
+        mitigation: "Review docs against parity test report before merge."
+    task_type: "update"
+    audience: "developers"
+    coverage_matrix:
+      - "REST/WS cache parity contract"
+      - "Invalidation behavior for config and ingest"
+      - "Rerank override concurrency safety"
+      - "Observable cache metrics and limits"

@@ -120,7 +120,7 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         A request is cached if:
         - Method is POST
         - Path is exactly '/retrieve'
-        - Content-Type is not multipart/form-data
+        - Content-Type is a JSON media type (application/json or application/*+json)
         - Path is not in excluded_paths
 
         Args:
@@ -133,9 +133,13 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         if request.method != "POST" or request.url.path != "/retrieve":
             return False
 
-        # Never process multipart/form-data through cache/body decoding path.
+        # Cache only explicit JSON media types and bypass all others before body work.
         content_type = request.headers.get("content-type", "").lower()
-        if content_type.startswith("multipart/form-data"):
+        media_type = content_type.split(";", 1)[0].strip()
+        is_json_media_type = media_type == "application/json" or (
+            media_type.startswith("application/") and media_type.endswith("+json")
+        )
+        if not is_json_media_type:
             return False
 
         # Check if path is excluded

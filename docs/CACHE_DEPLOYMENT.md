@@ -1,7 +1,7 @@
 # Hybrid RAG Caching System - Deployment Guide
 
-**Document Version:** 1.0  
-**Last Updated:** April 20, 2026  
+**Document Version:** 1.1  
+**Last Updated:** April 21, 2026  
 **Applicable to:** Hybrid RAG v0.1.0+
 
 ---
@@ -9,13 +9,14 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Development Setup](#development-setup)
-3. [Production Setup](#production-setup)
-4. [Environment Variables Reference](#environment-variables-reference)
-5. [Troubleshooting](#troubleshooting)
-6. [Monitoring & Observability](#monitoring--observability)
-7. [FAQ](#faq)
-8. [Production Checklist](#production-checklist)
+2. [Cross-Channel Cache Architecture (REST/WS Parity)](#cross-channel-cache-architecture-restws-parity)
+3. [Development Setup](#development-setup)
+4. [Production Setup](#production-setup)
+5. [Environment Variables Reference](#environment-variables-reference)
+6. [Troubleshooting](#troubleshooting)
+7. [Monitoring & Observability](#monitoring--observability)
+8. [FAQ](#faq)
+9. [Production Checklist](#production-checklist)
 
 ---
 
@@ -39,6 +40,65 @@ Both layers support multiple backend implementations:
 - **Embedding cache hit rate**: 60% on repeated queries
 - **Mean latency**: 946.8 ms (cached) vs 979.2 ms (uncached)
 - **Overall test coverage**: 64% with 163 passing tests
+
+---
+
+## Cross-Channel Cache Architecture (REST/WS Parity)
+
+*Added in Wave 2–3 (2026-04-21). Source: `docs/plan/20260420/cache-gap-plan.yaml`, task IDs CACHE-PARITY-IMPLEMENT and CACHE-PARITY-TESTS.*
+
+### Shared Retrieval Facade
+
+Both the REST `POST /retrieve` endpoint and the WebSocket `/ws/chat` handler route all retrieval execution through one shared function, `_shared_retrieve_documents(query, enable_rerank)` in `api.py`. This eliminates the previous channel divergence where WS bypassed middleware and hit the retriever directly.
+
+**What the facade does:**
+1. Normalises the query string (whitespace-collapsed).
+2. Resolves the effective rerank mode from the request parameter; the global `_config.enable_rerank` is used as default but is **never mutated at request time**.
+3. Computes a stable cache key from `{normalized_query, effective_enable_rerank, config_fingerprint, corpus_version}`. Transport (`rest`/`ws`) is **excluded** from key identity.
+4. Reads from and writes to the shared L1 cache (`lazy_cache`) with fail-open semantics.
+5. Calls `_retriever.retrieve()` only on a cache miss.
+
+### Cache Key Identity Contract
+
+| Identity Input | Source | Notes |
+|---|---|---|
+| `query` | Request, whitespace-normalised | Equivalent queries map to same key |
+| `effective_enable_rerank` | Request param → `_config.enable_rerank` default | Request override is request-local; no global mutation |
+| `config_fingerprint` | SHA-256 of serialised `_config` retrieval fields | Changes on `PUT /config` |
+| `corpus_version` | `_cache_generation` counter | Changes on `ingest_type=update` and `PUT /config` success |
+| transport | — | **Excluded**. REST and WS share the same cache entries |
+
+### Invalidation Semantics
+
+| Event | L1 Cache Action | Rationale |
+|---|---|---|
+| `POST /documents` with `ingest_type=update` | **Full clear** | Corpus has changed; all cached answers may be stale |
+| `POST /documents` with `ingest_type=add` | **Preserve** | Incremental addition; existing answers remain valid until TTL |
+| `PUT /config` success | **Full clear** | Retrieval parameters changed; stale answers must not be served |
+| TTL expiry | **Evict** | Managed by cache backend (default 3600 s dev / 86400 s prod) |
+| Cache backend error | **Fail-open** | Retrieval proceeds without cache; no 5xx raised |
+
+> **Note:** After `ingest_type=add`, previously cached queries may return pre-add results until TTL expiry. This is intentional eventual-consistency behaviour documented in the approved cache-consistency policy (`docs/plan/20260420/CACHE-CONSISTENCY-POLICY.md`).
+
+### Request-Local Rerank Override
+
+The `enable_rerank` field in `RetrievalRequest` (REST) and in the WS message payload is consumed as a **request-local execution parameter**. The facade resolves it to `effective_enable_rerank` without writing back to `_config`:
+
+```python
+effective_enable_rerank = (
+    _config.enable_rerank if enable_rerank is None else bool(enable_rerank)
+)
+```
+
+Concurrent requests with different `enable_rerank` values do not interfere. The global `_config.enable_rerank` reflects only the last committed `PUT /config` value, never a transient per-request override.
+
+### Observability Limitations and Known Residual Risk
+
+| Limitation | Detail |
+|---|---|
+| **Cache stats aggregate backend activity** | `GET /cache/stats` reports backend-level hit/miss counters from the shared cache backend. Both HTTP middleware lookups and WS/shared-facade lookups increment the same counters, so WS cache activity is reflected in `/cache/stats`. |
+| **No structured cache-hit header on WS** | REST responses include `X-Cache: HIT/MISS`; WS messages do not expose cache status in the current message schema. |
+| **Fail-open parity test gap** | AC6 (cache backend errors must not cause retrieval failures for WS) is verified for REST via `test_query_cache_middleware.py::test_fail_open_errors` and is covered structurally in `_shared_retrieve_documents` (try/except on all cache calls). However, an independent end-to-end assertion that the WS handler returns a successful `results` message under a faulting cache backend has not been added to `test_api_shared_retrieval.py` as of Wave 3. This is a known test gap, not a production risk. |
 
 ---
 
@@ -188,7 +248,7 @@ services:
       - "8000:8000"
     environment:
       - CACHE_BACKEND=redis
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=rediss://:strong-password@redis:6379/0
       - CACHE_TTL_SECONDS=86400
       - CACHE_KEY_PREFIX=prod_hybrid_rag:
       - CACHE_MAX_SIZE=100000
@@ -261,7 +321,7 @@ The API will automatically:
 **Expected log output:**
 
 ```
-INFO:hybrid_rag.cache:Connecting to Redis at redis://redis-instance:6379/0...
+INFO:hybrid_rag.cache:Connecting to Redis at rediss://redis-instance:6379/0...
 INFO:hybrid_rag.cache:Redis connection pool initialized with default backend
 INFO:hybrid_rag.retriever:Hybrid retriever initialized with caching enabled
 ```
@@ -294,7 +354,7 @@ CACHE_MAX_SIZE=10000
 
 ```bash
 CACHE_BACKEND=redis
-REDIS_URL=redis://redis.prod.internal:6379/0
+REDIS_URL=rediss://:strong-password@redis.prod.internal:6379/0
 CACHE_TTL_SECONDS=86400
 CACHE_KEY_PREFIX=myapp_prod:
 CACHE_MAX_SIZE=100000
@@ -304,7 +364,7 @@ CACHE_MAX_SIZE=100000
 
 ```bash
 CACHE_BACKEND=redis
-REDIS_URL=redis://:MySecurePassword123@redis.prod.internal:6379/0
+REDIS_URL=rediss://user:MySecurePassword123@redis.prod.internal:6379/0
 CACHE_TTL_SECONDS=86400
 CACHE_KEY_PREFIX=myapp_prod:
 ```
@@ -389,7 +449,7 @@ ERROR:hybrid_rag.cache:Failed to connect to Redis: ...
 | Redis not running | `redis-cli ping` | Start Redis: `redis-server` or `systemctl start redis-server` |
 | Wrong hostname/port | `REDIS_URL` value | Verify connectivity: `redis-cli -h <host> -p <port> ping` |
 | Network unreachable | Container/host network | Check firewall rules, DNS resolution, VPC routing |
-| Redis auth failed | Redis password required | Add password to `REDIS_URL`: `redis://:PASSWORD@host:6379` |
+| Redis auth failed | Redis password required | Add password to `REDIS_URL`: `rediss://:PASSWORD@host:6379` |
 
 **Diagnostic Commands:**
 
@@ -757,8 +817,9 @@ redis-cli INFO keyspace
   ```
 
 **Automatic Cache Invalidation:**
-- `POST /config` endpoint (configuration changes)
-- `POST /ingest` endpoint (document updates)
+- `PUT /config` endpoint (configuration changes) — full L1 clear
+- `POST /documents` with `ingest_type=update` — full L1 clear
+- `POST /documents` with `ingest_type=add` — **cache preserved** (incremental add, eventual consistency)
 - TTL expiration (automatic)
 
 ---
@@ -814,11 +875,11 @@ redis-cli INFO keyspace
 ```bash
 # Application 1
 CACHE_KEY_PREFIX=app1_cache:
-REDIS_URL=redis://shared-redis:6379/0
+REDIS_URL=rediss://:PASSWORD@shared-redis:6379/0
 
 # Application 2
 CACHE_KEY_PREFIX=app2_cache:
-REDIS_URL=redis://shared-redis:6379/0
+REDIS_URL=rediss://:PASSWORD@shared-redis:6379/0
 ```
 
 This ensures cache keys don't collide:
@@ -891,15 +952,17 @@ Use this checklist before deploying caching to production:
 - [ ] Environment variables configured in production `.env`:
   ```bash
   CACHE_BACKEND=redis
-  REDIS_URL=redis://redis-prod:6379/0
+  REDIS_URL=rediss://:strong-password@redis-prod:6379/0
   CACHE_TTL_SECONDS=86400
   CACHE_KEY_PREFIX=prod_hybrid_rag:
   ```
 
-- [ ] Redis password set (if required):
+- [ ] Redis password set (required in production):
   ```bash
-  REDIS_URL=redis://:PASSWORD@redis-prod:6379/0
+  REDIS_URL=rediss://:PASSWORD@redis-prod:6379/0
   ```
+
+- [ ] `REDIS_URL` uses `rediss://` scheme (TLS required in production; SEC-004)
 
 - [ ] Redis memory limit configured:
   ```bash

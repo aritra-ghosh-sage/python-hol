@@ -356,6 +356,8 @@ The Hybrid RAG caching implementation **successfully resolves all 3 blocking iss
 5. Monitor cache hit rates in production
 6. Adjust TTL based on actual workload patterns
 
+> **Wave 2–3 (2026-04-21):** REST/WS shared retrieval facade and parity tests are complete. See `docs/CACHE_DEPLOYMENT.md` §"Cross-Channel Cache Architecture" and `docs/plan/20260420/notes.md` for full details. Residual open item: WS fail-open parity test (AC6) is a test coverage gap; production code is structurally fail-open.
+
 ---
 
 ## Appendix: Test Execution Details
@@ -372,9 +374,11 @@ tests/
 ├── test_retriever.py                  # 28+ tests ✅
 ├── test_retriever_embedding_cache.py  # 22 tests ✅
 ├── test_config.py                     # 15+ tests ✅
-└── test_system_e2e.py                 # 11+ tests ✅
+├── test_system_e2e.py                 # 11+ tests ✅
+└── test_api_shared_retrieval.py       # 6 tests ✅  ← added Wave 2–3
 ────────────────────────────────────
-Total: 163 tests ✅ PASSED
+Original suite: 163 tests ✅ PASSED (plan 20260420-caching-blueprint)
+Wave 2–3 additions: +6 parity/facade tests (test_api_shared_retrieval.py)
 ```
 
 ### Benchmark System Configuration

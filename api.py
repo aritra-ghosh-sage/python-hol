@@ -29,6 +29,8 @@ For detailed caching documentation, see docs/CACHE_DEPLOYMENT.md and docs/CACHE_
 
 import base64
 import io
+import hashlib
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -73,6 +75,7 @@ __all__ = ["app", "initialize_retriever"]
 _retriever: Optional[HybridRetriever] = None
 _config: Optional[HybridRetrieverConfig] = None
 _cache: Optional[CacheBackend] = None
+_cache_generation: int = 0
 
 
 # Pydantic models for request/response validation
@@ -457,6 +460,90 @@ class LazyCache(CacheBackend):
 # Create lazy cache wrapper for middleware
 lazy_cache = LazyCache()
 
+
+def _shared_retrieve_documents(
+    query: str, enable_rerank: Optional[bool] = None
+) -> List[Dict[str, Any]]:
+    """Execute retrieval through one shared path for REST and WebSocket handlers."""
+    if _retriever is None or _config is None:
+        raise RetrieverNotInitializedError("Retriever not initialized")
+
+    effective_enable_rerank = (
+        _config.enable_rerank if enable_rerank is None else bool(enable_rerank)
+    )
+    normalized_query = " ".join(query.split())
+
+    config_fingerprint_payload = {
+        "semantic_top_k": _config.semantic_top_k,
+        "keyword_top_k": _config.keyword_top_k,
+        "final_top_k": _config.final_top_k,
+        "semantic_weight": _config.semantic_weight,
+        "keyword_weight": _config.keyword_weight,
+        "enable_rerank": _config.enable_rerank,
+        "pre_rerank_top_k": _config.pre_rerank_top_k,
+    }
+    config_fingerprint = hashlib.sha256(
+        json.dumps(
+            config_fingerprint_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    shared_identity = {
+        "query": normalized_query,
+        "effective_enable_rerank": effective_enable_rerank,
+        "config_fingerprint": config_fingerprint,
+        "corpus_version": str(_cache_generation),
+    }
+    cache_key = "shared-retrieve:" + hashlib.sha256(
+        json.dumps(
+            shared_identity,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    if _cache is not None:
+        try:
+            cached_results = lazy_cache.get(cache_key)
+            if isinstance(cached_results, list):
+                return cached_results
+        except Exception as e:
+            logger.warning("Shared retrieval cache read failed: %s", e)
+
+    results = _retriever.retrieve(query, enable_rerank=effective_enable_rerank)
+
+    if _cache is not None:
+        try:
+            lazy_cache.set(cache_key, results)
+        except Exception as e:
+            logger.warning("Shared retrieval cache write failed: %s", e)
+
+    return results
+
+
+def _to_filtered_document_results(
+    results: List[Dict[str, Any]], min_score_threshold: float
+) -> List[DocumentResult]:
+    """Filter retrieval results and convert them to API response models."""
+    filtered_results = [r for r in results if float(r.get("score", 0.0)) >= min_score_threshold]
+    logger.debug(
+        "Filtered from %s to %s results (min_score=%s)",
+        len(results),
+        len(filtered_results),
+        min_score_threshold,
+    )
+    return [
+        DocumentResult(
+            id=r["id"],
+            text=r["text"],
+            source=r["metadata"]["source"],
+            score=float(r["score"]),
+        )
+        for r in filtered_results
+    ]
+
 # Add CORS middleware
 allow_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
 app.add_middleware(
@@ -536,35 +623,12 @@ async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     try:
         logger.info(f"Retrieval request: {request.query[:50]}...")
 
-        # Temporarily override reranking if requested
-        original_rerank = _config.enable_rerank
-        if request.enable_rerank is not None:
-            _config.enable_rerank = request.enable_rerank
-            logger.debug(f"Reranking override: {request.enable_rerank}")
-
-        try:
-            results = _retriever.retrieve(request.query)
-        finally:
-            # Restore original setting
-            _config.enable_rerank = original_rerank
-
-        # Filter results by minimum score threshold (0.85)
-        min_score_threshold = 0.85
-        filtered_results = [r for r in results if r["score"] >= min_score_threshold]
-        logger.debug(
-            f"Filtered from {len(results)} to {len(filtered_results)} results (min_score={min_score_threshold})"
+        results = _shared_retrieve_documents(
+            request.query, enable_rerank=request.enable_rerank
         )
-
-        # Convert results to response model
-        doc_results = [
-            DocumentResult(
-                id=r["id"],
-                text=r["text"],
-                source=r["metadata"]["source"],
-                score=float(r["score"]),
-            )
-            for r in filtered_results
-        ]
+        doc_results = _to_filtered_document_results(
+            results, min_score_threshold=0.85
+        )
 
         logger.info(f"Retrieval complete: {len(doc_results)} results after filtering")
         return RetrievalResponse(
@@ -574,6 +638,12 @@ async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     except RetrievalError as e:
         logger.error(f"Retrieval error: {e}")
         raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
+    except RetrieverNotInitializedError as e:
+        logger.error(f"Retriever not initialized: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Retriever service not initialized. Try again later.",
+        )
     except Exception as e:
         logger.error(f"Unexpected error during retrieval: {e}")
         raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
@@ -626,31 +696,15 @@ async def retrieve_filtered(
             f"Filtered retrieval request: {request.query[:50]}... (min_score={min_score})"
         )
 
-        original_rerank = _config.enable_rerank
-        if request.enable_rerank is not None:
-            _config.enable_rerank = request.enable_rerank
-
-        try:
-            results = _retriever.retrieve(request.query)
-        finally:
-            _config.enable_rerank = original_rerank
+        results = _shared_retrieve_documents(
+            request.query, enable_rerank=request.enable_rerank
+        )
 
         # Filter results by minimum score, enforcing floor of 0.85 for chat quality
         effective_min_score = max(0.85, min_score)
-        filtered_results = [r for r in results if r["score"] >= effective_min_score]
-        logger.debug(
-            f"Filtered from {len(results)} to {len(filtered_results)} results (min_score={effective_min_score})"
+        doc_results = _to_filtered_document_results(
+            results, min_score_threshold=effective_min_score
         )
-
-        doc_results = [
-            DocumentResult(
-                id=r["id"],
-                text=r["text"],
-                source=r["metadata"]["source"],
-                score=float(r["score"]),
-            )
-            for r in filtered_results
-        ]
 
         logger.info(f"Filtered retrieval complete: {len(doc_results)} results after filtering")
         return RetrievalResponse(
@@ -660,6 +714,12 @@ async def retrieve_filtered(
     except RetrievalError as e:
         logger.error(f"Retrieval error: {e}")
         raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
+    except RetrieverNotInitializedError as e:
+        logger.error(f"Retriever not initialized: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Retriever service not initialized. Try again later.",
+        )
     except Exception as e:
         logger.error(f"Unexpected error during filtered retrieval: {e}")
         raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
@@ -741,7 +801,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
             ...
         }
     """
-    global _config
+    global _config, _cache_generation
 
     if _config is None:
         logger.error("Retriever not initialized")
@@ -773,6 +833,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
 
         # Clear cache to invalidate all L1 entries (ADR-006 - Fix for blocking issue #1)
         # This ensures the new configuration is used for subsequent queries
+        _cache_generation += 1
         if _cache is not None:
             try:
                 lazy_cache.clear()  # Use lazy_cache to defer to global _cache
@@ -943,33 +1004,12 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 status_msg = WsStatusMessage(message="Retrieving documents...")
                 await websocket.send_json(status_msg.model_dump())
 
-                # Perform retrieval
-                original_rerank = _config.enable_rerank
-                if enable_rerank is not None:
-                    _config.enable_rerank = enable_rerank
-
-                try:
-                    results = _retriever.retrieve(query)
-                finally:
-                    _config.enable_rerank = original_rerank
-
-                # Filter results by minimum score threshold (0.85)
-                min_score_threshold = 0.85
-                filtered_results = [r for r in results if r["score"] >= min_score_threshold]
-                logger.debug(
-                    f"Filtered from {len(results)} to {len(filtered_results)} results (min_score={min_score_threshold})"
+                results = _shared_retrieve_documents(
+                    query, enable_rerank=enable_rerank
                 )
-
-                # Convert results to response model
-                doc_results = [
-                    DocumentResult(
-                        id=r["id"],
-                        text=r["text"],
-                        source=r["metadata"]["source"],
-                        score=float(r["score"]),
-                    )
-                    for r in filtered_results
-                ]
+                doc_results = _to_filtered_document_results(
+                    results, min_score_threshold=0.85
+                )
 
                 # Send results (total_results reflects post-filter count)
                 results_msg = WsResultsMessage(
@@ -1049,6 +1089,8 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
     Raises:
         HTTPException: 400 on validation error, 503 if retriever not initialized, 500 on failure.
     """
+    global _cache_generation
+
     if _retriever is None or _config is None:
         logger.error("Retriever not initialized")
         raise HTTPException(
@@ -1147,6 +1189,7 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
             # - 'update': Clear cache to ensure new documents are retrieved
             # - 'add': Preserve cache for bulk additions
             if request.ingest_type == "update":
+                _cache_generation += 1
                 if _cache is not None:
                     try:
                         lazy_cache.clear()

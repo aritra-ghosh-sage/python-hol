@@ -65,35 +65,38 @@ def initialized_app() -> Generator[TestClient, None, None]:
     Yields:
         TestClient: A test client for the initialized app
     """
-    # Initialize (or re-initialize) retriever if the collection handle is stale.
-    if not _is_retriever_collection_healthy():
-        logger.info("Initializing retriever for test...")
-        try:
-            config = HybridRetrieverConfig(
-                semantic_weight=0.7,
-                keyword_weight=0.3,
-                enable_rerank=True
-            )
-            documents = get_sample_documents()
-            collection = initialize_vector_db(documents)
-            api._retriever = HybridRetriever(collection, config)
-            api._config = config
-            logger.info("✓ Retriever initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize retriever: {e}")
-            raise
-    
-    # Initialize cache if not already done
-    if api._cache is None:
-        logger.info("Initializing cache for test...")
-        try:
-            cache_settings = CacheSettings.from_env()
-            api._cache = create_cache_backend(cache_settings)
-            logger.info("✓ Cache initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize cache: {e}")
-            # Continue without cache
-            api._cache = None
+    # Always initialize a fresh retriever per test to avoid stale collection handles.
+    # Some tests recreate/delete the same underlying collection name, which can invalidate
+    # previously held retriever references across modules.
+    logger.info("Initializing retriever for test...")
+    try:
+        config = HybridRetrieverConfig(
+            semantic_weight=0.7,
+            keyword_weight=0.3,
+            enable_rerank=True
+        )
+        documents = get_sample_documents()
+        collection = initialize_vector_db(documents)
+        api._retriever = HybridRetriever(collection, config)
+        api._config = config
+        logger.info("✓ Retriever initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize retriever: {e}")
+        raise
+
+    # Always initialize a fresh cache backend for deterministic hit/miss counters.
+    logger.info("Initializing cache for test...")
+    try:
+        cache_settings = CacheSettings.from_env()
+        api._cache = create_cache_backend(cache_settings)
+        logger.info("✓ Cache initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize cache: {e}")
+        # Continue without cache
+        api._cache = None
+
+    # Reset shared cache generation token for test isolation.
+    api._cache_generation = 0
     
     # Create test client
     client = TestClient(api.app)

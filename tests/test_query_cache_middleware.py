@@ -457,6 +457,68 @@ class TestExcludedPaths:
             assert cache_backend.get_calls == 0
             assert cache_backend.set_calls == 0
 
+    def test_non_json_request_bypasses_cache_before_body_processing(
+        self, client: TestClient, cache_backend: MockCacheBackend
+    ) -> None:
+        """Non-JSON content types bypass cache path before any body/key work."""
+        cache_backend.get_calls = 0
+        cache_backend.set_calls = 0
+
+        with (
+            patch.object(
+                QueryCacheMiddleware,
+                "_read_request_body",
+                new_callable=AsyncMock,
+            ) as read_body_mock,
+            patch.object(
+                QueryCacheMiddleware,
+                "_generate_cache_key",
+                autospec=True,
+            ) as key_mock,
+        ):
+            response = client.post(
+                "/retrieve",
+                content="not-json-payload",
+                headers={"content-type": "text/plain"},
+            )
+
+            # Endpoint will reject body shape, but middleware must bypass cache work.
+            assert response.status_code == 422
+            assert read_body_mock.await_count == 0
+            assert key_mock.call_count == 0
+            assert cache_backend.get_calls == 0
+            assert cache_backend.set_calls == 0
+
+    def test_application_json_charset_is_cache_eligible(
+        self, client: TestClient, cache_backend: MockCacheBackend
+    ) -> None:
+        """application/json with charset remains cache-eligible."""
+        cache_backend.get_calls = 0
+
+        response = client.post(
+            "/retrieve",
+            content='{"query":"json charset"}',
+            headers={"content-type": "application/json; charset=utf-8"},
+        )
+
+        assert response.status_code == 200
+        assert cache_backend.get_calls > 0
+
+    def test_application_suffix_json_is_cache_eligible(
+        self, client: TestClient, cache_backend: MockCacheBackend
+    ) -> None:
+        """application/*+json vendor media types are cache-eligible."""
+        cache_backend.get_calls = 0
+
+        response = client.post(
+            "/retrieve",
+            content='{"query":"vendor json"}',
+            headers={"content-type": "application/problem+json"},
+        )
+
+        assert response.status_code == 200
+        assert cache_backend.get_calls > 0
+
     def test_excluded_paths_pass_through(
         self, client: TestClient, cache_backend: MockCacheBackend
     ) -> None:

@@ -30,9 +30,11 @@ Example:
 
 import json
 import logging
+import os
 import threading
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 try:
     import cachetools
@@ -388,10 +390,28 @@ class RedisCache(CacheBackend):
             ttl_seconds: Default time-to-live for entries in seconds (default: 3600).
 
         Raises:
-            ValueError: If ttl_seconds < 0.
+            ValueError: If ttl_seconds < 0, or if ENVIRONMENT=production and
+                redis_url is not a rediss:// URL, or is missing a password.
         """
         if ttl_seconds < 0:
             raise ValueError(f"ttl_seconds must be non-negative, got {ttl_seconds}")
+
+        # Production-only guardrail: enforce secure transport and authentication.
+        # This mirrors the policy already applied at the CacheSettings config layer
+        # and closes the SEC-004 direct-init gap.
+        environment = os.getenv("ENVIRONMENT", "").strip().lower()
+        if environment == "production":
+            parsed = urlparse(redis_url)
+            if parsed.scheme != "rediss":
+                raise ValueError(
+                    "Production Redis URL must use TLS with the 'rediss://' scheme. "
+                    f"Got redis_url='{redis_url}'"
+                )
+            if not parsed.password:
+                raise ValueError(
+                    "Production Redis URL must include authentication credentials/password. "
+                    f"Got redis_url='{redis_url}'"
+                )
 
         self._redis_url = redis_url
         self._key_prefix = key_prefix
