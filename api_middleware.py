@@ -117,6 +117,12 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
     def _should_cache_request(self, request: Request) -> bool:
         """Determine if a request should be cached.
 
+        Acts as the cache eligibility gate: all checks are header-only so that
+        ineligible requests are rejected before any body I/O is attempted. This
+        is the SEC-002 pattern — consuming the request stream has side effects
+        (memory allocation, stream exhaustion), so the gate must be cheap and
+        early.
+
         A request is cached if:
         - Method is POST
         - Path is exactly '/retrieve'
@@ -133,7 +139,11 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         if request.method != "POST" or request.url.path != "/retrieve":
             return False
 
-        # Cache only explicit JSON media types and bypass all others before body work.
+        # Bypass non-JSON content types BEFORE reading the body: streaming the
+        # body is expensive and irreversible, so we reject ineligible media types
+        # here to avoid wasting resources on requests we would never cache anyway.
+        # Both application/json (RFC 8259) and application/*+json (RFC 6839
+        # structured-syntax suffix) are accepted for standards compliance.
         content_type = request.headers.get("content-type", "").lower()
         media_type = content_type.split(";", 1)[0].strip()
         is_json_media_type = media_type == "application/json" or (
@@ -142,7 +152,7 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         if not is_json_media_type:
             return False
 
-        # Check if path is excluded
+        # Excluded paths are always passed through uncached (e.g. health, ingest).
         if request.url.path in self.excluded_paths:
             return False
 
@@ -235,7 +245,8 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP Response with X-Cache header indicating HIT/MISS/ERROR status.
         """
-        # Check if this request should be cached
+        # Eligibility gate: header-only check, no body I/O yet. Ineligible
+        # requests are forwarded immediately without touching the stream.
         if not self._should_cache_request(request):
             # Pass through to next handler
             response_passthrough: Response = await call_next(request)

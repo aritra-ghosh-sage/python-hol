@@ -161,7 +161,7 @@ tasks:
     prototype: false
     covers: ["SEC-002"]
     priority: "high"
-    status: "pending"
+    status: "completed"
     flags:
       flaky: false
       retries_used: 0
@@ -223,7 +223,7 @@ tasks:
     prototype: false
     covers: ["SEC-004"]
     priority: "high"
-    status: "pending"
+    status: "completed"
     flags:
       flaky: false
       retries_used: 0
