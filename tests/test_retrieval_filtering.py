@@ -2,7 +2,7 @@
 Tests for retrieval filtering behavior and score thresholds.
 
 These tests verify that:
-1. Results below 0.85 raw score are filtered out before response
+1. Results below 0.80 raw score are filtered out before response
 2. total_results reflects post-filter count only
 3. Results remain sorted by score (descending)
 4. Filtering is consistent across REST and WebSocket endpoints
@@ -57,21 +57,21 @@ def skip_if_no_backend(backend_available):
 # ============================================================================
 
 def test_filter_logic_below_threshold():
-    """Unit test: filtering logic correctly removes scores below 0.85."""
+    """Unit test: filtering logic correctly removes scores below 0.80."""
     results = [
         {"id": "1", "score": 0.95, "text": "doc1", "metadata": {"source": "url1"}},
         {"id": "2", "score": 0.75, "text": "doc2", "metadata": {"source": "url2"}},  # Should be filtered
-        {"id": "3", "score": 0.85, "text": "doc3", "metadata": {"source": "url3"}},  # Boundary, included
+        {"id": "3", "score": 0.80, "text": "doc3", "metadata": {"source": "url3"}},  # Boundary, included
         {"id": "4", "score": 0.50, "text": "doc4", "metadata": {"source": "url4"}},  # Should be filtered
     ]
     
-    min_score_threshold = 0.85
+    min_score_threshold = 0.80
     filtered = [r for r in results if r["score"] >= min_score_threshold]
     
     assert len(filtered) == 2, f"Expected 2 results, got {len(filtered)}"
     assert filtered[0]["id"] == "1"
     assert filtered[1]["id"] == "3"
-    assert all(r["score"] >= 0.85 for r in filtered)
+    assert all(r["score"] >= 0.80 for r in filtered)
 
 
 def test_filter_logic_preserves_order():
@@ -79,10 +79,10 @@ def test_filter_logic_preserves_order():
     results = [
         {"id": "1", "score": 0.95, "text": "doc1", "metadata": {"source": "url1"}},
         {"id": "2", "score": 0.90, "text": "doc2", "metadata": {"source": "url2"}},
-        {"id": "3", "score": 0.85, "text": "doc3", "metadata": {"source": "url3"}},
+        {"id": "3", "score": 0.80, "text": "doc3", "metadata": {"source": "url3"}},
     ]
     
-    min_score_threshold = 0.85
+    min_score_threshold = 0.80
     filtered = [r for r in results if r["score"] >= min_score_threshold]
     
     scores = [r["score"] for r in filtered]
@@ -93,10 +93,10 @@ def test_floor_enforcement_logic():
     """Unit test: floor enforcement takes max of two thresholds."""
     # Simulating retrieve-filtered behavior
     requested_min_score = 0.5
-    enforced_floor = 0.85
+    enforced_floor = 0.80
     effective_min_score = max(enforced_floor, requested_min_score)
     
-    assert effective_min_score == 0.85
+    assert effective_min_score == 0.80
     
     requested_min_score = 0.9
     effective_min_score = max(enforced_floor, requested_min_score)
@@ -111,7 +111,7 @@ class TestRestApi:
     """Tests for REST API /retrieve endpoint (requires running backend)."""
 
     def test_retrieve_filters_below_threshold(self, skip_if_no_backend):
-        """Verify /retrieve endpoint filters results below 0.85 score."""
+        """Verify /retrieve endpoint filters results below 0.80 score."""
         import requests
         
         try:
@@ -130,11 +130,11 @@ class TestRestApi:
         assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
         data = response.json()
         
-        # Verify all results have score >= 0.85
+        # Verify all results have score >= 0.80
         if data["results"]:
             for result in data["results"]:
-                assert result["score"] >= 0.85, (
-                    f"Result with score {result['score']} below threshold 0.85 found"
+                assert result["score"] >= 0.80, (
+                    f"Result with score {result['score']} below threshold 0.80 found"
                 )
 
     def test_retrieve_result_count_reflects_filter(self, skip_if_no_backend):
@@ -190,7 +190,7 @@ class TestRestApi:
             )
 
     def test_retrieve_filtered_enforces_threshold(self, skip_if_no_backend):
-        """Verify /retrieve-filtered endpoint enforces min 0.85 threshold."""
+        """Verify /retrieve-filtered endpoint enforces min 0.80 threshold."""
         import requests
         
         try:
@@ -209,11 +209,11 @@ class TestRestApi:
         assert response.status_code == 200
         data = response.json()
         
-        # All results must be >= 0.85 (floor enforced), not 0.5
+        # All results must be >= 0.80 (floor enforced), not 0.5
         if data["results"]:
             for result in data["results"]:
-                assert result["score"] >= 0.85, (
-                    f"Result with score {result['score']} below floor 0.85 found"
+                assert result["score"] >= 0.80, (
+                    f"Result with score {result['score']} below floor 0.80 found"
                 )
 
 
@@ -228,19 +228,19 @@ async def test_websocket_mock_filters_below_threshold():
     mock_results = [
         {"id": "1", "text": "doc1", "metadata": {"source": "url1"}, "score": 0.95},
         {"id": "2", "text": "doc2", "metadata": {"source": "url2"}, "score": 0.70},
-        {"id": "3", "text": "doc3", "metadata": {"source": "url3"}, "score": 0.85},
+        {"id": "3", "text": "doc3", "metadata": {"source": "url3"}, "score": 0.80},
         {"id": "4", "text": "doc4", "metadata": {"source": "url4"}, "score": 0.40},
     ]
     
     # Apply filtering as done in websocket_chat endpoint
-    min_score_threshold = 0.85
+    min_score_threshold = 0.80
     filtered_results = [r for r in mock_results if r["score"] >= min_score_threshold]
     
     # Assertions
     assert len(filtered_results) == 2
-    assert all(r["score"] >= 0.85 for r in filtered_results)
+    assert all(r["score"] >= 0.80 for r in filtered_results)
     assert filtered_results[0]["score"] == 0.95
-    assert filtered_results[1]["score"] == 0.85
+    assert filtered_results[1]["score"] == 0.80
 
 
 @pytest.mark.asyncio
@@ -254,7 +254,7 @@ async def test_websocket_mock_results_sorted():
     ]
     
     # Filter and check sorting
-    min_score_threshold = 0.85
+    min_score_threshold = 0.80
     filtered_results = [r for r in mock_results if r["score"] >= min_score_threshold]
     
     scores = [r["score"] for r in filtered_results]
@@ -268,10 +268,10 @@ async def test_websocket_count_after_filter():
     mock_results = [
         {"id": "1", "score": 0.95, "text": "doc1", "metadata": {"source": "url1"}},
         {"id": "2", "score": 0.50, "text": "doc2", "metadata": {"source": "url2"}},
-        {"id": "3", "score": 0.85, "text": "doc3", "metadata": {"source": "url3"}},
+        {"id": "3", "score": 0.80, "text": "doc3", "metadata": {"source": "url3"}},
     ]
     
-    min_score_threshold = 0.85
+    min_score_threshold = 0.80
     filtered_results = [r for r in mock_results if r["score"] >= min_score_threshold]
     
     # Simulate WebSocket response

@@ -6,7 +6,7 @@ __all__ = ["DEFAULT_PERSIST_DIRECTORY", "MIN_RELEVANCE_SCORE", "STOP_WORDS"]
 DEFAULT_PERSIST_DIRECTORY = "./ai_support_kb"
 
 # Minimum relevance score threshold for retrieved documents
-MIN_RELEVANCE_SCORE = 0.95
+MIN_RELEVANCE_SCORE = 0.80
 
 # Stop words to exclude from keyword scoring
 STOP_WORDS = {

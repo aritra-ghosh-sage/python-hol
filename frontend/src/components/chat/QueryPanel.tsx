@@ -7,7 +7,7 @@ import { ChatWindow } from "./ChatWindow";
 import { ChatInput } from "./ChatInput";
 
 export function QueryPanel() {
-  const { messages, sendQuery, clearHistory, isConnected, connectionState } = useChat();
+  const { messages, sendQuery, isConnected, connectionState } = useChat();
 
   // Register debug function (dev mode only)
   useEffect(() => {
@@ -44,15 +44,6 @@ export function QueryPanel() {
               ? "Connected"
               : "Disconnected"}
         </span>
-        <button
-          type="button"
-          onClick={clearHistory}
-          disabled={messages.length === 0}
-          className="ml-auto rounded-md border border-gray-600 px-3 py-1 text-xs text-gray-300 transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label="Clear chat history"
-        >
-          Clear history
-        </button>
       </div>
 
       {/* Chat Area */}

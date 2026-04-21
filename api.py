@@ -627,7 +627,7 @@ async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
             request.query, enable_rerank=request.enable_rerank
         )
         doc_results = _to_filtered_document_results(
-            results, min_score_threshold=0.85
+            results, min_score_threshold=0.80
         )
 
         logger.info(f"Retrieval complete: {len(doc_results)} results after filtering")
@@ -700,8 +700,8 @@ async def retrieve_filtered(
             request.query, enable_rerank=request.enable_rerank
         )
 
-        # Filter results by minimum score, enforcing floor of 0.85 for chat quality
-        effective_min_score = max(0.85, min_score)
+        # Filter results by minimum score, enforcing floor of 0.80 for chat quality
+        effective_min_score = max(0.80, min_score)
         doc_results = _to_filtered_document_results(
             results, min_score_threshold=effective_min_score
         )
@@ -1008,7 +1008,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     query, enable_rerank=enable_rerank
                 )
                 doc_results = _to_filtered_document_results(
-                    results, min_score_threshold=0.85
+                    results, min_score_threshold=0.80
                 )
 
                 # Send results (total_results reflects post-filter count)
