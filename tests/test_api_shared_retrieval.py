@@ -96,6 +96,7 @@ def parity_harness(monkeypatch: pytest.MonkeyPatch) -> FakeRetriever:
     monkeypatch.setattr(api, "_retriever", retriever)
     monkeypatch.setattr(api, "_config", config)
     monkeypatch.setattr(api, "_cache", InMemoryCache(ttl_seconds=3600, max_size=100))
+    monkeypatch.setattr(api, "_cache_generation", 0)
 
     return retriever
 
