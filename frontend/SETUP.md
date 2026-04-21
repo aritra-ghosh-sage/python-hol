@@ -1,4 +1,4 @@
-# Hybrid RAG PWA - Complete Setup & Usage Guide
+# Hybrid RAG - Complete Setup & Usage Guide
 
 ## 🎉 Project Complete!
 
@@ -13,7 +13,7 @@ python-hol/
 ├─ api.py                           # FastAPI backend (WebSocket + REST endpoints)
 ├─ hybrid_rag/                       # Core RAG library
 ├─ pyproject.toml                    # Python dependencies (added pypdf)
-└─ frontend/                         # Next.js PWA frontend
+└─ frontend/                         # Next.js frontend
    ├─ public/                        # Static assets + service worker
    ├─ src/
    │  ├─ app/                        # Next.js app router
@@ -87,7 +87,7 @@ pnpm start  # Runs optimized production build
 
 **CORS Enabled**: Frontend on `:3000` can call backend on `:8000`
 
-### Frontend (Next.js PWA)
+### Frontend (Next.js)
 
 #### Main Panels (Navigation)
 
@@ -119,7 +119,6 @@ pnpm start  # Runs optimized production build
 - **Responsive design**: Sidebar collapses on mobile
 - **Dark theme**: Professional dark UI with blue accent
 - **Fonts**: Inter (body) + JetBrains Mono (code/scores) from Google Fonts
-- **PWA support**: Installable on mobile, offline fallback, manifest.json configured
 
 ---
 
@@ -225,7 +224,6 @@ sentence-transformers>=5.3.0  # Embeddings & reranking
   "next": "16.2.3",
   "react": "19.2.4",
   "lucide-react": "1.8.0",      // Icons
-  "@serwist/*": "9.5.7",        // (Optional) Future PWA enhancement
   "tailwindcss": "4.2.2",
   "typescript": "5.9.3"
 }
@@ -233,19 +231,11 @@ sentence-transformers>=5.3.0  # Embeddings & reranking
 
 ---
 
-## 📱 PWA Features
-
-- **Manifest**: `public/manifest.json` — app name, theme color, icons
-- **Service Worker**: `public/sw.js` — caches static assets, skips API/WebSocket
-- **Installation**: Works on desktop (Chrome/Edge) and mobile (iOS/Android)
-- **Offline Fallback**: Loads cached app shell if offline
-- **Meta Tags**: Mobile-friendly, apple touch icon, viewport
-
-### Install Instructions
-
-1. Open http://localhost:3000 in Chrome/Edge
-2. Look for "Install" button (top-right or in app menu)
-3. Click → app installed to home screen/Start menu
+> **Migration note**: A previous version of this app included a service worker and
+> `public/manifest.json` for PWA support. Those have been removed. On your first page
+> load after this release, `ServiceWorkerDecommissioner` automatically unregisters any
+> leftover service workers and clears the `hybrid-rag-*` caches from your browser.
+> No manual action is required.
 
 ---
 
@@ -319,7 +309,7 @@ wscat -c ws://localhost:8000/ws/chat
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Frontend (Next.js PWA)                   │
+│                    Frontend (Next.js)                       │
 │                    Port 3000 (localhost)                    │
 ├───────────────────────────────────────────────────────────────┤
 │ ┌──────────────────────┐        ┌──────────────────────────┐  │
@@ -425,7 +415,7 @@ wscat -c ws://localhost:8000/ws/chat
 - **Backend**: Async with uvicorn workers (8 by default)
 - **Vector DB**: Local ChromaDB with SentenceTransformer embeddings (CPU-based)
 - **Reranking**: Optional; use `enable_rerank: false`config for speed
-- **Caching**: Service worker caches static assets; API calls always fresh
+- **Caching**: API calls always fresh; no service-worker caching
 
 ---
 
@@ -470,11 +460,10 @@ wscat -c ws://localhost:8000/ws/chat
 
 ## 🎉 You're All Set!
 
-Your Hybrid RAG PWA is complete and ready to use. Start the backend and frontend, then explore:
+Your Hybrid RAG application is complete and ready to use. Start the backend and frontend, then explore:
 
 1. **Ask questions** using the WebSocket chat interface
 2. **Add custom knowledge** via text, URLs, or files
 3. **Adjust retrieval parameters** in real-time settings
-4. **Install as PWA** for native app experience
 
 Happy querying! 🚀
