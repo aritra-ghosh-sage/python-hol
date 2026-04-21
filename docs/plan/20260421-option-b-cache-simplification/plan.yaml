@@ -1,0 +1,981 @@
+plan_id: 20260421-option-b-cache-simplification
+objective: >-
+  Implement Architecture Option B from docs/HybridRAG_Architecture.md by applying
+  Phase 1 blocking fixes first, then simplifying cache responsibilities around an
+  authoritative L1 query cache, distributed corpus_version invalidation,
+  thread-safe L2 stats exposure, layered /cache/stats reporting, regression
+  protection, and observability hardening.
+created_at: 2026-04-21T00:00:00Z
+created_by: gem-planner
+status: pending
+research_confidence: high
+plan_metrics:
+  wave_1_task_count: 3
+  total_dependencies: 20
+  risk_score: medium
+tldr: |
+  Option B should be executed as a phased backend refactor. Phase 1 lands three
+  blockers first: truthful ttl_seconds reporting, add-path invalidation, and
+  replacement of six placeholder integration tests. Phase 2 removes middleware
+  response-data caching and shifts cache observability to an authoritative
+  handler-driven contract. Phase 3 introduces a distributed corpus_version token
+  with fail-open fallback and formalizes L2 as a node-local, thread-safe cache
+  with explicit stats. Phase 4 converts /cache/stats to a layered schema. Final
+  waves focus on regression coverage, rollout review, observability hardening,
+  and backend documentation updates.
+open_questions:
+  - question: Should middleware telemetry preserve X-Cache or standardize on X-Cache-Status?
+    context: >-
+      docs/HybridRAG_Architecture.md phase text names X-Cache-Status, while the
+      current implementation and tests assert X-Cache. The refactor should not
+      ship an avoidable compatibility break without an explicit decision.
+    type: decision_blocker
+    affects: [OPTB-004, OPTB-009, OPTB-013]
+  - question: Are there external dashboards or operators consuming the flat /cache/stats schema?
+    context: >-
+      No in-repo frontend or TypeScript consumer of /cache/stats was found, but
+      the architecture blueprint flags schema-break risk for existing monitoring.
+    type: research
+    affects: [OPTB-008, OPTB-010, OPTB-011, OPTB-013]
+  - question: Should Redis fallback in multi-instance deployments be allowed as degraded mode or treated as rollout-blocking?
+    context: >-
+      Option B explicitly fails open to local generation when Redis is
+      unavailable, which preserves uptime but weakens distributed coherency.
+    type: decision_blocker
+    affects: [OPTB-005, OPTB-007, OPTB-011, OPTB-012, OPTB-013]
+gaps:
+  - description: External /cache/stats consumers are not visible in the repository.
+    refinement_requests:
+      - query: Identify dashboards, scripts, or operators that parse the current flat /cache/stats response.
+        source_hint: docs/CACHE_DEPLOYMENT.md, deployment runbooks, monitoring configuration outside repo
+  - description: Production expectations for Redis outage behavior are not documented.
+    refinement_requests:
+      - query: Confirm whether degraded local corpus_version fallback is acceptable in multi-instance environments.
+        source_hint: docs/CACHE_DEPLOYMENT.md, ops runbooks, deployment roadmap
+pre_mortem:
+  overall_risk_level: medium
+  critical_failure_modes:
+    - scenario: Layered /cache/stats schema ships without compatibility planning and breaks existing monitoring.
+      likelihood: medium
+      impact: medium
+      mitigation: >-
+        Gate rollout on a schema-consumer review, define a compatibility decision
+        in OPTB-011, and document migration notes in OPTB-013.
+    - scenario: Redis fallback activates silently, causing stale cross-instance responses while appearing healthy.
+      likelihood: medium
+      impact: critical
+      mitigation: >-
+        Expose fallback_active and redis_connected in backend_health, emit
+        warning-level logs on fallback activation, and require explicit rollout
+        guidance before completion.
+    - scenario: Middleware simplification removes data caching but regresses cache-status headers or excluded-path behavior.
+      likelihood: low
+      impact: medium
+      mitigation: >-
+        Rewrite middleware tests against the approved observability contract and
+        preserve end-to-end parity checks in integration/system tests.
+    - scenario: Add/update invalidation changes create a thundering herd after corpus changes.
+      likelihood: low
+      impact: medium
+      mitigation: >-
+        Keep the distributed version token authoritative, clear only local cache
+        state, and verify invalidation behavior under repeated requests in
+        integration tests before observability hardening.
+  assumptions:
+    - Redis remains an optional but already-supported backend through hybrid_rag/cache.py.
+    - Phase 1 fixes may ship in the same branch if they are not already merged elsewhere.
+    - No frontend changes are required unless an out-of-repo consumer of /cache/stats is confirmed.
+    - Shared retrieval parity across REST and WebSocket must be preserved throughout the refactor.
+implementation_specification:
+  code_structure: >-
+    Keep cache ownership split across existing backend modules: api_middleware.py
+    becomes observability-only, api.py owns authoritative L1 query caching plus
+    corpus_version invalidation and /cache/stats composition, hybrid_rag/cache.py
+    remains the backend abstraction and stats source for L1 storage, and
+    hybrid_rag/retriever.py formalizes the node-local L2 embedding cache with
+    thread-safe stats exposure. Regression coverage stays in the existing pytest
+    suites rather than creating a new test harness.
+  affected_areas:
+    - docs/HybridRAG_Architecture.md
+    - api.py
+    - api_middleware.py
+    - hybrid_rag/cache.py
+    - hybrid_rag/retriever.py
+    - tests/test_cache.py
+    - tests/test_cache_integration.py
+    - tests/test_query_cache_middleware.py
+    - tests/test_embedding_cache.py
+    - tests/test_api_shared_retrieval.py
+    - tests/test_system_e2e.py
+    - README.md
+    - docs/API_INTEGRATION.md
+    - docs/CACHE_DEPLOYMENT.md
+  component_details:
+    - component: QueryCacheMiddleware
+      responsibility: >-
+        Stop caching response bodies and act only as an observability layer that
+        preserves excluded-path behavior and emits request-scoped cache status.
+      interfaces:
+        - HTTP middleware contract for POST /retrieve
+        - Cache-status response header contract for REST responses
+      dependencies:
+        - component: _shared_retrieve_documents
+          relationship: Consumes authoritative cache-hit/cache-miss outcome
+      integration_points:
+        - api_middleware.py dispatch flow
+        - FastAPI middleware registration in api.py
+        - tests/test_query_cache_middleware.py
+    - component: Authoritative L1 query cache
+      responsibility: >-
+        Use _shared_retrieve_documents as the single query-cache path for REST
+        and WebSocket flows, keyed by query, config fingerprint, rerank flag, and
+        distributed corpus_version.
+      interfaces:
+        - Shared retrieval function signature in api.py
+        - CacheBackend get/set/clear/stats contract
+      dependencies:
+        - component: corpus_version invalidation helper
+          relationship: Supplies monotonic cache-key versioning
+        - component: CacheBackend implementations
+          relationship: Stores and reports L1 cache state
+      integration_points:
+        - api.py retrieval and ingest handlers
+        - tests/test_api_shared_retrieval.py
+        - tests/test_cache_integration.py
+    - component: Distributed corpus_version invalidation
+      responsibility: >-
+        Replace process-local generation coupling with Redis-backed monotonic
+        invalidation plus explicit degraded fallback behavior.
+      interfaces:
+        - _get_corpus_version() helper
+        - Redis INCR/GET access path
+        - backend_health fallback_active and redis_connected reporting
+      dependencies:
+        - component: RedisCache / Redis client path
+          relationship: Provides the shared token store and health signals
+      integration_points:
+        - api.py config and ingest flows
+        - tests/test_api_shared_retrieval.py
+        - tests/test_system_e2e.py
+    - component: L2 embedding cache
+      responsibility: >-
+        Stay node-local, become thread-safe, and expose stable stats for layered
+        observability without changing retrieval semantics.
+      interfaces:
+        - HybridRetriever.embedding_cache_stats() property or equivalent public accessor
+        - Layered l2_embedding_cache stats payload
+      dependencies:
+        - component: cachetools.LRUCache
+          relationship: Underlying local cache store
+        - component: threading.RLock
+          relationship: Guards hit/miss bookkeeping and cache access
+      integration_points:
+        - hybrid_rag/retriever.py
+        - tests/test_embedding_cache.py
+        - api.py /cache/stats composition
+    - component: Layered cache stats endpoint
+      responsibility: >-
+        Report L1 query cache, L2 embedding cache, and backend health in one
+        fail-open endpoint suitable for operators and regression tests.
+      interfaces:
+        - GET /cache/stats response schema
+        - Pydantic response models in api.py
+      dependencies:
+        - component: CacheBackend.stats()
+          relationship: Supplies L1/backend values including ttl_seconds
+        - component: HybridRetriever.embedding_cache_stats()
+          relationship: Supplies node-local L2 values
+      integration_points:
+        - api.py
+        - tests/test_cache_integration.py
+        - tests/test_system_e2e.py
+contracts:
+  - from_task: OPTB-001
+    to_task: OPTB-008
+    interface: L1 stats payload must include ttl_seconds from each cache backend.
+    format: "Python dict fields: backend, hits, misses, size, max_size, ttl_seconds"
+  - from_task: OPTB-004
+    to_task: OPTB-009
+    interface: Middleware no longer calls cache.get/set and instead emits approved cache-status telemetry.
+    format: "HTTP header contract plus excluded-path passthrough behavior"
+  - from_task: OPTB-005
+    to_task: OPTB-007
+    interface: _get_corpus_version returns a monotonic version value plus degraded fallback visibility.
+    format: "Helper return value + warning/fallback behavior contract"
+  - from_task: OPTB-006
+    to_task: OPTB-008
+    interface: L2 cache exposes stable stats for layered endpoint composition.
+    format: "Python dict fields: hits, misses, size, capacity, hit_rate, scope"
+  - from_task: OPTB-007
+    to_task: OPTB-010
+    interface: Shared retrieval must produce identical cache behavior for REST and WebSocket with version-aware keys.
+    format: "Cross-transport parity assertions in pytest integration coverage"
+  - from_task: OPTB-008
+    to_task: OPTB-011
+    interface: Layered /cache/stats response and backend_health fields are stable enough for rollout review.
+    format: "Pydantic response schema and documented JSON examples"
+  - from_task: OPTB-012
+    to_task: OPTB-013
+    interface: Observability fields and log vocabulary must be documented for operators.
+    format: "Documentation updates covering corpus_version, fallback_active, redis_connected, correlation IDs"
+tasks:
+  - id: OPTB-001
+    title: Add truthful ttl_seconds reporting to L1 cache backend stats
+    description: |
+      Implement the Phase 1 B1 fix in hybrid_rag/cache.py so both InMemoryCache
+      and RedisCache report ttl_seconds directly from their backend stats
+      methods. This removes the misleading zero fallback currently surfaced by
+      api.py and provides the baseline contract required by the later layered
+      /cache/stats schema.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 1", "B1", "ttl_seconds", "cache backend stats"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Phase 1 requires ttl_seconds in backend stats and identifies B1 as blocking.
+      - path: hybrid_rag/cache.py
+        description: Houses InMemoryCache.stats() and RedisCache.stats() implementations.
+      - path: api.py
+        description: Currently falls back to ttl_seconds=0 when stats omit the field.
+      - path: tests/test_cache.py
+        description: Existing cache backend tests are the natural place for backend stats assertions.
+    diagnosis:
+      root_cause: Backend stats methods do not emit ttl_seconds, so api.py fabricates a misleading zero value.
+      fix_recommendations: Add ttl_seconds to both backend stats dicts and assert the field in cache backend tests.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: small
+    estimated_files: 2
+    estimated_lines: 80
+    focus_area: backend cache stats contract
+    verification:
+      - Add or update pytest assertions proving both backend implementations emit ttl_seconds.
+      - Verify api.py can consume backend stats without defaulting initialized caches to zero.
+    acceptance_criteria:
+      - InMemoryCache.stats() includes ttl_seconds.
+      - RedisCache.stats() includes ttl_seconds.
+      - Existing cache tests cover ttl_seconds for both backend types.
+      - No other cache stats fields regress.
+    failure_modes:
+      - scenario: Stats field is added for one backend but not the other.
+        likelihood: low
+        impact: medium
+        mitigation: Add symmetric assertions in tests/test_cache.py for both implementations.
+    tech_stack: ["Python", "cachetools", "redis-py", "pytest"]
+    test_coverage: Unit coverage in tests/test_cache.py for backend stats output
+
+  - id: OPTB-002
+    title: Make ingest_type=add invalidate the authoritative query cache during Phase 1
+    description: |
+      Apply the Phase 1 W2 prerequisite in api.py so add ingests no longer
+      preserve stale L1 retrieval results. Until distributed corpus_version is in
+      place, this task should keep the current local generation bump behavior and
+      local cache clear semantics aligned for both add and update paths.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 1", "W2", "ingest invalidation", "api.py"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Phase 1 requires cache.clear() plus generation bump for ingest_type=add.
+      - path: api.py
+        description: Current ingest handler preserves cache for add and bumps generation only for update.
+      - path: tests/test_cache_integration.py
+        description: Contains ingest-related integration coverage and placeholder assertions to replace.
+    diagnosis:
+      root_cause: Add ingests grow the corpus without invalidating cached retrieval keys, guaranteeing stale results until TTL expiry.
+      fix_recommendations: Unify add and update invalidation semantics for Phase 1 and cover the behavior in integration tests.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: small
+    estimated_files: 2
+    estimated_lines: 90
+    focus_area: phase-1 cache invalidation correctness
+    verification:
+      - Add pytest coverage showing add and update both invalidate stale L1 results during Phase 1.
+      - Verify ingest logs and response behavior remain fail-open if cache clear fails.
+    acceptance_criteria:
+      - ingest_type=add clears local cache state just like update.
+      - Local generation state is advanced on add until distributed corpus_version replaces it.
+      - Ingest success responses remain unchanged.
+      - Integration tests prove stale add-path behavior is removed.
+    failure_modes:
+      - scenario: Add invalidation is implemented without preserving fail-open behavior on cache errors.
+        likelihood: low
+        impact: medium
+        mitigation: Keep cache operations inside existing exception handling and verify non-failing API responses in tests.
+    tech_stack: ["Python", "FastAPI", "pytest"]
+    test_coverage: Integration coverage in tests/test_cache_integration.py for add/update invalidation semantics
+
+  - id: OPTB-003
+    title: Replace six placeholder cache integration tests with executable Phase 1 assertions
+    description: |
+      Remove the six pass-based placeholders in tests/test_cache_integration.py
+      and replace them with assertions that match the approved architecture
+      blueprint. Delete speculative checks that do not map to Option B if they
+      cannot be justified by the source-of-truth document.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 1", "W5", "test debt cleanup", "regression protection"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Calls out six placeholder pass tests as a warning and requires real assertions in Phase 1.
+      - path: tests/test_cache_integration.py
+        description: Contains the placeholder cache stats, header, docstring, and acceptance-criteria test skeletons.
+    diagnosis:
+      root_cause: Placeholder tests currently provide false confidence and do not protect the blocking fixes or Option B migration.
+      fix_recommendations: Replace placeholders with executable assertions or delete ungrounded skeletons before deeper refactor work begins.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 140
+    focus_area: test debt elimination
+    verification:
+      - Confirm no bare pass statements remain in tests/test_cache_integration.py.
+      - Ensure each retained test asserts observable runtime behavior instead of comments-only intent.
+    acceptance_criteria:
+      - All six placeholder pass blocks are removed or replaced.
+      - The remaining tests are aligned with Option B and current backend contracts.
+      - No speculative response-header assertions survive without architecture backing.
+    failure_modes:
+      - scenario: Placeholder tests are replaced with brittle assertions tied to soon-to-change intermediate behavior.
+        likelihood: medium
+        impact: medium
+        mitigation: Anchor assertions to Phase 1 requirements only and defer Phase 2/3 contract checks to later tasks.
+    tech_stack: ["Python", "pytest"]
+    test_coverage: Direct replacement of placeholder integration coverage in tests/test_cache_integration.py
+
+  - id: OPTB-004
+    title: Convert QueryCacheMiddleware into observability-only middleware
+    description: |
+      Execute the Option A prerequisite required by Option B: remove middleware
+      cache.get/cache.set behavior, preserve fail-open request handling and
+      excluded-path semantics, and switch the middleware to emit cache-status
+      telemetry based on a request-scoped signal from the authoritative shared
+      retrieval path. This task should not reintroduce a second data cache.
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 2", "middleware simplification", "double-caching removal", "observability"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-001, OPTB-002, OPTB-003]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Option B requires middleware to stop reading and writing cache data and become observability-only.
+      - path: api_middleware.py
+        description: Current QueryCacheMiddleware performs response-body caching and emits X-Cache values.
+      - path: api.py
+        description: Registers the middleware and owns the shared retrieval path that should become authoritative.
+      - path: tests/test_query_cache_middleware.py
+        description: Existing middleware suite currently encodes response-data-caching expectations.
+    diagnosis:
+      root_cause: The middleware duplicates the shared retrieval cache with a different key contract and overlapping observability.
+      fix_recommendations: Remove backend reads/writes from the middleware and rebase telemetry on handler-owned cache outcomes.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 220
+    focus_area: cache responsibility split
+    verification:
+      - Prove middleware no longer performs cache get/set operations.
+      - Verify excluded paths still bypass middleware cache telemetry work.
+      - Verify REST responses continue to emit the approved cache-status header contract.
+    acceptance_criteria:
+      - QueryCacheMiddleware no longer stores or returns cached response bodies.
+      - POST /retrieve still exposes cache-status telemetry on REST responses.
+      - Excluded paths remain unaffected.
+      - Middleware keeps fail-open behavior on downstream errors.
+    failure_modes:
+      - scenario: Middleware stops caching but loses response header signaling for REST callers.
+        likelihood: medium
+        impact: medium
+        mitigation: Couple the rewrite with request-scoped status propagation and update middleware tests in the same task.
+      - scenario: Hidden reliance on cached response bytes breaks an edge case in request body replay.
+        likelihood: low
+        impact: medium
+        mitigation: Preserve body replay behavior for POST /retrieve and keep parity checks in integration tests.
+    tech_stack: ["Python", "FastAPI", "Starlette", "pytest"]
+    test_coverage: Middleware regression coverage in tests/test_query_cache_middleware.py plus REST/WS parity checks
+
+  - id: OPTB-005
+    title: Introduce distributed corpus_version helper with Redis fallback and health visibility
+    description: |
+      Implement the Option B invalidation helper in api.py so corpus_version can
+      be read from and incremented in Redis when available, while retaining a
+      fail-open local fallback for single-instance or degraded mode. The task
+      should also define how fallback state is surfaced to callers and logs.
+    wave: 3
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 2", "Option B", "distributed invalidation", "Redis fallback"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-004]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Option B changes and risk table define Redis INCR-based corpus_version plus fail-open fallback.
+      - path: api.py
+        description: Contains the current process-local _cache_generation usage and ingest/config mutation paths.
+      - path: tests/test_api_shared_retrieval.py
+        description: Already exercises shared retrieval parity and is a natural place for version-aware invalidation tests.
+      - path: docs/CACHE_DEPLOYMENT.md
+        description: Deployment guidance is relevant to degraded-mode and Redis availability assumptions.
+    diagnosis:
+      root_cause: _cache_generation is process-local, so multi-instance deployments diverge on invalidation state.
+      fix_recommendations: Centralize corpus_version access behind a Redis-backed helper with explicit degraded fallback semantics.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 220
+    focus_area: distributed invalidation contract
+    verification:
+      - Add tests proving corpus_version reads a shared Redis-backed value when available.
+      - Add tests proving fallback behavior is explicit and observable when Redis is unavailable.
+      - Verify no new dependency is introduced beyond the existing Redis support path.
+    acceptance_criteria:
+      - _get_corpus_version() or equivalent helper exists and hides Redis/local selection.
+      - Redis-backed version reads and INCR-based updates are supported.
+      - Degraded fallback is visible through logs and health/status fields.
+      - Single-instance operation remains functional without Redis.
+    failure_modes:
+      - scenario: Redis outages silently drop the system into local mode without operator visibility.
+        likelihood: medium
+        impact: critical
+        mitigation: Require fallback_active-style visibility and warning logs as part of the helper contract.
+      - scenario: Helper reads and writes are implemented directly in handlers, spreading invalidation logic across api.py.
+        likelihood: medium
+        impact: medium
+        mitigation: Keep all corpus_version decisions behind one helper and cover its behavior in targeted tests.
+    tech_stack: ["Python", "FastAPI", "redis-py", "pytest"]
+    test_coverage: Shared retrieval and degraded-mode invalidation coverage in tests/test_api_shared_retrieval.py and tests/test_cache_integration.py
+
+  - id: OPTB-006
+    title: Make the L2 embedding cache thread-safe and expose a public stats contract
+    description: |
+      Formalize the Option B L2 contract in hybrid_rag/retriever.py by adding an
+      RLock around embedding-cache access and promoting the existing private stats
+      helper into a public, endpoint-ready stats interface. The node-local scope
+      should be explicit in the returned data and documentation comments.
+    wave: 3
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 2", "Option B", "L2 thread safety", "embedding cache stats"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-004]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Option B adds RLock protection and explicit L2 stats exposure.
+      - path: hybrid_rag/retriever.py
+        description: Current L2 cache tracks hits and misses but has no lock and only a private stats helper.
+      - path: tests/test_embedding_cache.py
+        description: Existing L2 tests cover cache hits, misses, and stats shape.
+      - path: tests/test_system_e2e.py
+        description: System-level stats assertions will need L2 coverage after the layered schema lands.
+    diagnosis:
+      root_cause: The node-local L2 cache currently exposes mutable shared state without synchronization or a stable public stats surface.
+      fix_recommendations: Guard cache bookkeeping with RLock and publish a stable stats accessor carrying scope metadata.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 2
+    estimated_lines: 160
+    focus_area: thread-safe L2 observability
+    verification:
+      - Add tests proving the public stats accessor returns stable fields including scope.
+      - Add concurrency-focused tests or deterministic lock-path assertions around hit/miss bookkeeping.
+    acceptance_criteria:
+      - L2 cache access is protected by RLock or equivalent reentrant synchronization.
+      - A public embedding cache stats accessor exists.
+      - Returned stats include size, capacity, hits, misses, hit_rate, and node-local scope.
+      - Retrieval semantics do not change for repeated queries.
+    failure_modes:
+      - scenario: Lock coverage is partial, leaving hit/miss counters unsynchronized.
+        likelihood: low
+        impact: medium
+        mitigation: Centralize all cache read/write and stats bookkeeping in the locked accessor path and test it explicitly.
+      - scenario: Public stats API leaks internal-only field names that later conflict with the layered endpoint.
+        likelihood: low
+        impact: low
+        mitigation: Match the contract defined in docs/HybridRAG_Architecture.md and reuse that schema in endpoint composition.
+    tech_stack: ["Python", "cachetools", "threading", "pytest"]
+    test_coverage: Unit coverage in tests/test_embedding_cache.py for lock-safe stats and repeated-query behavior
+
+  - id: OPTB-007
+    title: Re-key shared retrieval around corpus_version and unify invalidation across add/update flows
+    description: |
+      Replace direct use of the process-local generation in _shared_retrieve_documents
+      with the new corpus_version helper, and make ingest-driven invalidation use
+      the distributed version token as the authoritative source of cache staleness.
+      This task should preserve the shared retrieval path used by both REST and
+      WebSocket handlers.
+    wave: 4
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 2", "Option B", "shared retrieval", "version-aware keys"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-005, OPTB-006]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Option B requires query keys to include distributed corpus_version and preserve REST/WS parity.
+      - path: api.py
+        description: _shared_retrieve_documents currently hashes the process-local _cache_generation into the key.
+      - path: tests/test_api_shared_retrieval.py
+        description: Existing parity tests validate shared retrieval behavior across REST and WebSocket.
+      - path: tests/test_cache_integration.py
+        description: Integration coverage should assert invalidation after ingest-driven version changes.
+    diagnosis:
+      root_cause: Shared retrieval keys are tied to a local integer, so cross-instance invalidation cannot be coherent.
+      fix_recommendations: Re-key shared retrieval through the helper and assert transport parity under version changes.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 180
+    focus_area: authoritative L1 cache keying
+    verification:
+      - Add parity tests showing REST and WebSocket use the same version-aware cache keys.
+      - Add tests showing both add and update ingests invalidate prior query results by advancing corpus_version.
+    acceptance_criteria:
+      - _shared_retrieve_documents no longer reads the raw process-local generation directly.
+      - Cache keys include distributed corpus_version through the helper.
+      - REST and WebSocket continue to share one retrieval cache path.
+      - Add and update ingests both invalidate prior L1 results.
+    failure_modes:
+      - scenario: Shared retrieval and ingest handlers diverge on which version source is authoritative.
+        likelihood: medium
+        impact: high
+        mitigation: Use the same helper for reads and bumps, and cover both flows in integration tests.
+      - scenario: Version-aware keys work for REST but WebSocket bypasses the same path.
+        likelihood: low
+        impact: medium
+        mitigation: Keep websocket_chat on _shared_retrieve_documents and retain parity assertions.
+    tech_stack: ["Python", "FastAPI", "pytest"]
+    test_coverage: Shared retrieval parity and invalidation coverage in tests/test_api_shared_retrieval.py and tests/test_cache_integration.py
+
+  - id: OPTB-008
+    title: Refactor /cache/stats into layered l1_query_cache, l2_embedding_cache, and backend_health schemas
+    description: |
+      Convert the flat CacheStatsResponse in api.py into the layered Option B
+      response. The endpoint should stay fail-open, draw L1 values from the cache
+      backend stats contract, draw L2 values from the public embedding cache
+      stats accessor, and surface backend health fields such as redis_connected,
+      redis_latency_ms, fallback_active, and corpus_version where available.
+    wave: 4
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 2", "Option B", "/cache/stats", "layered schema"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-001, OPTB-005, OPTB-006]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Defines the layered /cache/stats response and its backend health fields.
+      - path: api.py
+        description: Current flat CacheStatsResponse and /cache/stats endpoint implementation live here.
+      - path: tests/test_cache_integration.py
+        description: Includes cache stats model tests and endpoint placeholders that need to align to the layered schema.
+      - path: tests/test_system_e2e.py
+        description: System tests already hit /cache/stats and will need updated shape assertions.
+    diagnosis:
+      root_cause: The flat stats endpoint cannot represent L1, L2, and health separately, and currently masks missing ttl_seconds.
+      fix_recommendations: Replace the flat model with layered response models that explicitly represent cache layers and degraded backend state.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 240
+    focus_area: operator-facing stats schema
+    verification:
+      - Add endpoint/model tests for the layered JSON structure and fail-open behavior.
+      - Add system-level assertions that l1_query_cache, l2_embedding_cache, and backend_health are all present.
+      - Verify the endpoint still returns 200 on backend errors.
+    acceptance_criteria:
+      - /cache/stats returns l1_query_cache, l2_embedding_cache, and backend_health.
+      - l1_query_cache includes ttl_seconds and corpus_version.
+      - l2_embedding_cache includes node-local scope and hit/miss metrics.
+      - backend_health includes fallback_active and Redis connectivity state where available.
+      - Fail-open behavior is preserved.
+    failure_modes:
+      - scenario: Layered schema ships without backward-compat planning and surprises external consumers.
+        likelihood: medium
+        impact: medium
+        mitigation: Pair this task with rollout review in OPTB-011 and documentation updates in OPTB-013.
+      - scenario: Endpoint composition assumes retriever availability and breaks when _retriever is not initialized.
+        likelihood: low
+        impact: medium
+        mitigation: Preserve best-effort zero/default responses for uninitialized components and test those branches explicitly.
+    tech_stack: ["Python", "FastAPI", "Pydantic", "pytest"]
+    test_coverage: Integration and system coverage for layered stats schema and fail-open behavior
+
+  - id: OPTB-009
+    title: Rewrite middleware regression tests around observability-only behavior
+    description: |
+      Update tests/test_query_cache_middleware.py to stop asserting response-body
+      caching behavior and instead lock in the approved observability contract,
+      excluded-path behavior, fail-open responses, and request-body handling for
+      POST /retrieve. This task should absorb the compatibility decision about
+      X-Cache versus X-Cache-Status.
+    wave: 5
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 2", "regression protection", "middleware tests"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-004]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Requires middleware test updates after removing data caching.
+      - path: api_middleware.py
+        description: Defines the new middleware behavior under test.
+      - path: tests/test_query_cache_middleware.py
+        description: Current suite encodes the old data-caching responsibilities.
+    diagnosis:
+      root_cause: The current middleware suite protects the wrong layer boundary for Option B.
+      fix_recommendations: Rewrite assertions around telemetry, excluded paths, and fail-open behavior rather than duplicated data caching.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 1
+    estimated_lines: 220
+    focus_area: middleware regression contract
+    verification:
+      - Confirm the suite no longer depends on cache_backend.get/set call counts for data caching behavior.
+      - Confirm excluded paths and approved telemetry header behavior are covered.
+    acceptance_criteria:
+      - Middleware tests assert observability-only behavior.
+      - Excluded paths remain covered.
+      - Fail-open middleware behavior remains covered.
+      - The chosen cache-status header name is consistently asserted.
+    failure_modes:
+      - scenario: Test rewrites remove useful regression coverage for body replay or error handling.
+        likelihood: low
+        impact: medium
+        mitigation: Retain explicit tests for POST body handling and non-200 responses while dropping only data-cache assumptions.
+    tech_stack: ["Python", "FastAPI", "pytest"]
+    test_coverage: Dedicated middleware regression coverage in tests/test_query_cache_middleware.py
+
+  - id: OPTB-010
+    title: Add end-to-end regression coverage for version-aware invalidation and layered stats
+    description: |
+      Expand the backend integration suites so Option B is protected across the
+      shared retrieval path, the layered /cache/stats schema, REST/WS parity, and
+      degraded fallback behavior. This task should absorb the placeholder cleanup
+      from Phase 1 into stable regression cases rather than leaving one-off tests.
+    wave: 5
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 2", "regression protection", "integration tests", "system tests"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-007, OPTB-008, OPTB-009]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Calls for integration test updates across middleware, stats schema, and Option B invalidation.
+      - path: tests/test_api_shared_retrieval.py
+        description: Shared REST/WS parity and invalidation contract tests already live here.
+      - path: tests/test_cache_integration.py
+        description: Houses endpoint/model integration coverage that should be upgraded from placeholders.
+      - path: tests/test_system_e2e.py
+        description: Existing full-stack stats and cache tests should prove layered endpoint behavior.
+    diagnosis:
+      root_cause: Option B changes multiple boundaries at once, so unit-only coverage will not catch transport parity or degraded-mode regressions.
+      fix_recommendations: Use existing integration and system suites to assert version-aware invalidation, fallback visibility, and layered stats end to end.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 260
+    focus_area: end-to-end cache regression protection
+    verification:
+      - Add tests for REST/WS parity under repeated queries before and after version bumps.
+      - Add tests for layered /cache/stats responses in healthy and degraded modes.
+      - Add tests proving fallback_active or equivalent health visibility when Redis is unavailable.
+    acceptance_criteria:
+      - Shared retrieval parity is covered for REST and WebSocket.
+      - Distributed invalidation and degraded fallback are covered.
+      - Layered /cache/stats is covered in system tests.
+      - The test suite no longer relies on pass placeholders for core cache flows.
+    failure_modes:
+      - scenario: Integration tests rely on a live Redis service and become flaky in local CI.
+        likelihood: medium
+        impact: medium
+        mitigation: Prefer doubles/fakes for failure-mode coverage and keep live-Redis requirements optional.
+      - scenario: System tests validate only happy paths and miss degraded backend-health states.
+        likelihood: low
+        impact: medium
+        mitigation: Add explicit degraded-mode assertions for fallback_active and fail-open responses.
+    tech_stack: ["Python", "FastAPI", "pytest"]
+    test_coverage: Integration and system coverage across tests/test_api_shared_retrieval.py, tests/test_cache_integration.py, and tests/test_system_e2e.py
+
+  - id: OPTB-011
+    title: Review rollout risks for stats-schema migration and degraded invalidation behavior
+    description: |
+      Perform a read-only implementation review once the core refactor and
+      regression tests are in place. The review should focus on the two highest
+      rollout risks called out by the architecture blueprint: breaking existing
+      /cache/stats consumers and silently weakening coherency when Redis fallback
+      activates.
+    wave: 6
+    agent: gem-reviewer
+    prototype: false
+    covers: ["risk review", "rollout gate", "observability migration"]
+    priority: medium
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-008, OPTB-010]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Provides the Option B risk table and migration path to review against implementation.
+      - path: api.py
+        description: Contains layered stats and fallback behavior that need rollout scrutiny.
+      - path: tests/test_system_e2e.py
+        description: Demonstrates whether the implemented system exercises the reviewed risks.
+      - path: docs/CACHE_DEPLOYMENT.md
+        description: Deployment-facing behavior should be consistent with review conclusions.
+    diagnosis:
+      root_cause: The highest-impact failures in Option B are operational rather than algorithmic and need an explicit review gate.
+      fix_recommendations: Validate schema migration strategy and degraded fallback visibility before documentation is finalized.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 0
+    focus_area: rollout readiness
+    verification:
+      - Produce review findings or explicit sign-off on schema migration and degraded fallback behavior.
+      - Confirm any unresolved blockers are fed into documentation and release notes.
+    acceptance_criteria:
+      - Review outcome addresses flat-to-layered stats migration risk.
+      - Review outcome addresses Redis fallback coherency risk.
+      - Any blocking issues are explicit before docs are finalized.
+    failure_modes:
+      - scenario: Review happens too early and misses operational regressions not yet covered by tests.
+        likelihood: low
+        impact: medium
+        mitigation: Depend on the completed core schema and regression tasks before starting review.
+    requires_review: true
+    review_depth: full
+    review_security_sensitive: false
+
+  - id: OPTB-012
+    title: Harden cache observability with correlation-aware invalidation and fallback logging
+    description: |
+      Execute the Phase 3 observability hardening slice that is still relevant to
+      Option B: add structured invalidation logs, correlation-aware cache-status
+      logging, and explicit health visibility for fallback transitions and cache
+      clear events. Keep this task backend-only unless external telemetry wiring
+      is later requested.
+    wave: 6
+    agent: gem-implementer
+    prototype: false
+    covers: ["Phase 3", "observability hardening", "logging", "backend health"]
+    priority: medium
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-005, OPTB-008]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Phase 3 recommends correlation IDs and structured invalidation/cache log events.
+      - path: api.py
+        description: Owns ingest, retrieval, and /cache/stats logging points that need observability hardening.
+      - path: tests/test_cache_integration.py
+        description: Integration tests can assert fail-open behavior and structured logging side effects.
+      - path: tests/test_system_e2e.py
+        description: System tests can verify backend_health fields remain visible end to end.
+    diagnosis:
+      root_cause: Option B improves correctness, but operators still need request-linked visibility into invalidation and degraded fallback events.
+      fix_recommendations: Add structured logs and health fields once the core invalidation and layered stats contracts are stable.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 180
+    focus_area: operational visibility
+    verification:
+      - Verify invalidation logs include old/new corpus_version or equivalent version transition details.
+      - Verify fallback activation is logged and surfaced through backend_health.
+      - Verify cache-status logs can be correlated to a request or connection identifier where available.
+    acceptance_criteria:
+      - Invalidation events are logged with structured fields.
+      - Fallback activation/deactivation is visible in logs and backend_health.
+      - Cache-hit/cache-miss logging can be correlated to a request identifier.
+      - No new external observability dependency is required for this slice.
+    failure_modes:
+      - scenario: Logging additions are unstructured or inconsistent, limiting operator usefulness.
+        likelihood: low
+        impact: medium
+        mitigation: Reuse a consistent field vocabulary across retrieve, ingest, and stats paths and test for it where practical.
+      - scenario: Observability work leaks into frontend scope without an identified consumer.
+        likelihood: low
+        impact: low
+        mitigation: Keep this task backend-only and defer client changes unless an actual consumer is found.
+    tech_stack: ["Python", "FastAPI", "logging", "pytest"]
+    test_coverage: Integration/system assertions for backend_health visibility and fail-open logging behavior
+
+  - id: OPTB-013
+    title: Update backend documentation for Option B responsibilities and the layered stats contract
+    description: |
+      Finalize backend-facing documentation after implementation and rollout
+      review are complete. Update the operator and developer docs to reflect the
+      clean responsibility split, distributed invalidation behavior, degraded
+      fallback semantics, node-local L2 scope, and the new /cache/stats schema.
+    wave: 7
+    agent: gem-documentation-writer
+    prototype: false
+    covers: ["documentation", "operator guidance", "API update"]
+    priority: low
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [OPTB-011, OPTB-012]
+    conflicts_with: []
+    context_files:
+      - path: docs/HybridRAG_Architecture.md
+        description: Source-of-truth blueprint for Option B responsibilities and risks.
+      - path: README.md
+        description: Top-level project documentation should stop implying overlapping cache responsibilities.
+      - path: docs/API_INTEGRATION.md
+        description: API contract documentation needs the layered /cache/stats schema.
+      - path: docs/CACHE_DEPLOYMENT.md
+        description: Deployment guidance should explain Redis-backed corpus_version and degraded fallback behavior.
+    diagnosis:
+      root_cause: The current docs describe the older layered cache behavior and flat stats response, which would mislead operators after Option B lands.
+      fix_recommendations: Update only backend-facing docs that explain cache ownership, operator monitoring, and rollout caveats.
+      injected_at: 2026-04-21T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial DAG from architecture blueprint and codebase inspection.
+        timestamp: 2026-04-21T00:00:00Z
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 160
+    focus_area: backend/operator documentation
+    verification:
+      - Verify docs show the final /cache/stats layered example and fields.
+      - Verify docs call out node-local L2 scope and degraded fallback semantics.
+      - Verify docs do not claim frontend work unless an actual stats consumer was found.
+    acceptance_criteria:
+      - README reflects the clean responsibility split.
+      - API docs describe the layered /cache/stats schema.
+      - Deployment docs explain Redis corpus_version behavior and degraded fallback.
+      - Documentation includes migration notes for any changed header/schema contract.
+    task_type: update
+    audience: developers
+    coverage_matrix:
+      - Option B cache-layer ownership and boundaries
+      - /cache/stats layered response and migration notes
+      - Redis-backed corpus_version invalidation and degraded fallback behavior
+      - Node-local L2 scope and thread-safety/observability caveats

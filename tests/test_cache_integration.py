@@ -5,11 +5,14 @@ cache clear on config updates, conditional cache clear on ingest,
 cache stats endpoint, and response headers.
 """
 
+import inspect
 import json
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import api
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -123,23 +126,8 @@ def test_create_cache_backend_validates_settings() -> None:
 @pytest.mark.asyncio
 async def test_cache_stats_response_model() -> None:
     """Test CacheStatsResponse Pydantic model validation."""
-    from pydantic import BaseModel, Field
-    from datetime import datetime
-
-    class CacheStatsResponse(BaseModel):
-        """Response model for cache statistics."""
-
-        backend: str = Field(..., description="Cache backend (e.g., 'redis' | 'memory')")
-        hits: int = Field(..., ge=0, description="Total cache hits")
-        misses: int = Field(..., ge=0, description="Total cache misses")
-        hit_rate: float = Field(..., ge=0.0, le=1.0, description="Cache hit rate (0-1)")
-        size: int = Field(..., ge=0, description="Current cache size in entries")
-        max_size: int = Field(..., ge=0, description="Maximum cache capacity")
-        ttl_seconds: int = Field(..., ge=0, description="Configured TTL in seconds")
-        timestamp: datetime = Field(..., description="When stats were captured")
-
     # Valid response
-    response = CacheStatsResponse(
+    response = api.CacheStatsResponse(
         backend="memory",
         hits=100,
         misses=50,
@@ -155,7 +143,7 @@ async def test_cache_stats_response_model() -> None:
 
     # Invalid: hit_rate > 1.0
     with pytest.raises(ValueError):
-        CacheStatsResponse(
+        api.CacheStatsResponse(
             backend="memory",
             hits=100,
             misses=50,
@@ -168,7 +156,7 @@ async def test_cache_stats_response_model() -> None:
 
     # Invalid: negative hits
     with pytest.raises(ValueError):
-        CacheStatsResponse(
+        api.CacheStatsResponse(
             backend="memory",
             hits=-1,  # Invalid
             misses=50,
@@ -188,32 +176,15 @@ async def test_cache_stats_response_model() -> None:
 @pytest.mark.asyncio
 async def test_ingest_request_with_type() -> None:
     """Test updated DocumentIngestionRequest with ingest_type parameter."""
-    from pydantic import BaseModel, Field
-    from typing import Literal, Optional
-
-    class DocumentIngestionRequest(BaseModel):
-        """Request model for adding custom documents."""
-
-        source_type: Literal["text", "url", "file"] = Field(
-            ..., description="Type of data source"
-        )
-        content: str = Field(..., min_length=1, description="Text content, URL, or base64-encoded file")
-        filename: Optional[str] = Field(None, description="Original filename")
-        source_label: Optional[str] = Field(None, description="User-friendly label")
-        ingest_type: Literal["add", "update"] = Field(
-            default="update",
-            description="Ingest type: 'add' preserves cache, 'update' clears cache",
-        )
-
     # Valid request with default ingest_type
-    req1 = DocumentIngestionRequest(
+    req1 = api.DocumentIngestionRequest(
         source_type="text",
         content="Hello world",
     )
     assert req1.ingest_type == "update"  # Default
 
     # Valid request with explicit ingest_type='add'
-    req2 = DocumentIngestionRequest(
+    req2 = api.DocumentIngestionRequest(
         source_type="text",
         content="Hello world",
         ingest_type="add",
@@ -221,7 +192,7 @@ async def test_ingest_request_with_type() -> None:
     assert req2.ingest_type == "add"
 
     # Valid request with explicit ingest_type='update'
-    req3 = DocumentIngestionRequest(
+    req3 = api.DocumentIngestionRequest(
         source_type="text",
         content="Hello world",
         ingest_type="update",
@@ -230,7 +201,7 @@ async def test_ingest_request_with_type() -> None:
 
     # Invalid: bad ingest_type
     with pytest.raises(ValueError):
-        DocumentIngestionRequest(
+        api.DocumentIngestionRequest(
             source_type="text",
             content="Hello world",
             ingest_type="invalid",  # Invalid
@@ -270,75 +241,102 @@ def test_middleware_excluded_paths(client: TestClient) -> None:
 # ============================================================================
 
 
-@pytest.mark.asyncio
-async def test_config_endpoint_clears_cache_on_update() -> None:
-    """Test that POST /config calls cache.clear() after config update.
-    
-    This tests the fix for blocking issue #1 (ADR-006).
-    """
-    # Create a mock cache to track calls
-    mock_cache = MagicMock(spec=CacheBackend)
-    mock_cache.stats.return_value = {
-        "backend": "memory",
-        "hits": 0,
-        "misses": 0,
-        "size": 0,
-        "max_size": 10000,
-        "ttl_seconds": 3600,
-    }
-
-    # In the real API, we'd patch the global _cache variable
-    # For this test, we verify the behavior exists
-    
-    # Test: config update should trigger cache.clear()
-    # This is verified in the actual endpoint implementation
-
-
-@pytest.mark.asyncio
-async def test_config_endpoint_returns_status_with_cache_header() -> None:
-    """Test that PUT /config returns response with cache status header."""
-    # Test: X-Cache-Status header should be in response
-    # Test: Cache status should indicate 'cleared' or similar
-
-
 # ============================================================================
 # TEST: POST /documents ENDPOINT WITH INGEST_TYPE
 # ============================================================================
 
 
-@pytest.mark.asyncio
-async def test_ingest_endpoint_has_ingest_type_parameter() -> None:
-    """Test that POST /documents accepts ingest_type parameter."""
-    # Test the request model accepts ingest_type
-    # Default should be 'update' for backwards compatibility
+def _make_shared_retrieval_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        semantic_top_k=5,
+        keyword_top_k=5,
+        final_top_k=3,
+        semantic_weight=0.7,
+        keyword_weight=0.3,
+        enable_rerank=True,
+        pre_rerank_top_k=10,
+    )
 
 
 @pytest.mark.asyncio
-async def test_ingest_endpoint_conditional_cache_clear_update() -> None:
-    """Test that POST /documents clears cache when ingest_type='update'.
-    
-    This tests the fix for blocking issue #3 (ADR-003).
-    """
-    # Create mock cache
-    mock_cache = MagicMock(spec=CacheBackend)
-    mock_cache.clear = MagicMock()
+@pytest.mark.parametrize("ingest_type", ["add", "update"])
+async def test_ingest_endpoint_advances_generation_and_clears_local_cache(
+    monkeypatch: pytest.MonkeyPatch, ingest_type: str
+) -> None:
+    """Both Phase 1 ingest paths advance generation and clear the local cache."""
+    cache = MagicMock(spec=CacheBackend)
+    collection = MagicMock()
 
-    # When ingest_type='update', cache.clear() should be called
-    # This is verified in endpoint implementation
+    monkeypatch.setattr(api, "_retriever", SimpleNamespace(collection=collection))
+    monkeypatch.setattr(api, "_config", object())
+    monkeypatch.setattr(api, "_cache", cache)
+    monkeypatch.setattr(api, "_cache_generation", 7)
+
+    response = await api.add_documents(
+        api.DocumentIngestionRequest(
+            source_type="text",
+            content="new phase 1 content",
+            source_label=f"source-{ingest_type}",
+            ingest_type=ingest_type,
+        )
+    )
+
+    assert response.status == "success"
+    assert response.documents_added == 1
+    assert response.chunks_created == 1
+    assert api._cache_generation == 8
+    cache.clear.assert_called_once_with()
 
 
 @pytest.mark.asyncio
-async def test_ingest_endpoint_preserves_cache_on_add() -> None:
-    """Test that POST /documents preserves cache when ingest_type='add'.
-    
-    This tests the fix for blocking issue #3 (ADR-003).
-    """
-    # Create mock cache
-    mock_cache = MagicMock(spec=CacheBackend)
-    mock_cache.clear = MagicMock()
+async def test_ingest_add_removes_stale_shared_cache_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An add ingest must invalidate previously cached shared retrieval results."""
+    observed_calls: list[Dict[str, Any]] = []
 
-    # When ingest_type='add', cache.clear() should NOT be called
-    # This is verified in endpoint implementation
+    def fake_retrieve(query: str, enable_rerank: bool = True) -> list[Dict[str, Any]]:
+        observed_calls.append({"query": query, "enable_rerank": enable_rerank})
+        call_number = len(observed_calls)
+        return [
+            {
+                "id": f"doc-{call_number}",
+                "text": f"result {call_number}",
+                "metadata": {"source": "integration"},
+                "score": 0.91,
+            }
+        ]
+
+    # The ingest path needs collection.add while shared retrieval uses retrieve(),
+    # so the fake retriever exposes both surfaces to exercise the real integration.
+    retriever = SimpleNamespace(collection=MagicMock(), retrieve=fake_retrieve)
+    cache = InMemoryCache(ttl_seconds=3600, max_size=100)
+
+    monkeypatch.setattr(api, "_retriever", retriever)
+    monkeypatch.setattr(api, "_config", _make_shared_retrieval_config())
+    monkeypatch.setattr(api, "_cache", cache)
+    monkeypatch.setattr(api, "_cache_generation", 0)
+
+    first = api._shared_retrieve_documents("stale add query", enable_rerank=False)
+    second = api._shared_retrieve_documents("stale add query", enable_rerank=False)
+
+    assert first == second
+    assert len(observed_calls) == 1
+
+    response = await api.add_documents(
+        api.DocumentIngestionRequest(
+            source_type="text",
+            content="freshly ingested text",
+            source_label="add-refresh",
+            ingest_type="add",
+        )
+    )
+
+    refreshed = api._shared_retrieve_documents("stale add query", enable_rerank=False)
+
+    assert response.status == "success"
+    assert len(observed_calls) == 2
+    assert refreshed[0]["id"] == "doc-2"
 
 
 # ============================================================================
@@ -347,40 +345,78 @@ async def test_ingest_endpoint_preserves_cache_on_add() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cache_stats_endpoint_exists_and_returns_200(client: TestClient) -> None:
+async def test_cache_stats_endpoint_exists_and_returns_200(
+    initialized_app: TestClient,
+) -> None:
     """Test that GET /cache/stats endpoint exists and returns 200.
     
     This tests the fix for blocking issue #2.
     """
-    # Test endpoint should exist
-    # Test should never fail (fail-open principle)
-    # Test should return CacheStatsResponse model
+    response = initialized_app.get("/cache/stats")
+
+    assert response.status_code == 200
+    assert response.json()["backend"] in {"memory", "redis", "none", "error"}
 
 
-def test_cache_stats_endpoint_returns_all_fields() -> None:
+def test_cache_stats_endpoint_returns_all_fields(initialized_app: TestClient) -> None:
     """Test that GET /cache/stats returns all required stats fields."""
-    # Response should include:
-    # - backend: str (e.g., 'redis' | 'memory')
-    # - hits: int (total cache hits)
-    # - misses: int (total cache misses)
-    # - hit_rate: float (hits / (hits + misses))
-    # - size: int (current cache size)
-    # - max_size: int (max capacity)
-    # - ttl_seconds: int (configured TTL)
-    # - timestamp: datetime (when captured)
-    pass
+    response = initialized_app.get("/cache/stats")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {
+        "backend",
+        "hits",
+        "misses",
+        "hit_rate",
+        "size",
+        "max_size",
+        "ttl_seconds",
+        "timestamp",
+    }.issubset(body.keys())
 
 
-def test_cache_stats_hit_rate_calculation() -> None:
+@pytest.mark.asyncio
+async def test_cache_stats_hit_rate_calculation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Test that hit_rate is calculated correctly."""
-    # When hits=100, misses=50: hit_rate should be 100/150 ≈ 0.667
-    # When hits=0, misses=0: hit_rate should be 0.0 (or None)
+    monkeypatch.setattr(api, "_cache", MagicMock(spec=CacheBackend))
+    monkeypatch.setattr(
+        api.lazy_cache,
+        "stats",
+        lambda: {
+            "backend": "memory",
+            "hits": 100,
+            "misses": 50,
+            "size": 10,
+            "max_size": 100,
+            "ttl_seconds": 3600,
+        },
+    )
+
+    response = await api.get_cache_stats()
+
+    assert response.hit_rate == pytest.approx(100 / 150, abs=0.001)
 
 
-def test_cache_stats_endpoint_never_fails() -> None:
+@pytest.mark.asyncio
+async def test_cache_stats_endpoint_never_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Test that GET /cache/stats implements fail-open principle."""
-    # Even if cache backend fails, endpoint should return 200
-    # It should return a default/error response, not 5xx
+    monkeypatch.setattr(api, "_cache", MagicMock(spec=CacheBackend))
+
+    def raise_stats_error() -> Dict[str, Any]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(api.lazy_cache, "stats", raise_stats_error)
+
+    response = await api.get_cache_stats()
+
+    assert response.backend == "error"
+    assert response.hits == 0
+    assert response.misses == 0
 
 
 # ============================================================================
@@ -388,46 +424,24 @@ def test_cache_stats_endpoint_never_fails() -> None:
 # ============================================================================
 
 
-def test_cache_status_response_header(client: TestClient) -> None:
-    """Test that responses include X-Cache-Status header."""
-    # Retrieve endpoint should add X-Cache: HIT/MISS/ERROR
-    # Config endpoint should add X-Cache-Status header
+def test_cache_status_response_header(client_with_fresh_cache: TestClient) -> None:
+    """Retrieve responses expose the current cache decision via X-Cache."""
+    first = client_with_fresh_cache.post(
+        "/retrieve", json={"query": "header contract query", "enable_rerank": False}
+    )
+    second = client_with_fresh_cache.post(
+        "/retrieve", json={"query": "header contract query", "enable_rerank": False}
+    )
 
-
-def test_cache_timestamp_response_header(client: TestClient) -> None:
-    """Test that responses include X-Cache-Timestamp header."""
-    # Optional header with cache operation timestamp
-    pass
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.headers.get("X-Cache") == "MISS"
+    assert second.headers.get("X-Cache") == "HIT"
 
 
 # ============================================================================
 # TEST: ERROR HANDLING & LOGGING
 # ============================================================================
-
-
-@pytest.mark.asyncio
-async def test_cache_operations_fail_open() -> None:
-    """Test that cache failures never crash the API."""
-    # Create a cache that raises errors
-    failing_cache = MagicMock(spec=CacheBackend)
-    failing_cache.clear.side_effect = Exception("Cache error")
-    failing_cache.set.side_effect = Exception("Cache error")
-    failing_cache.get.side_effect = Exception("Cache error")
-
-    # The API should continue to work despite cache failures
-
-
-@pytest.mark.asyncio
-async def test_config_clear_logs_operation() -> None:
-    """Test that cache.clear() in /config endpoint is logged."""
-    # Should log at INFO level: "Config updated; cache cleared"
-
-
-@pytest.mark.asyncio
-async def test_ingest_type_logs_operation() -> None:
-    """Test that ingest_type decision is logged."""
-    # Should log at INFO level with ingest_type and cache action
-    # Example: "Ingest type: update; cache cleared"
 
 
 # ============================================================================
@@ -437,66 +451,37 @@ async def test_ingest_type_logs_operation() -> None:
 
 def test_cache_stats_endpoint_has_docstring() -> None:
     """Test that GET /cache/stats endpoint has Google-style docstring."""
-    # Endpoint function should have comprehensive docstring
-    # Including: description, args, returns, raises, example
-    pass
+    docstring = inspect.getdoc(api.get_cache_stats)
+
+    assert docstring is not None
+    assert "Returns:" in docstring
+    assert "Example:" in docstring
+    assert "fail-open principle" in docstring
 
 
 def test_cache_stats_response_model_has_docstring() -> None:
     """Test that CacheStatsResponse model has docstring."""
-    # Model should have comprehensive docstring
-    pass
+    docstring = inspect.getdoc(api.CacheStatsResponse)
+
+    assert docstring is not None
+    assert "Attributes:" in docstring
+    assert "ttl_seconds" in docstring
+    assert "Example:" in docstring
 
 
 def test_ingest_request_updated_model_has_docstring() -> None:
     """Test that DocumentIngestionRequest has updated docstring."""
-    # Model should document ingest_type parameter
-    pass
+    docstring = inspect.getdoc(api.DocumentIngestionRequest)
+
+    assert docstring is not None
+    assert "ingest_type" in docstring
+    assert "'add'" in docstring
+    assert "'update'" in docstring
 
 
 # ============================================================================
 # TEST: INTEGRATION - SYSTEM FLOW
 # ============================================================================
-
-
-def test_retrieve_endpoint_works_with_cache_middleware(client: TestClient) -> None:
-    """Test that POST /retrieve works end-to-end with cache middleware."""
-    # This is an integration test verifying the complete flow
-    # Test POST /retrieve with middleware intercepting
-
-
-def test_cache_hit_miss_flow() -> None:
-    """Test complete cache hit/miss flow."""
-    # First request: MISS (cache hit but empty)
-    # Second identical request: HIT (response from cache)
-    # Third request with different params: MISS (different cache key)
-
-
-def test_config_update_invalidates_cache(client: TestClient) -> None:
-    """Test that updating config invalidates query cache."""
-    # Set up: cache contains old results
-    # Update config: cache.clear() called
-    # Verify: subsequent queries get fresh results with new config
-
-
-# ============================================================================
-# TEST: ACCEPTANCE CRITERIA VERIFICATION
-# ============================================================================
-
-
-def test_all_acceptance_criteria_implemented() -> None:
-    """Verify all acceptance criteria are met."""
-    # ✓ Cache initialized on app startup from CacheSettings
-    # ✓ Middleware registered before routes
-    # ✓ POST /config calls cache.clear() (ADR-006, blocking issue #1 fix)
-    # ✓ POST /documents has ingest_type parameter (ADR-003, blocking issue #3 fix)
-    # ✓ Conditional cache.clear() in /documents: only on 'update'
-    # ✓ GET /cache/stats endpoint returns stats (blocking issue #2 fix)
-    # ✓ All 3 blocking issues addressed via code changes
-    # ✓ CacheStatsResponse model with all required fields
-    # ✓ Fail-open error handling
-    # ✓ 100% type hints + Google-style docstrings
-    pass
 
 
 if __name__ == "__main__":

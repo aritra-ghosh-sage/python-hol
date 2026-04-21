@@ -323,6 +323,7 @@ class InMemoryCache(CacheBackend):
                 "backend": "memory",
                 "size": len(self._cache),
                 "max_size": self._max_size,
+                "ttl_seconds": self._ttl_seconds,
                 "hits": self._hits,
                 "misses": self._misses,
             }
@@ -563,6 +564,8 @@ class RedisCache(CacheBackend):
             "backend": "redis",
             "redis_url": self._redis_url,
             "size": size,
+            # Report the backend's configured TTL so callers do not invent fallback values.
+            "ttl_seconds": self._ttl_seconds,
             "hits": self._hits,
             "misses": self._misses,
         }

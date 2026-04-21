@@ -44,6 +44,7 @@ class TestInMemoryCache:
         assert stats["backend"] == "memory"
         assert stats["size"] == 0
         assert stats["max_size"] == 10000
+        assert stats["ttl_seconds"] == 3600
         assert stats["hits"] == 0
         assert stats["misses"] == 0
 
@@ -52,6 +53,7 @@ class TestInMemoryCache:
         cache = InMemoryCache(ttl_seconds=600, max_size=5000)
         stats = cache.stats()
         assert stats["max_size"] == 5000
+        assert stats["ttl_seconds"] == 600
 
     def test_set_and_get_basic(self):
         """set() stores a value and get() retrieves it."""
@@ -207,6 +209,7 @@ class TestRedisCache:
         stats = cache.stats()
         assert stats["backend"] == "redis"
         assert "redis_url" in stats
+        assert stats["ttl_seconds"] == 3600
         assert stats["hits"] == 0
         assert stats["misses"] == 0
 
@@ -219,6 +222,12 @@ class TestRedisCache:
             ttl_seconds=1800
         )
         assert cache is not None
+        stats = cache.stats()
+        assert stats["backend"] == "redis"
+        assert stats["redis_url"] == "redis://custom:6379"
+        assert stats["ttl_seconds"] == 1800
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
 
     def test_set_serializes_json(self, mock_redis):
         """set() serializes value to JSON before storing."""

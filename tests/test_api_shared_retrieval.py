@@ -8,6 +8,7 @@ from fastapi import WebSocketDisconnect
 import api
 from hybrid_rag import HybridRetrieverConfig
 from hybrid_rag.cache import InMemoryCache
+from hybrid_rag.constants import MIN_RELEVANCE_SCORE
 
 
 class GuardConfig:
@@ -287,3 +288,105 @@ async def test_rerank_override_isolation_no_global_config_bleed_under_mixed_call
     assert observed_rerank_values == {False, True}
     assert api._config is not None
     assert api._config.enable_rerank is True
+
+
+@pytest.mark.asyncio
+async def test_retrieve_applies_min_relevance_score_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REST /retrieve filters out items below MIN_RELEVANCE_SCORE."""
+
+    docs = [
+        {
+            "id": "below-floor",
+            "text": "below",
+            "metadata": {"source": "unit"},
+            "score": MIN_RELEVANCE_SCORE - 0.01,
+        },
+        {
+            "id": "at-floor",
+            "text": "at",
+            "metadata": {"source": "unit"},
+            "score": MIN_RELEVANCE_SCORE,
+        },
+        {
+            "id": "above-floor",
+            "text": "above",
+            "metadata": {"source": "unit"},
+            "score": MIN_RELEVANCE_SCORE + 0.05,
+        },
+    ]
+
+    # Note 1: The endpoint gates on both _retriever and _config before calling
+    # the shared retrieval facade, so tests must provide both for isolated logic checks.
+    monkeypatch.setattr(api, "_retriever", object())
+    monkeypatch.setattr(
+        api,
+        "_config",
+        HybridRetrieverConfig(
+            semantic_weight=0.7,
+            keyword_weight=0.3,
+            enable_rerank=True,
+        ),
+    )
+    monkeypatch.setattr(api, "_shared_retrieve_documents", lambda query, enable_rerank=None: docs)
+
+    response = await api.retrieve(api.RetrievalRequest(query="threshold parity", enable_rerank=False))
+
+    assert response.total_results == 2
+    assert [result.id for result in response.results] == ["at-floor", "above-floor"]
+    assert all(result.score >= MIN_RELEVANCE_SCORE for result in response.results)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_filtered_enforces_floor_and_higher_requested_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """/retrieve-filtered uses max(MIN_RELEVANCE_SCORE, requested min_score)."""
+
+    docs = [
+        {
+            "id": "below-floor",
+            "text": "below",
+            "metadata": {"source": "unit"},
+            "score": MIN_RELEVANCE_SCORE - 0.01,
+        },
+        {
+            "id": "at-floor",
+            "text": "at",
+            "metadata": {"source": "unit"},
+            "score": MIN_RELEVANCE_SCORE,
+        },
+        {
+            "id": "high-score",
+            "text": "high",
+            "metadata": {"source": "unit"},
+            "score": MIN_RELEVANCE_SCORE + 0.12,
+        },
+    ]
+
+    # Note 2: Stubbing config keeps this test focused on threshold behavior
+    # instead of failing early on service-readiness checks.
+    monkeypatch.setattr(api, "_retriever", object())
+    monkeypatch.setattr(
+        api,
+        "_config",
+        HybridRetrieverConfig(
+            semantic_weight=0.7,
+            keyword_weight=0.3,
+            enable_rerank=True,
+        ),
+    )
+    monkeypatch.setattr(api, "_shared_retrieve_documents", lambda query, enable_rerank=None: docs)
+
+    floor_response = await api.retrieve_filtered(
+        api.RetrievalRequest(query="threshold parity", enable_rerank=False),
+        min_score=0.10,
+    )
+    assert [result.id for result in floor_response.results] == ["at-floor", "high-score"]
+
+    requested_min = MIN_RELEVANCE_SCORE + 0.10
+    strict_response = await api.retrieve_filtered(
+        api.RetrievalRequest(query="threshold parity", enable_rerank=False),
+        min_score=requested_min,
+    )
+    assert [result.id for result in strict_response.results] == ["high-score"]
+    assert all(result.score >= requested_min for result in strict_response.results)

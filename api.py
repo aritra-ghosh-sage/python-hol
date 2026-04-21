@@ -166,8 +166,8 @@ class DocumentIngestionRequest(BaseModel):
         filename: Original filename for file uploads.
         source_label: User-friendly label for the data source.
         ingest_type: Type of ingest operation: 'add' or 'update'.
-            - 'add': Preserve existing cache (for bulk additions)
-            - 'update': Clear cache after ingestion (default for backwards compatibility)
+            - 'add': Clear local cache state and advance the local generation token.
+            - 'update': Clear local cache state after ingestion (default for backwards compatibility).
     """
 
     source_type: Literal["text", "url", "file"] = Field(
@@ -184,7 +184,7 @@ class DocumentIngestionRequest(BaseModel):
     )
     ingest_type: Literal["add", "update"] = Field(
         default="update",
-        description="Ingest type: 'add' preserves cache, 'update' clears cache"
+        description="Ingest type: 'add' and 'update' both clear local cache state during Phase 1"
     )
 
 
@@ -1101,9 +1101,13 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
     try:
         text_content = ""
         source_label = request.source_label or request.source_type
+        should_invalidate_local_cache = request.ingest_type in {"add", "update"}
 
-        # Log ingest type (ADR-003 - Fix for blocking issue #3)
-        logger.info(f"Ingest type: {request.ingest_type}; cache {'will be cleared' if request.ingest_type == 'update' else 'will be preserved'}")
+        logger.info(
+            "Ingest type: %s; local cache %s",
+            request.ingest_type,
+            "will be cleared" if should_invalidate_local_cache else "will be preserved",
+        )
 
         if request.source_type == "text":
             text_content = request.content
@@ -1185,21 +1189,24 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                 f"Added {len(chunks)} chunks to collection from source: {source_label}"
             )
 
-            # Conditional cache clear based on ingest_type (ADR-003 - Fix for blocking issue #3)
-            # - 'update': Clear cache to ensure new documents are retrieved
-            # - 'add': Preserve cache for bulk additions
-            if request.ingest_type == "update":
+            if should_invalidate_local_cache:
+                # Phase 1 keeps the process-local generation token authoritative
+                # until distributed corpus_version invalidation lands in a later wave.
                 _cache_generation += 1
                 if _cache is not None:
                     try:
                         lazy_cache.clear()
-                        logger.info(f"Ingest complete (type='update'); cache cleared")
+                        logger.info(
+                            "Ingest complete (type='%s'); local cache cleared",
+                            request.ingest_type,
+                        )
                     except Exception as e:
                         logger.warning(f"Failed to clear cache after ingest: {e}")
                 else:
-                    logger.debug("Ingest complete (type='update'); cache not initialized")
-            else:  # ingest_type == 'add'
-                logger.info(f"Ingest complete (type='add'); cache preserved")
+                    logger.debug(
+                        "Ingest complete (type='%s'); cache not initialized",
+                        request.ingest_type,
+                    )
 
             return DocumentIngestionResponse(
                 status="success",

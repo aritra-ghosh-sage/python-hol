@@ -64,7 +64,7 @@ class TestGetOrEncodeEmbedding:
         self, retriever: HybridRetriever
     ) -> None:
         """First call to _get_or_encode_embedding() caches result on miss."""
-        query = "test query"
+        query = "help get start on google maps"
         embedding = retriever._get_or_encode_embedding(query)
 
         # Should return an ndarray
@@ -79,7 +79,7 @@ class TestGetOrEncodeEmbedding:
         self, retriever: HybridRetriever
     ) -> None:
         """Second call with same query returns cached result and increments hits."""
-        query = "test query for caching"
+        query = "can i edit google map review?"
         embedding1 = retriever._get_or_encode_embedding(query)
         embedding2 = retriever._get_or_encode_embedding(query)
 
@@ -94,8 +94,8 @@ class TestGetOrEncodeEmbedding:
         self, retriever: HybridRetriever
     ) -> None:
         """Different queries produce different embeddings (not from cache)."""
-        query1 = "first query"
-        query2 = "second query"
+        query1 = "can i edit google map review?"
+        query2 = "how can i improve location accuracy on google maps?"
 
         embedding1 = retriever._get_or_encode_embedding(query1)
         embedding2 = retriever._get_or_encode_embedding(query2)
@@ -109,7 +109,7 @@ class TestGetOrEncodeEmbedding:
 
     def test_cache_key_is_sha256_hash(self, retriever: HybridRetriever) -> None:
         """Cache key is SHA-256 hash of query text."""
-        query = "test query for hashing"
+        query = "can i download areas in google maps?"
         embedding = retriever._get_or_encode_embedding(query)
 
         # Compute expected cache key
@@ -120,7 +120,7 @@ class TestGetOrEncodeEmbedding:
 
     def test_embedding_is_numpy_array(self, retriever: HybridRetriever) -> None:
         """_get_or_encode_embedding returns np.ndarray."""
-        query = "embedding type test"
+        query = "can i delete a rating on google maps?"
         embedding = retriever._get_or_encode_embedding(query)
 
         assert isinstance(embedding, np.ndarray)
