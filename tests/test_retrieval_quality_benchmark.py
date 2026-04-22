@@ -645,7 +645,7 @@ class TestAC3WarmAndColdCachePerformanceMeasurements:
             )
 
     def test_cache_miss_after_config_change_confirms_cold_semantics(
-        self, benchmark_client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, benchmark_client: TestClient
     ) -> None:
         """A query becomes cold again after a config change clears the cache.
 
