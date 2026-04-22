@@ -8,7 +8,7 @@
 
 **Prerequisites:**
 - Python 3.13+ environment with dependencies installed
-- FastAPI server running (or will be spun up)
+- FastAPI server running (pytest will auto-start `api.py` if needed)
 - ChromaDB available
 - Redis available (optional; protocol supports memory backend)
 

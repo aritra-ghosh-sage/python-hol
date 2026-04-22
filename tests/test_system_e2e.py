@@ -316,9 +316,10 @@ class TestL2EmbeddingCache:
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
+        l2_stats = stats["l2_embedding_cache"]
         
         # Should have some activity
-        assert stats["hits"] + stats["misses"] > 0
+        assert l2_stats["hits"] + l2_stats["misses"] > 0
 
 
 # ============================================================================
@@ -482,9 +483,10 @@ class TestConcurrentLoad:
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
+        l1_stats = stats["l1_query_cache"]
         
         # Should have hits (most requests should hit cache)
-        total_activity = stats["hits"] + stats["misses"]
+        total_activity = l1_stats["hits"] + l1_stats["misses"]
         assert total_activity > 0
 
     def test_concurrent_config_and_retrieve(self, app_with_cache: TestClient) -> None:
@@ -560,28 +562,47 @@ class TestCacheStats:
         assert response.status_code == 200
         stats = response.json()
         
-        # Verify all required fields
-        required_fields = ["backend", "hits", "misses", "hit_rate", 
-                          "size", "max_size", "ttl_seconds", "timestamp"]
+        # Verify top-level fields
+        required_fields = [
+            "l1_query_cache",
+            "l2_embedding_cache",
+            "backend_health",
+            "timestamp",
+        ]
         for field in required_fields:
             assert field in stats
-        
+
+        l1_stats = stats["l1_query_cache"]
+        l2_stats = stats["l2_embedding_cache"]
+        backend_health = stats["backend_health"]
+
         # Verify types and ranges
-        assert isinstance(stats["backend"], str)
-        assert isinstance(stats["hits"], int)
-        assert isinstance(stats["misses"], int)
-        assert isinstance(stats["hit_rate"], (int, float))
-        assert isinstance(stats["size"], int)
-        assert isinstance(stats["max_size"], int)
-        assert isinstance(stats["ttl_seconds"], int)
-        
+        assert isinstance(l1_stats["backend"], str)
+        assert isinstance(l1_stats["hits"], int)
+        assert isinstance(l1_stats["misses"], int)
+        assert isinstance(l1_stats["hit_rate"], (int, float))
+        assert isinstance(l1_stats["size"], int)
+        assert isinstance(l1_stats["max_size"], int)
+        assert isinstance(l1_stats["ttl_seconds"], int)
+        assert isinstance(l2_stats["hits"], int)
+        assert isinstance(l2_stats["misses"], int)
+        assert isinstance(l2_stats["hit_rate"], (int, float))
+        assert isinstance(l2_stats["size"], int)
+        assert isinstance(l2_stats["capacity"], int)
+        assert isinstance(backend_health["connected"], bool)
+
         # Verify ranges
-        assert stats["hits"] >= 0
-        assert stats["misses"] >= 0
-        assert 0.0 <= stats["hit_rate"] <= 1.0
-        assert stats["size"] >= 0
-        assert stats["max_size"] > 0
-        assert stats["ttl_seconds"] >= 0
+        assert l1_stats["hits"] >= 0
+        assert l1_stats["misses"] >= 0
+        assert 0.0 <= l1_stats["hit_rate"] <= 1.0
+        assert l1_stats["size"] >= 0
+        assert l1_stats["max_size"] > 0
+        assert l1_stats["ttl_seconds"] >= 0
+        assert l2_stats["hits"] >= 0
+        assert l2_stats["misses"] >= 0
+        assert 0.0 <= l2_stats["hit_rate"] <= 1.0
+        assert l2_stats["size"] >= 0
+        assert l2_stats["capacity"] > 0
 
     def test_cache_stats_accuracy(self, app_with_cache: TestClient) -> None:
         """Cache stats are accurate after known operations.
@@ -607,14 +628,15 @@ class TestCacheStats:
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
+        l1_stats = stats["l1_query_cache"]
         
         # Should have activity
-        total = stats["hits"] + stats["misses"]
+        total = l1_stats["hits"] + l1_stats["misses"]
         assert total >= 5  # At least our 5 requests
         
         # Hit rate should be reasonable
         if total > 0:
-            assert 0.0 <= stats["hit_rate"] <= 1.0
+            assert 0.0 <= l1_stats["hit_rate"] <= 1.0
 
 
 # ============================================================================

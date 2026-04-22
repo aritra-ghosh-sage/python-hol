@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import os
 import re
 from typing import Any, Dict, List
 
@@ -12,6 +13,7 @@ from sentence_transformers import SentenceTransformer
 
 from .config import HybridRetrieverConfig
 from .constants import STOP_WORDS
+from .embeddings import HashEmbeddingEncoder, get_embedding_backend
 from .exceptions import RetrievalError
 from .reranker import CrossEncoderReranker
 
@@ -76,14 +78,22 @@ class HybridRetriever:
             self.reranker = None
 
         # Initialize encoder for embedding queries
-        try:
-            logger.debug("Initializing SentenceTransformer encoder")
-            self.encoder: SentenceTransformer = SentenceTransformer(
-                "all-MiniLM-L6-v2"
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize encoder: {e}")
-            raise
+        embedding_backend = get_embedding_backend()
+        self.encoder: Any
+        if embedding_backend == "hash":
+            self.encoder = HashEmbeddingEncoder()
+        else:
+            try:
+                logger.debug("Initializing SentenceTransformer encoder")
+                self.encoder = SentenceTransformer("all-MiniLM-L6-v2")
+            except Exception as e:
+                logger.warning(
+                    "Failed to initialize SentenceTransformer encoder (%s). "
+                    "Using hash embeddings instead.",
+                    e,
+                )
+                os.environ.setdefault("HYBRID_RAG_EMBEDDING_BACKEND", "hash")
+                self.encoder = HashEmbeddingEncoder()
 
         # Initialize L2 embedding cache
         self._embedding_cache: cachetools.LRUCache[str, np.ndarray] = (

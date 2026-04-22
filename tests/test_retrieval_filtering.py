@@ -7,8 +7,8 @@ These tests verify that:
 3. Results remain sorted by score (descending)
 4. Filtering is consistent across REST and WebSocket endpoints
 
-NOTE: Tests that make HTTP requests require the backend to be running:
-  python api.py
+NOTE: Tests that make HTTP requests require the backend to be running.
+The pytest session starts it automatically when needed.
 
 AsyncIO tests require pytest-asyncio:
   pip install pytest-asyncio
@@ -36,13 +36,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # ============================================================================
 
 @pytest.fixture
-def backend_available():
-    """Check if backend is running on localhost:8000."""
-    import socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    result = sock.connect_ex(('localhost', 8000))
-    sock.close()
-    return result == 0
+def backend_available(backend_server: str) -> bool:
+    """Confirm backend availability for HTTP integration tests."""
+    return bool(backend_server)
 
 
 @pytest.fixture
@@ -301,4 +297,3 @@ class TestIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

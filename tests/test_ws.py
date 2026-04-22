@@ -10,9 +10,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 @pytest.mark.asyncio
-async def test_ws_connection_and_basic_message():
+async def test_ws_connection_and_basic_message(backend_server: str):
     """Test WebSocket connection and receipt of status/results messages."""
-    uri = "ws://localhost:8000/ws/chat"
+    base_url = backend_server.rstrip("/")
+    uri = base_url.replace("http://", "ws://").replace("https://", "wss://")
+    uri = f"{uri}/ws/chat"
     
     try:
         async with websockets.connect(uri) as websocket:
@@ -42,4 +44,3 @@ async def test_ws_connection_and_basic_message():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
-

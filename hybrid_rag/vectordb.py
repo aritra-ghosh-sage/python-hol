@@ -1,6 +1,7 @@
 """Vector database initialization and management."""
 
 import logging
+import os
 from typing import Any, Dict, List, cast
 
 import chromadb
@@ -11,6 +12,7 @@ from chromadb.utils import embedding_functions
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from .constants import DEFAULT_PERSIST_DIRECTORY
+from .embeddings import HashEmbeddingFunction, get_embedding_backend
 from .exceptions import VectorDBError
 
 __all__ = ["chunk_text", "initialize_vector_db", "get_sample_documents"]
@@ -154,6 +156,9 @@ def initialize_vector_db(
         raise ValueError("Document list cannot be empty")
 
     try:
+        persist_dir = os.getenv("HYBRID_RAG_PERSIST_DIR", persist_dir)
+        collection_name = os.getenv("HYBRID_RAG_COLLECTION_NAME", collection_name)
+
         logger.debug(f"Initializing ChromaDB client at {persist_dir}")
         client = chromadb.PersistentClient(path=persist_dir)
 
@@ -164,12 +169,27 @@ def initialize_vector_db(
         except NotFoundError:
             logger.debug(f"Collection {collection_name} did not exist, creating new one")
 
-        # Initialize local sentence-transformers embedding function
-        # Using local embeddings to avoid HF Inference API issues
-        logger.debug("Initializing SentenceTransformer embeddings")
-        embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
+        # Initialize embedding function (hash fallback for offline/test runs)
+        embedding_backend = get_embedding_backend()
+        use_hash_backend = embedding_backend == "hash"
+        if use_hash_backend:
+            embedding_function = HashEmbeddingFunction()
+        else:
+            logger.debug("Initializing SentenceTransformer embeddings")
+            try:
+                embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+                    model_name="all-MiniLM-L6-v2"
+                )
+            except Exception as exc:
+                logger.warning(
+                    "SentenceTransformer embeddings unavailable (%s); "
+                    "falling back to hash embeddings.",
+                    exc,
+                )
+                os.environ.setdefault("HYBRID_RAG_EMBEDDING_BACKEND", "hash")
+                embedding_function = HashEmbeddingFunction()
+                use_hash_backend = True
+
         typed_embedding_function = cast(
             EmbeddingFunction[Embeddable], embedding_function
         )
@@ -203,7 +223,31 @@ def initialize_vector_db(
                 id_counter += 1
 
         # Add all documents to collection
-        collection.add(documents=doc_texts, metadatas=doc_metadatas, ids=doc_ids)
+        try:
+            collection.add(documents=doc_texts, metadatas=doc_metadatas, ids=doc_ids)
+        except Exception as exc:
+            if use_hash_backend:
+                raise
+            logger.warning(
+                "Embedding failed with SentenceTransformer (%s); "
+                "retrying with hash embeddings.",
+                exc,
+            )
+            os.environ.setdefault("HYBRID_RAG_EMBEDDING_BACKEND", "hash")
+            try:
+                client.delete_collection(name=collection_name)
+            except NotFoundError:
+                logger.debug("Collection %s did not exist, recreating", collection_name)
+            embedding_function = HashEmbeddingFunction()
+            typed_embedding_function = cast(
+                EmbeddingFunction[Embeddable], embedding_function
+            )
+            collection = client.get_or_create_collection(
+                name=collection_name,
+                embedding_function=typed_embedding_function,
+                metadata={"hnsw:space": "cosine"},
+            )
+            collection.add(documents=doc_texts, metadatas=doc_metadatas, ids=doc_ids)
         logger.info(
             f"Vector DB initialized: {id_counter} chunks from {len(documents)} documents"
         )
