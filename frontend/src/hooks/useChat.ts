@@ -1,8 +1,7 @@
 "use client";
 
-// WHY: useEffect, useRef, useCallback manage WebSocket lifecycle.
-// Chat messages are stored in useChatStore (Zustand + localStorage) so they
-// survive panel switches that unmount/remount this component.
+// WHY: Chat messages are stored in useChatStore (Zustand + localStorage) so
+// they survive panel switches that unmount/remount this component.
 import { useEffect, useState, useRef, useCallback } from "react";
 import { getWSClient } from "@/lib/ws";
 import { WsIncomingMessage } from "@/lib/types";
@@ -11,29 +10,20 @@ import { useChatStore } from "@/stores/chatStore";
 export function useChat() {
   const wsClient = useRef(getWSClient());
 
-  // WHY: messages come from the persistent Zustand store instead of local
-  // useState.  When the user navigates to a different panel and back, the
-  // QueryPanel unmounts and remounts.  A local useState would reset to []
-  // on every remount, losing the conversation history (issue #3).
-  // The store reads from localStorage on first render so existing history
-  // appears immediately without a flash of empty content.
-  const {
-    messages,
-    appendMessages,
-    updateLastLoadingContent,
-    replaceLastLoadingWithResults,
-    replaceLastLoadingWithError,
-    getNextMessageId,
-    clearHistory,
-  } = useChatStore();
-
-  // WHY: Connection status is kept in local useState — it is a transient
-  // runtime property derived from the WebSocket singleton and does not need
-  // to survive a remount or page reload.
   const [isConnected, setIsConnected] = useState(false);
   const [connectionState, setConnectionState] = useState<
     "connecting" | "connected" | "disconnected" | "error"
   >("disconnected");
+
+  const messages = useChatStore((state) => state.messages);
+  const appendMessages = useChatStore((state) => state.appendMessages);
+  const updateLastLoadingContent = useChatStore((state) => state.updateLastLoadingContent);
+  const replaceLastLoadingWithResults = useChatStore((state) => state.replaceLastLoadingWithResults);
+  const replaceLastLoadingWithError = useChatStore((state) => state.replaceLastLoadingWithError);
+  const getNextMessageId = useChatStore((state) => state.getNextMessageId);
+  // WHY: clearHistory clears both in-memory and localStorage so the next
+  // page reload also starts with an empty history.
+  const clearHistory = useChatStore((state) => state.clearHistory);
 
   // Sync connection state from the singleton on mount so the status bar shows
   // the correct value even if the WS connected before this component mounted.
@@ -42,19 +32,13 @@ export function useChat() {
     setConnectionState(wsClient.current.getConnectionState());
   }, []);
 
-  // WHY: handleWsMessage is wrapped in useCallback so its reference is stable
-  // across renders, preventing unnecessary WebSocket re-subscriptions.
-  // Zustand store methods are stable references (not recreated on state
-  // changes), so this callback is effectively recreated only once.
+  // Define message handler before useEffect so it can be used in the dependency array
   const handleWsMessage = useCallback((msg: WsIncomingMessage) => {
     if (msg.type === "status") {
-      // Stream progress text into the last in-flight loading bubble.
       updateLastLoadingContent(msg.message);
     } else if (msg.type === "results") {
-      // Replace the loading bubble with the final document results.
       replaceLastLoadingWithResults(msg.results, msg.total_results);
     } else if (msg.type === "error") {
-      // Replace the loading bubble with an error bubble.
       replaceLastLoadingWithError(msg.message);
     }
   }, [updateLastLoadingContent, replaceLastLoadingWithResults, replaceLastLoadingWithError]);
@@ -107,32 +91,27 @@ export function useChat() {
         return;
       }
 
-      // WHY: IDs are obtained from the store's counter rather than a local
-      // useRef so the counter persists across remounts, preventing duplicate
-      // React keys after a panel switch.
-      const userMsg = {
-        id: getNextMessageId("user"),
-        role: "user" as const,
-        content: query,
-        timestamp: Date.now(),
-        status: "sent" as const,
-      };
+      appendMessages([
+        {
+          id: getNextMessageId("user"),
+          role: "user",
+          content: query,
+          timestamp: Date.now(),
+          status: "sent",
+        },
+        {
+          id: getNextMessageId("system"),
+          role: "system",
+          content: "Searching documents...",
+          timestamp: Date.now(),
+          status: "loading",
+        },
+      ]);
 
-      const loadingMsg = {
-        id: getNextMessageId("system"),
-        role: "system" as const,
-        content: "Searching documents...",
-        timestamp: Date.now(),
-        status: "loading" as const,
-      };
-
-      // Append both messages atomically to avoid split-render flicker.
-      appendMessages([userMsg, loadingMsg]);
-
-      // Send via WebSocket.
+      // Send via WebSocket
       wsClient.current.sendQuery(query, enableRerank);
     },
-    [isConnected, getNextMessageId, appendMessages]
+    [isConnected, appendMessages, getNextMessageId]
   );
 
   return {
