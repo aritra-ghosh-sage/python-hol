@@ -2,16 +2,22 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { getWSClient } from "@/lib/ws";
-import { ChatMessage, WsIncomingMessage } from "@/lib/types";
+import { WsIncomingMessage } from "@/lib/types";
+import { useChatStore } from "@/stores/chatStore";
 
 export function useChat() {
   const wsClient = useRef(getWSClient());
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [connectionState, setConnectionState] = useState<
     "connecting" | "connected" | "disconnected" | "error"
   >("disconnected");
-  const messageIdRef = useRef(0);
+
+  const messages = useChatStore((state) => state.messages);
+  const appendMessages = useChatStore((state) => state.appendMessages);
+  const updateLastLoadingContent = useChatStore((state) => state.updateLastLoadingContent);
+  const replaceLastLoadingWithResults = useChatStore((state) => state.replaceLastLoadingWithResults);
+  const replaceLastLoadingWithError = useChatStore((state) => state.replaceLastLoadingWithError);
+  const getNextMessageId = useChatStore((state) => state.getNextMessageId);
 
   // Sync state from singleton on mount
   useEffect(() => {
@@ -22,55 +28,13 @@ export function useChat() {
   // Define message handler before useEffect so it can be used in the dependency array
   const handleWsMessage = useCallback((msg: WsIncomingMessage) => {
     if (msg.type === "status") {
-      // Update loading message
-      setMessages((prev) => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.role === "system" && lastMsg.status === "loading") {
-          return [
-            ...prev.slice(0, -1),
-            {
-              ...lastMsg,
-              content: msg.message,
-            },
-          ];
-        }
-        return prev;
-      });
+      updateLastLoadingContent(msg.message);
     } else if (msg.type === "results") {
-      // Replace loading message with results
-      setMessages((prev) => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.role === "system" && lastMsg.status === "loading") {
-          return [
-            ...prev.slice(0, -1),
-            {
-              ...lastMsg,
-              content: `Found ${msg.total_results} relevant documents`,
-              results: msg.results,
-              status: "done" as const,
-            },
-          ];
-        }
-        return prev;
-      });
+      replaceLastLoadingWithResults(msg.results, msg.total_results);
     } else if (msg.type === "error") {
-      // Replace loading message with error
-      setMessages((prev) => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.role === "system" && lastMsg.status === "loading") {
-          return [
-            ...prev.slice(0, -1),
-            {
-              ...lastMsg,
-              error: msg.message,
-              status: "error" as const,
-            },
-          ];
-        }
-        return prev;
-      });
+      replaceLastLoadingWithError(msg.message);
     }
-  }, []);
+  }, [updateLastLoadingContent, replaceLastLoadingWithResults, replaceLastLoadingWithError]);
 
   // Initialize WebSocket on component mount
   useEffect(() => {
@@ -118,30 +82,27 @@ export function useChat() {
         return;
       }
 
-      // Add user message
-      const userMsg: ChatMessage = {
-        id: `user-${messageIdRef.current++}`,
-        role: "user",
-        content: query,
-        timestamp: Date.now(),
-        status: "sent",
-      };
-
-      // Add loading system message
-      const loadingMsg: ChatMessage = {
-        id: `system-${messageIdRef.current++}`,
-        role: "system",
-        content: "Searching documents...",
-        timestamp: Date.now(),
-        status: "loading",
-      };
-
-      setMessages((prev) => [...prev, userMsg, loadingMsg]);
+      appendMessages([
+        {
+          id: getNextMessageId("user"),
+          role: "user",
+          content: query,
+          timestamp: Date.now(),
+          status: "sent",
+        },
+        {
+          id: getNextMessageId("system"),
+          role: "system",
+          content: "Searching documents...",
+          timestamp: Date.now(),
+          status: "loading",
+        },
+      ]);
 
       // Send via WebSocket
       wsClient.current.sendQuery(query, enableRerank);
     },
-    [isConnected]
+    [isConnected, appendMessages, getNextMessageId]
   );
 
   return {
