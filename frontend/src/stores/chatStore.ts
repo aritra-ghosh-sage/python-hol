@@ -134,7 +134,7 @@ export const useChatStore = create<ChatStoreState>()(
       name: "chat-history-v1",
       storage: createJSONStorage(resolveStorage),
       partialize: (state) => ({
-        messages: state.messages,
+        messages: state.messages.filter((m) => m.status !== "loading"),
         messageCounter: state.messageCounter,
       }),
     }
