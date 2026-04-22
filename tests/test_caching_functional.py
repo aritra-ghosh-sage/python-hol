@@ -659,8 +659,8 @@ class TestEdgeCases:
         # Get should return None (but cache has the key)
         assert cache.get("key") is None
         
-        # Verify it's actually in cache (not a miss)
-        assert "key" in cache.store if hasattr(cache, "store") else True
+        # Verify it's actually in cache by checking size increased
+        assert cache.stats()["size"] == 1
 
 
 if __name__ == "__main__":
