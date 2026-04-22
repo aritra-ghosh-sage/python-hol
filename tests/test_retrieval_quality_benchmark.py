@@ -77,6 +77,10 @@ class _FakeRetrieverWithLatency:
         result_score: Relevance score of the fake result (varies by config).
     """
 
+    # Simulated additional score for reranked results — extracted as a constant
+    # so the "magic" delta is visible and adjustable without touching the test logic.
+    RERANK_SCORE_DELTA: float = 0.02
+
     def __init__(
         self,
         latency_seconds: float = 0.01,
@@ -101,8 +105,9 @@ class _FakeRetrieverWithLatency:
                 "id": "benchmark-doc-1",
                 "text": f"Benchmark result for: {query}",
                 "metadata": {"source": "https://benchmark.example"},
-                # Score is influenced by enable_rerank to simulate quality differences
-                "score": self.result_score if not enable_rerank else self.result_score + 0.02,
+                # Score is influenced by enable_rerank to simulate quality differences.
+                # RERANK_SCORE_DELTA provides a small, visible boost for reranked results.
+                "score": self.result_score if not enable_rerank else self.result_score + self.RERANK_SCORE_DELTA,
             }
         ]
 
@@ -459,12 +464,14 @@ class TestAC2QualityMetricsAcrossConfigChanges:
         # Call with rerank=False (first call = MISS, sets cache entry A)
         resp_no_rerank = client.post("/retrieve", json={"query": query, "enable_rerank": False})
         assert resp_no_rerank.status_code == 200
-        score_no_rerank = resp_no_rerank.json()["results"][0]["score"] if resp_no_rerank.json()["results"] else None
+        body_no_rerank = resp_no_rerank.json()
+        score_no_rerank = body_no_rerank["results"][0]["score"] if body_no_rerank["results"] else None
 
         # Call with rerank=True (different cache key, also MISS, sets cache entry B)
         resp_rerank = client.post("/retrieve", json={"query": query, "enable_rerank": True})
         assert resp_rerank.status_code == 200
-        score_rerank = resp_rerank.json()["results"][0]["score"] if resp_rerank.json()["results"] else None
+        body_rerank = resp_rerank.json()
+        score_rerank = body_rerank["results"][0]["score"] if body_rerank["results"] else None
 
         # Both calls must have hit the retriever (separate cache keys)
         assert retriever.call_count == 2, (
@@ -680,6 +687,15 @@ class BenchmarkBaseline:
     committed alongside the code.  In this unit-test suite, the baseline
     is defined inline to make the tests self-contained.
 
+    Threshold rationale (all values are conservative for unit-test context):
+      - max_cold_latency_ms=200: fake retriever sleeps ~10 ms; 200 ms gives 20×
+        headroom for slow CI machines and any test setup overhead.
+      - max_warm_latency_ms=50: in-memory dict lookup is nanoseconds; 50 ms is
+        extremely generous to avoid false-positives on loaded machines.
+      - min_speedup_ratio=2: cold (~10 ms) / warm (<5 ms) = at least 2×.
+      - min_hit_rate=0.5: 1 cold + N warm → hit_rate = N/(N+1) ≥ 5/6 > 0.5.
+      - min_result_consistency=1.0: same query must always return same count.
+
     Attributes:
         max_cold_latency_ms: Upper bound for cold-cache latency (regression = exceeded).
         max_warm_latency_ms: Upper bound for warm-cache latency.
@@ -688,11 +704,11 @@ class BenchmarkBaseline:
         min_result_consistency: Lower bound for identical-query result consistency.
     """
 
-    max_cold_latency_ms: float = 200.0   # 200 ms cold budget (fake retriever ~10 ms; lots of headroom)
-    max_warm_latency_ms: float = 50.0    # 50 ms warm budget (in-memory lookup; very generous)
-    min_speedup_ratio: float = 2.0       # Must be at least 2× faster warm vs cold
-    min_hit_rate: float = 0.5            # At least 50% hits after warmup
-    min_result_consistency: float = 1.0  # Identical queries must always return same count
+    max_cold_latency_ms: float = 200.0
+    max_warm_latency_ms: float = 50.0
+    min_speedup_ratio: float = 2.0
+    min_hit_rate: float = 0.5
+    min_result_consistency: float = 1.0
 
 
 PRODUCTION_BASELINE = BenchmarkBaseline()

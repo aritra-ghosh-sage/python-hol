@@ -57,6 +57,8 @@ class AlwaysFailingCache:
     def get(self, key: str) -> NoReturn:
         raise RuntimeError("cache.get() — simulated backend failure")
 
+    # ttl_seconds is part of the CacheBackend interface; unused here because
+    # this implementation always raises before reaching the actual write.
     def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> NoReturn:
         raise RuntimeError("cache.set() — simulated backend failure")
 
@@ -221,6 +223,8 @@ class TestAC1RetrievalContinuesWithFailingCache:
             def get(self, key: str) -> None:
                 return None  # Always a cache MISS
 
+            # ttl_seconds is part of the CacheBackend interface; unused here because
+            # this implementation always raises before reaching the write.
             def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> NoReturn:
                 raise RuntimeError("set() — simulated write-back failure")
 
