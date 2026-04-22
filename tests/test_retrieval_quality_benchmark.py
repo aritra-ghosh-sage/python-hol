@@ -68,7 +68,7 @@ class _FakeRetrieverWithLatency:
 
     WHY: We need to measure speedup ratio.  If the fake returns instantly,
     the speedup ratio collapses to ~1.0 and the benchmark threshold cannot
-    be tested.  A small but measurable sleep (default 10 ms) gives the
+    be tested.  A small but measurable sleep (default 50 ms) gives the
     benchmark a signal to detect cache bypasses.
 
     Attributes:
@@ -364,10 +364,14 @@ class TestAC1RepeatableBenchmarkWorkflow:
 
         WHY: A non-deterministic benchmark produces false regressions.
         The result_consistency metric must be 1.0 for identical queries.
+        The cache is cleared between runs so both start cold, matching the
+        same warm/cold pattern and validating the workflow itself.
         """
         query = "deterministic benchmark query"
-        # Both runs use the same query and same config
         report_a = _run_warm_cold_benchmark(benchmark_client, query, n_warm_calls=3)
+        # Clear the cache so the second run also begins with a cold miss,
+        # matching the same warm/cold pattern as the first run.
+        api._cache.clear()
         report_b = _run_warm_cold_benchmark(benchmark_client, query, n_warm_calls=3)
 
         # Both must agree on result_consistency
@@ -587,7 +591,7 @@ class TestAC3WarmAndColdCachePerformanceMeasurements:
         """Warm cache latency must be lower than cold cache latency.
 
         WHY: If warm ≥ cold, the cache provides no performance benefit.
-        The fake retriever sleeps 10 ms; L1 cache lookup is nanoseconds.
+        The fake retriever sleeps 50 ms; L1 cache lookup is nanoseconds.
         We require speedup ≥ 2× to leave headroom for jitter.
         """
         report = _run_warm_cold_benchmark(
@@ -689,11 +693,11 @@ class BenchmarkBaseline:
     is defined inline to make the tests self-contained.
 
     Threshold rationale (all values are conservative for unit-test context):
-      - max_cold_latency_ms=200: fake retriever sleeps ~10 ms; 200 ms gives 20×
+      - max_cold_latency_ms=200: fake retriever sleeps ~50 ms; 200 ms gives 4×
         headroom for slow CI machines and any test setup overhead.
       - max_warm_latency_ms=50: in-memory dict lookup is nanoseconds; 50 ms is
         extremely generous to avoid false-positives on loaded machines.
-      - min_speedup_ratio=2: cold (~10 ms) / warm (<5 ms) = at least 2×.
+      - min_speedup_ratio=2: cold (~50 ms) / warm (<5 ms) = at least 2×.
       - min_hit_rate=0.5: 1 cold + N warm → hit_rate = N/(N+1) ≥ 5/6 > 0.5.
       - min_result_consistency=1.0: same query must always return same count.
 

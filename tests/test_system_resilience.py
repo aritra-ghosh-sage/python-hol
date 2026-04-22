@@ -1,6 +1,6 @@
 """OPTB-009 — System Responsiveness During Cache/Dependency Issues.
 
-GH-009 acceptance criteria (verbatim from PRODUCT_PRD.md §10.9):
+GH-010 acceptance criteria (verbatim from PRODUCT_PRD.md §10.9):
   AC-1: Retrieval requests continue when the cache backend is unavailable.
   AC-2: The system returns controlled errors when the retriever is unavailable.
   AC-3: Degraded operation is logged for follow-up.
@@ -255,7 +255,7 @@ class TestAC1RetrievalContinuesWithFailingCache:
         )
 
     def test_post_retrieve_with_no_cache_returns_live_results(
-        self, client_no_retriever: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """POST /retrieve with cache=None falls through to retriever (live mode).
 
