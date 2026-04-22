@@ -84,7 +84,13 @@ class FakeRetriever:
 
 @pytest.fixture
 def parity_harness(monkeypatch: pytest.MonkeyPatch) -> FakeRetriever:
-    """Prepare isolated retriever/config/cache globals for parity contract tests."""
+    """Prepare isolated retriever/config/cache globals for parity contract tests.
+
+    Also resets _corpus_version to the token that _build_corpus_version_token() would
+    produce for this FakeRetriever: _cache_generation=0 and FakeCollection.count()=1
+    → "gen0.n1".  This mirrors the authoritative token so that all parity tests start
+    from a known, stable cache-key namespace.
+    """
 
     retriever = FakeRetriever()
     config = HybridRetrieverConfig(
@@ -97,6 +103,9 @@ def parity_harness(monkeypatch: pytest.MonkeyPatch) -> FakeRetriever:
     monkeypatch.setattr(api, "_config", config)
     monkeypatch.setattr(api, "_cache", InMemoryCache(ttl_seconds=3600, max_size=100))
     monkeypatch.setattr(api, "_cache_generation", 0)
+    # Reset corpus_version to the token matching generation=0 and collection count=1.
+    # FakeCollection starts with count_value=1, so the authoritative token is "gen0.n1".
+    monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
 
     return retriever
 
@@ -226,10 +235,22 @@ async def test_parity_config_update_invalidates_shared_cache_for_rest_and_ws(
 
 
 @pytest.mark.asyncio
-async def test_parity_ingest_add_preserves_cache_and_update_invalidates(
+async def test_parity_ingest_add_bumps_version_and_update_also_invalidates(
     parity_harness: FakeRetriever,
 ) -> None:
-    """ingest_type add preserves cache; update invalidates it for subsequent equivalent queries."""
+    """ingest_type add bumps corpus_version (cache miss); update clears cache and bumps again.
+
+    WHY: When 'add' ingests new documents, the collection count changes which means
+    _build_corpus_version_token() returns a new token.  Subsequent queries built
+    against the new token will be cache misses — ensuring freshly-ingested documents
+    are visible.  'update' additionally clears the L1 cache, giving the same guarantee
+    with even stronger consistency.
+
+    Expected retriever call counts:
+      1 — initial query (cold miss)
+      2 — query after 'add' (corpus_version changed → new cache key → miss)
+      3 — query after 'update' (corpus_version changed again + cache cleared → miss)
+    """
 
     await api.retrieve(api.RetrievalRequest(query="ingest parity", enable_rerank=False))
     assert len(parity_harness.calls) == 1
@@ -244,11 +265,22 @@ async def test_parity_ingest_add_preserves_cache_and_update_invalidates(
     )
     assert add_response.status == "success"
 
+    # After 'add' the corpus_version token has changed (collection count grew).
+    # The same query must hit a different cache key → retriever called again.
+    # Verify the token has the expected "gen{N}.n{count}" format.
+    version_after_add = api._corpus_version
+    assert version_after_add.startswith("gen"), (
+        f"corpus_version after add should start with 'gen', got: {version_after_add!r}"
+    )
+    assert ".n" in version_after_add, (
+        f"corpus_version after add should contain '.n', got: {version_after_add!r}"
+    )
+
     ws_after_add = FakeWebSocket(
         incoming_messages=[{"query": "ingest parity", "enable_rerank": False}]
     )
     await api.websocket_chat(ws_after_add)
-    assert len(parity_harness.calls) == 1
+    assert len(parity_harness.calls) == 2
 
     update_response = await api.add_documents(
         api.DocumentIngestionRequest(
@@ -260,11 +292,18 @@ async def test_parity_ingest_add_preserves_cache_and_update_invalidates(
     )
     assert update_response.status == "success"
 
+    # After 'update' the corpus_version token changed again and cache was cleared.
+    # The generation counter should have incremented, so the token differs from post-add.
+    version_after_update = api._corpus_version
+    assert version_after_update != version_after_add, (
+        f"corpus_version must change after 'update', was {version_after_add!r} → {version_after_update!r}"
+    )
+
     ws_after_update = FakeWebSocket(
         incoming_messages=[{"query": "ingest parity", "enable_rerank": False}]
     )
     await api.websocket_chat(ws_after_update)
-    assert len(parity_harness.calls) == 2
+    assert len(parity_harness.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -288,3 +327,149 @@ async def test_rerank_override_isolation_no_global_config_bleed_under_mixed_call
     assert observed_rerank_values == {False, True}
     assert api._config is not None
     assert api._config.enable_rerank is True
+
+
+# ---------------------------------------------------------------------------
+# New OPTB-007 parity tests — corpus_version-aware transport symmetry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_parity_corpus_version_bumps_on_add_both_transports_see_miss(
+    parity_harness: FakeRetriever,
+) -> None:
+    """Both REST and WS observe a cache miss after an 'add' ingest bumps corpus_version.
+
+    WHY: _build_corpus_version_token() incorporates the live collection count.
+    When 'add' inserts documents the count grows, producing a new version token.
+    Any transport querying after the bump uses a different cache key → guaranteed miss,
+    so freshly-added documents are reachable.  Once one transport populates the new
+    key the other transport reuses it (shared cache → hit).
+
+    Scenario:
+      1. REST query (corpus_version="gen0.n1") → miss, calls=1
+      2. 'add' ingest  → collection count 1→2, corpus_version→"gen0.n2"
+      3. WS   same query (corpus_version="gen0.n2") → miss, calls=2
+      4. REST same query (corpus_version="gen0.n2") → HIT  (WS populated it), calls=2
+    """
+    # Step 1: initial REST query populates cache with corpus_version "gen0.n1"
+    rest_response_before = await api.retrieve(
+        api.RetrievalRequest(query="version bump add parity", enable_rerank=False)
+    )
+    assert len(parity_harness.calls) == 1
+
+    # Step 2: 'add' ingest — collection count grows → corpus_version token changes
+    add_response = await api.add_documents(
+        api.DocumentIngestionRequest(
+            source_type="text",
+            content="brand new document for add test",
+            source_label="optb007-add",
+            ingest_type="add",
+        )
+    )
+    assert add_response.status == "success"
+
+    # Step 3: WS query with new corpus_version → cache MISS (new key)
+    ws_after_add = FakeWebSocket(
+        incoming_messages=[{"query": "version bump add parity", "enable_rerank": False}]
+    )
+    await api.websocket_chat(ws_after_add)
+    assert len(parity_harness.calls) == 2  # miss — new corpus_version key
+
+    ws_results = _assert_ws_results_message(ws_after_add)
+
+    # Step 4: REST with same corpus_version → HIT from cache WS just populated
+    rest_response_after = await api.retrieve(
+        api.RetrievalRequest(query="version bump add parity", enable_rerank=False)
+    )
+    assert len(parity_harness.calls) == 2  # HIT — same corpus_version key
+
+    # Both transports return equivalent payloads from the shared cache entry
+    assert rest_response_after.total_results == ws_results["total_results"]
+
+
+@pytest.mark.asyncio
+async def test_parity_corpus_version_bumps_on_update_both_transports_see_miss(
+    parity_harness: FakeRetriever,
+) -> None:
+    """Both REST and WS observe a cache miss after an 'update' ingest bumps corpus_version.
+
+    WHY: 'update' increments _cache_generation AND clears the L1 cache, then
+    _build_corpus_version_token() produces a new token (gen incremented, count grown).
+    The first transport to query after the update is always a miss; the second transport
+    reuses the freshly-populated entry (shared-cache hit).
+
+    Scenario:
+      1. REST query                     → miss, calls=1
+      2. 'update' ingest                → corpus_version changes, cache cleared
+      3. WS   same query (new version)  → miss, calls=2
+      4. REST same query (new version)  → HIT, calls=2
+    """
+    # Step 1: warm the cache under the initial corpus_version
+    await api.retrieve(
+        api.RetrievalRequest(query="version bump update parity", enable_rerank=False)
+    )
+    assert len(parity_harness.calls) == 1
+
+    # Step 2: 'update' ingest — generation bumped, cache cleared, version token changed
+    update_response = await api.add_documents(
+        api.DocumentIngestionRequest(
+            source_type="text",
+            content="replacement document for update test",
+            source_label="optb007-update",
+            ingest_type="update",
+        )
+    )
+    assert update_response.status == "success"
+
+    # Step 3: WS query under new corpus_version → cache MISS
+    ws_after_update = FakeWebSocket(
+        incoming_messages=[{"query": "version bump update parity", "enable_rerank": False}]
+    )
+    await api.websocket_chat(ws_after_update)
+    assert len(parity_harness.calls) == 2  # miss — new corpus_version key
+
+    ws_results = _assert_ws_results_message(ws_after_update)
+
+    # Step 4: REST under the same new corpus_version → HIT from what WS just stored
+    rest_response_after = await api.retrieve(
+        api.RetrievalRequest(query="version bump update parity", enable_rerank=False)
+    )
+    assert len(parity_harness.calls) == 2  # HIT — shared key with WS entry
+
+    assert rest_response_after.total_results == ws_results["total_results"]
+
+
+@pytest.mark.asyncio
+async def test_parity_ws_first_rest_second_shares_same_corpus_version_key(
+    parity_harness: FakeRetriever,
+) -> None:
+    """WS and REST share the same cache key under the same corpus_version.
+
+    WHY: Both transports call _shared_retrieve_documents which computes the cache key
+    using the module-level _corpus_version token.  Because that token is shared state,
+    both transports produce the same key for the same (query, rerank, config) tuple.
+    A WS query should populate the cache such that a subsequent identical REST query
+    is a hit — and vice versa.
+
+    Scenario:
+      WS   query → miss, retriever called once (calls=1)
+      REST same query → HIT (WS populated it), calls still 1
+    """
+    # Step 1: WS query goes in first — cold miss populates shared cache
+    ws = FakeWebSocket(
+        incoming_messages=[{"query": "ws rest share key", "enable_rerank": False}]
+    )
+    await api.websocket_chat(ws)
+    ws_results = _assert_ws_results_message(ws)
+    assert len(parity_harness.calls) == 1
+
+    # Step 2: REST identical query — must be a cache HIT (no additional retriever call)
+    rest_response = await api.retrieve(
+        api.RetrievalRequest(query="ws rest share key", enable_rerank=False)
+    )
+    assert len(parity_harness.calls) == 1  # HIT — retriever NOT called again
+
+    # Payloads must be equivalent (same cached results surfaced to both transports)
+    assert rest_response.total_results == ws_results["total_results"]
+    assert rest_response.results[0].id == ws_results["results"][0]["id"]

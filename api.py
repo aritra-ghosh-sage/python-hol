@@ -76,6 +76,12 @@ _retriever: Optional[HybridRetriever] = None
 _config: Optional[HybridRetrieverConfig] = None
 _cache: Optional[CacheBackend] = None
 _cache_generation: int = 0
+# Authoritative corpus version token for cache keying.
+# Derived from _cache_generation (explicit invalidation events) combined with the
+# live collection count (DB-grounded document count). This replaces the old approach
+# of using str(_cache_generation) directly, which was process-local and lost its
+# meaning after a restart.  See OPTB-007 for full rationale.
+_corpus_version: str = "0"
 
 
 # Pydantic models for request/response validation
@@ -253,6 +259,151 @@ class CacheStatsResponse(BaseModel):
     timestamp: datetime = Field(..., description="When stats were captured (UTC)")
 
 
+# ---------------------------------------------------------------------------
+# OPTB-008: Layered cache stats schema
+# WHY: The flat CacheStatsResponse mixes L1 counters, L2 embedding stats,
+# and backend health into a single level, making it hard for operators to
+# distinguish which cache layer is healthy/unhealthy.  The layered schema
+# separates concerns into three named sections so monitoring dashboards and
+# alerting rules can target the exact section that matters.
+# ---------------------------------------------------------------------------
+
+class L1QueryCacheStats(BaseModel):
+    """Statistics for the L1 query-response cache (ASGI middleware layer).
+
+    WHY 'corpus_version': The corpus version token controls cache key
+    namespacing.  Exposing it here lets operators quickly verify that
+    invalidation events (add/update ingest, config changes) have propagated
+    and that stale entries cannot be served under the new version.
+
+    Attributes:
+        backend: Backend identifier ('memory' or 'redis').
+        hits: Total cache hits since last reset.
+        misses: Total cache misses since last reset.
+        hit_rate: Fraction of accesses that were hits (0.0–1.0).
+        size: Current number of entries in the L1 cache.
+        max_size: Configured maximum capacity of the L1 cache.
+        ttl_seconds: Configured TTL for L1 entries.
+        corpus_version: The active corpus version token used in cache keys.
+
+    Example:
+        >>> l1 = L1QueryCacheStats(
+        ...     backend="memory", hits=500, misses=100, hit_rate=0.833,
+        ...     size=50, max_size=1000, ttl_seconds=600,
+        ...     corpus_version="gen2.n108"
+        ... )
+    """
+
+    backend: str = Field(..., description="Cache backend ('memory' or 'redis')")
+    hits: int = Field(..., ge=0, description="Total L1 cache hits")
+    misses: int = Field(..., ge=0, description="Total L1 cache misses")
+    hit_rate: float = Field(..., ge=0.0, le=1.0, description="L1 hit rate (0.0–1.0)")
+    size: int = Field(..., ge=0, description="Current L1 cache size in entries")
+    max_size: int = Field(..., ge=0, description="L1 maximum capacity")
+    ttl_seconds: int = Field(..., ge=0, description="L1 configured TTL in seconds")
+    corpus_version: str = Field(
+        ..., description="Active corpus version token controlling cache key namespace"
+    )
+
+
+class L2EmbeddingCacheStats(BaseModel):
+    """Statistics for the L2 embedding LRU cache (inside HybridRetriever).
+
+    WHY: L2 caches sentence-transformer embeddings to avoid redundant model
+    inference on repeated or similar queries.  Monitoring capacity vs. size
+    reveals when the LRU is evicting aggressively (cache too small).
+
+    Attributes:
+        hits: Total embedding cache hits since retriever init.
+        misses: Total embedding cache misses since retriever init.
+        hit_rate: Fraction of embedding lookups served from cache (0.0–1.0).
+        size: Number of embeddings currently held in the LRU.
+        capacity: Maximum number of embeddings the LRU can hold.
+
+    Example:
+        >>> l2 = L2EmbeddingCacheStats(
+        ...     hits=1200, misses=200, hit_rate=0.857, size=300, capacity=5000
+        ... )
+    """
+
+    hits: int = Field(..., ge=0, description="Total L2 embedding cache hits")
+    misses: int = Field(..., ge=0, description="Total L2 embedding cache misses")
+    hit_rate: float = Field(..., ge=0.0, le=1.0, description="L2 hit rate (0.0–1.0)")
+    size: int = Field(..., ge=0, description="Number of embeddings currently cached")
+    capacity: int = Field(..., ge=0, description="Maximum L2 LRU cache capacity")
+
+
+class BackendHealthStats(BaseModel):
+    """Connectivity and health report for the cache backend.
+
+    WHY: For Redis deployments, monitoring dashboards need to distinguish
+    between 'cache miss' (normal) and 'Redis unreachable, serving without
+    cache' (incident).  'fallback_active' provides this binary signal.
+    'latency_ms' lets SLO dashboards alert on degraded-but-connected Redis.
+
+    Attributes:
+        connected: True when the backend is currently reachable.
+        latency_ms: Round-trip ping latency in ms, or None for in-memory.
+        fallback_active: True when operating without the intended backend.
+        error: Last error string if unhealthy, else None.
+
+    Example:
+        >>> healthy = BackendHealthStats(
+        ...     connected=True, latency_ms=0.8, fallback_active=False, error=None
+        ... )
+        >>> degraded = BackendHealthStats(
+        ...     connected=False, latency_ms=None, fallback_active=True,
+        ...     error="Connection refused"
+        ... )
+    """
+
+    connected: bool = Field(..., description="True when backend is reachable")
+    latency_ms: Optional[float] = Field(
+        None, description="Ping round-trip latency in ms (None for in-memory backends)"
+    )
+    fallback_active: bool = Field(
+        ..., description="True when operating without the intended backend"
+    )
+    error: Optional[str] = Field(
+        None, description="Last error message if unhealthy, else None"
+    )
+
+
+class LayeredCacheStatsResponse(BaseModel):
+    """Layered cache statistics response with three distinct sections.
+
+    WHY (OPTB-008): The flat CacheStatsResponse collapses L1, L2, and health
+    info into one level, making it impossible to route specific alerts (e.g.
+    'L2 hit rate < 40%') without knowing which keys belong to which layer.
+    The layered schema gives consumers an unambiguous contract.
+
+    Attributes:
+        l1_query_cache: L1 query-response cache metrics + corpus_version.
+        l2_embedding_cache: L2 embedding LRU cache metrics from HybridRetriever.
+        backend_health: Redis/memory backend connectivity and latency.
+        timestamp: When these statistics were captured (UTC).
+
+    Example:
+        >>> response = LayeredCacheStatsResponse(
+        ...     l1_query_cache=L1QueryCacheStats(...),
+        ...     l2_embedding_cache=L2EmbeddingCacheStats(...),
+        ...     backend_health=BackendHealthStats(...),
+        ...     timestamp=datetime.now(timezone.utc),
+        ... )
+    """
+
+    l1_query_cache: L1QueryCacheStats = Field(
+        ..., description="L1 query-response cache statistics"
+    )
+    l2_embedding_cache: L2EmbeddingCacheStats = Field(
+        ..., description="L2 embedding LRU cache statistics from HybridRetriever"
+    )
+    backend_health: BackendHealthStats = Field(
+        ..., description="Cache backend connectivity and health"
+    )
+    timestamp: datetime = Field(..., description="When stats were captured (UTC)")
+
+
 class WsMessageBase(BaseModel):
     """Base model for WebSocket messages."""
 
@@ -303,7 +454,7 @@ def initialize_retriever() -> None:
         VectorDBError: If vector database initialization fails.
         Exception: If any other initialization step fails.
     """
-    global _retriever, _config
+    global _retriever, _config, _corpus_version
 
     try:
         logger.info("Initializing hybrid retriever...")
@@ -323,6 +474,12 @@ def initialize_retriever() -> None:
         # Create retriever
         _retriever = HybridRetriever(collection, _config)
         logger.info("✓ Hybrid retriever initialized successfully")
+
+        # Build the authoritative corpus_version token now that _retriever is live.
+        # This grounds the token in the actual collection count (DB-grounded)
+        # so it stays meaningful after process restarts with the same data.
+        _corpus_version = _build_corpus_version_token()
+        logger.info("Corpus version token initialized: %s", _corpus_version)
 
     except VectorDBError as e:
         logger.error(f"Vector DB initialization failed: {e}")
@@ -456,9 +613,69 @@ class LazyCache(CacheBackend):
                 "ttl_seconds": 0,
             }
 
+    def health(self) -> Dict[str, Any]:
+        """Proxy health() to the underlying cache backend.
+
+        WHY (OPTB-008): The get_cache_stats endpoint calls lazy_cache.health()
+        rather than _cache.health() directly so it benefits from the same
+        lazy-initialisation pattern already used for get/set/stats.  When no
+        backend is available this returns a degraded sentinel rather than
+        raising AttributeError.
+        """
+        if _cache is None:
+            # No backend — signal degraded state without raising.
+            return {
+                "connected": False,
+                "latency_ms": None,
+                "fallback_active": True,
+                "error": None,
+            }
+        try:
+            return _cache.health()
+        except Exception as exc:
+            logger.warning("Cache health check failed: %s", exc)
+            return {
+                "connected": False,
+                "latency_ms": None,
+                "fallback_active": True,
+                "error": str(exc),
+            }
+
 
 # Create lazy cache wrapper for middleware
 lazy_cache = LazyCache()
+
+
+def _build_corpus_version_token() -> str:
+    """Build an authoritative corpus version token combining generation counter with live collection count.
+
+    This replaces the direct process-local _cache_generation usage in cache key
+    composition. The token is sourced from the retriever's collection count (DB-grounded)
+    combined with the monotonic generation counter (explicit invalidation events).
+
+    By grounding the token in the actual collection count we get two desirable
+    properties:
+      1. Stability across equivalent states — two processes that load the same corpus
+         produce the same token, so a warm-restart does not flush a usable cache.
+      2. Automatic invalidation on ingest — every document addition changes the count,
+         so the token changes even without an explicit _cache_generation bump.
+
+    Returns:
+        A string token like "gen0.n42" that encodes both generation and corpus size.
+        Falls back to "gen{N}.n0" if the retriever/collection is unavailable, preserving
+        the consistent token format for reliable log parsing and key-space analysis.
+    """
+    if _retriever is not None:
+        try:
+            count = _retriever.collection.count()
+            return f"gen{_cache_generation}.n{count}"
+        except Exception as exc:
+            # Warning (not debug): failure to read collection count is a degraded state
+            # that may indicate a connectivity or attribute problem with the retriever.
+            logger.warning("Could not read collection count for corpus_version: %s", exc)
+    # Keep the same "gen{N}.n{count}" format even in the fallback so that log
+    # parsers and cache key analysis tooling never encounter an unexpected shape.
+    return f"gen{_cache_generation}.n0"
 
 
 def _shared_retrieve_documents(
@@ -494,7 +711,14 @@ def _shared_retrieve_documents(
         "query": normalized_query,
         "effective_enable_rerank": effective_enable_rerank,
         "config_fingerprint": config_fingerprint,
-        "corpus_version": str(_cache_generation),
+        # Use the authoritative corpus_version token instead of the raw
+        # process-local _cache_generation integer.  _corpus_version encodes both
+        # the explicit invalidation generation counter AND the live collection count,
+        # so the key changes on both config updates and corpus mutations.
+        # Note: for ingest_type='add' only the count dimension changes (generation
+        # is not bumped), making existing cached queries for untouched topics still
+        # valid while new queries see the grown corpus.
+        "corpus_version": _corpus_version,
     }
     cache_key = "shared-retrieve:" + hashlib.sha256(
         json.dumps(
@@ -801,7 +1025,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
             ...
         }
     """
-    global _config, _cache_generation
+    global _config, _cache_generation, _corpus_version
 
     if _config is None:
         logger.error("Retriever not initialized")
@@ -834,6 +1058,11 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
         # Clear cache to invalidate all L1 entries (ADR-006 - Fix for blocking issue #1)
         # This ensures the new configuration is used for subsequent queries
         _cache_generation += 1
+        # Rebuild the authoritative corpus_version token now that the generation
+        # counter has been bumped.  This propagates the config-change invalidation
+        # into every future cache key without needing to clear the store.
+        _corpus_version = _build_corpus_version_token()
+        logger.info("Corpus version updated after config change: %s", _corpus_version)
         if _cache is not None:
             try:
                 lazy_cache.clear()  # Use lazy_cache to defer to global _cache
@@ -876,93 +1105,183 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
 
 @app.get(
     "/cache/stats",
-    response_model=CacheStatsResponse,
+    response_model=LayeredCacheStatsResponse,
     tags=["Cache"],
-    summary="Get cache statistics",
+    summary="Get layered cache statistics",
 )
-async def get_cache_stats() -> CacheStatsResponse:
-    """Get cache statistics for monitoring and debugging.
+async def get_cache_stats() -> LayeredCacheStatsResponse:
+    """Get layered cache statistics for monitoring and debugging.
 
-    Returns detailed statistics about the cache backend including hit rate,
-    current size, and configuration. Implements fail-open principle: never fails,
-    always returns 200 with best-effort stats.
+    Returns a three-section response covering L1 query-response cache metrics,
+    L2 embedding LRU cache metrics, and backend connectivity health.
 
-    The endpoint is useful for:
-    - Monitoring cache performance (hit rate, hit/miss counts)
-    - Debugging cache behavior
-    - Verifying cache configuration (backend type, TTL, capacity)
-    - Tracking cache usage patterns
+    WHY layered schema (OPTB-008): The previous flat schema mixed L1 counters
+    with backend health, making it impossible to route specific alerts (e.g.
+    'only L2 is degraded').  The three-section layout gives consumers an
+    unambiguous contract and allows section-level alerting rules.
+
+    Implements fail-open principle: always returns HTTP 200, even when the
+    cache backend is unavailable, the retriever is not initialized, or an
+    unexpected exception is raised.  Degraded sections return zeroed values
+    and backend_health.fallback_active=True to signal the degraded state.
 
     Returns:
-        CacheStatsResponse with complete cache statistics.
-        If cache is not initialized or errors occur, returns zero stats.
+        LayeredCacheStatsResponse with l1_query_cache, l2_embedding_cache,
+        backend_health, and timestamp sections.
 
     Example:
         GET /cache/stats
         Response: {
-            "backend": "memory",
-            "hits": 1500,
-            "misses": 350,
-            "hit_rate": 0.811,
-            "size": 125,
-            "max_size": 10000,
-            "ttl_seconds": 3600,
-            "timestamp": "2026-04-20T14:30:45.123456"
+            "l1_query_cache": {
+                "backend": "memory",
+                "hits": 1500, "misses": 350, "hit_rate": 0.811,
+                "size": 125, "max_size": 10000, "ttl_seconds": 3600,
+                "corpus_version": "gen2.n108"
+            },
+            "l2_embedding_cache": {
+                "hits": 800, "misses": 200, "hit_rate": 0.800,
+                "size": 300, "capacity": 5000
+            },
+            "backend_health": {
+                "connected": true, "latency_ms": 0.8,
+                "fallback_active": false, "error": null
+            },
+            "timestamp": "2026-04-22T10:30:45.123456Z"
         }
     """
-    # Fix for blocking issue #2: Always return 200 with stats (fail-open principle)
+    # -----------------------------------------------------------------------
+    # Zero-value sentinels used when a section cannot be populated.
+    # Returning zeroes (not None) guarantees the schema shape is always valid
+    # and consumers never need null-checks on numeric fields.
+    # -----------------------------------------------------------------------
+    _zeroed_l1 = L1QueryCacheStats(
+        backend="none",
+        hits=0,
+        misses=0,
+        hit_rate=0.0,
+        size=0,
+        max_size=0,
+        ttl_seconds=0,
+        corpus_version=_corpus_version,
+    )
+    _zeroed_l2 = L2EmbeddingCacheStats(
+        hits=0, misses=0, hit_rate=0.0, size=0, capacity=0
+    )
+    _degraded_health = BackendHealthStats(
+        connected=False,
+        latency_ms=None,
+        fallback_active=True,
+        error=None,
+    )
+
     try:
+        # ------------------------------------------------------------------
+        # L1 section — sourced from the active cache backend.
+        # ------------------------------------------------------------------
         if _cache is None:
-            # Cache not initialized, return zero stats
-            return CacheStatsResponse(
-                backend="none",
-                hits=0,
-                misses=0,
-                hit_rate=0.0,
-                size=0,
-                max_size=0,
-                ttl_seconds=0,
-                timestamp=datetime.now(timezone.utc),
-            )
+            # Cache not yet initialised or was torn down after a backend error.
+            l1 = _zeroed_l1
+            backend_health = _degraded_health
+        else:
+            try:
+                raw = lazy_cache.stats()
+                hits = int(raw.get("hits", 0))
+                misses = int(raw.get("misses", 0))
+                total = hits + misses
+                hit_rate = (hits / total) if total > 0 else 0.0
 
-        # Get stats from cache
-        stats = lazy_cache.stats()
+                l1 = L1QueryCacheStats(
+                    backend=str(raw.get("backend", "unknown")),
+                    hits=hits,
+                    misses=misses,
+                    hit_rate=hit_rate,
+                    size=int(raw.get("size", 0) or 0),
+                    max_size=int(raw.get("max_size", 0) or 0),
+                    ttl_seconds=int(raw.get("ttl_seconds", 0) or 0),
+                    # corpus_version surfaces the active key-namespace token so
+                    # operators can verify invalidation events took effect.
+                    corpus_version=_corpus_version,
+                )
+                logger.debug(
+                    "L1 stats: backend=%s hits=%d misses=%d hit_rate=%.2f corpus_version=%s",
+                    l1.backend,
+                    l1.hits,
+                    l1.misses,
+                    l1.hit_rate,
+                    l1.corpus_version,
+                )
+            except Exception as l1_err:
+                # Fail-open for L1: return zeroes rather than propagating.
+                logger.warning("Failed to read L1 cache stats: %s", l1_err)
+                l1 = _zeroed_l1
 
-        # Calculate hit rate
-        hits = stats.get("hits", 0)
-        misses = stats.get("misses", 0)
-        total = hits + misses
-        hit_rate = (hits / total) if total > 0 else 0.0
+            # ----------------------------------------------------------------
+            # Backend health — uses the CacheBackend.health() method which
+            # performs a live Redis PING for RedisCache or returns an always-
+            # connected response for InMemoryCache.
+            # ----------------------------------------------------------------
+            try:
+                raw_health = lazy_cache.health()
+                backend_health = BackendHealthStats(
+                    connected=bool(raw_health.get("connected", False)),
+                    latency_ms=raw_health.get("latency_ms"),
+                    fallback_active=bool(raw_health.get("fallback_active", False)),
+                    error=raw_health.get("error"),
+                )
+            except Exception as health_err:
+                logger.warning("Failed to read backend health: %s", health_err)
+                backend_health = _degraded_health
 
-        logger.debug(
-            f"Cache stats retrieved: backend={stats.get('backend')}, "
-            f"hits={hits}, misses={misses}, hit_rate={hit_rate:.2%}"
-        )
+        # ------------------------------------------------------------------
+        # L2 section — sourced from the retriever's public embedding cache
+        # accessor.  Returns zeroes if the retriever is not yet initialised.
+        # ------------------------------------------------------------------
+        if _retriever is None:
+            l2 = _zeroed_l2
+        else:
+            try:
+                raw_l2 = _retriever.get_embedding_cache_stats()
+                l2_hits = int(raw_l2.get("hits", 0))
+                l2_misses = int(raw_l2.get("misses", 0))
+                l2_total = l2_hits + l2_misses
+                l2_hit_rate = (l2_hits / l2_total) if l2_total > 0 else 0.0
+                l2 = L2EmbeddingCacheStats(
+                    hits=l2_hits,
+                    misses=l2_misses,
+                    hit_rate=l2_hit_rate,
+                    size=int(raw_l2.get("size", 0)),
+                    capacity=int(raw_l2.get("capacity", 0)),
+                )
+                logger.debug(
+                    "L2 stats: hits=%d misses=%d hit_rate=%.2f size=%d/%d",
+                    l2.hits,
+                    l2.misses,
+                    l2.hit_rate,
+                    l2.size,
+                    l2.capacity,
+                )
+            except Exception as l2_err:
+                logger.warning("Failed to read L2 embedding cache stats: %s", l2_err)
+                l2 = _zeroed_l2
 
-        return CacheStatsResponse(
-            backend=stats.get("backend", "unknown"),
-            hits=hits,
-            misses=misses,
-            hit_rate=hit_rate,
-            size=stats.get("size", 0),
-            max_size=stats.get("max_size", 0),
-            ttl_seconds=stats.get("ttl_seconds", 0),
+        return LayeredCacheStatsResponse(
+            l1_query_cache=l1,
+            l2_embedding_cache=l2,
+            backend_health=backend_health,
             timestamp=datetime.now(timezone.utc),
         )
 
-    except Exception as e:
-        # Fail-open: always return 200 even on error
-        logger.warning(f"Error retrieving cache stats: {e}")
-        return CacheStatsResponse(
-            backend="error",
-            hits=0,
-            misses=0,
-            hit_rate=0.0,
-            size=0,
-            max_size=0,
-            ttl_seconds=0,
+    except Exception as outer_err:
+        # Outer fail-open guard: an unexpected error in the orchestration
+        # logic itself must never produce a 5xx response.
+        logger.warning("Unexpected error building cache stats response: %s", outer_err)
+        return LayeredCacheStatsResponse(
+            l1_query_cache=_zeroed_l1,
+            l2_embedding_cache=_zeroed_l2,
+            backend_health=_degraded_health,
             timestamp=datetime.now(timezone.utc),
         )
+
 
 
 # WebSocket endpoint for real-time chat
@@ -1089,7 +1408,7 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
     Raises:
         HTTPException: 400 on validation error, 503 if retriever not initialized, 500 on failure.
     """
-    global _cache_generation
+    global _cache_generation, _corpus_version
 
     if _retriever is None or _config is None:
         logger.error("Retriever not initialized")
@@ -1190,6 +1509,10 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
             # - 'add': Preserve cache for bulk additions
             if request.ingest_type == "update":
                 _cache_generation += 1
+                # Rebuild corpus_version token: generation bumped + collection count grew.
+                # Both dimensions change on 'update', guaranteeing a fully distinct token.
+                _corpus_version = _build_corpus_version_token()
+                logger.info("Corpus version updated after update ingest: %s", _corpus_version)
                 if _cache is not None:
                     try:
                         lazy_cache.clear()
@@ -1199,6 +1522,14 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                 else:
                     logger.debug("Ingest complete (type='update'); cache not initialized")
             else:  # ingest_type == 'add'
+                # 'add' does NOT bump the generation counter — cached results for
+                # queries that were answered before the add are still valid (the older
+                # documents haven't changed).  However, the collection count has grown,
+                # so we rebuild the token using the updated count dimension.  Queries
+                # issued after the add will see the new token → cache miss → retriever
+                # called with the full (now-larger) corpus.
+                _corpus_version = _build_corpus_version_token()
+                logger.info("Corpus version updated after add ingest: %s", _corpus_version)
                 logger.info(f"Ingest complete (type='add'); cache preserved")
 
             return DocumentIngestionResponse(
