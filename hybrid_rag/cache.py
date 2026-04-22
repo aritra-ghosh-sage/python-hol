@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import threading
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -186,6 +187,37 @@ class CacheBackend(ABC):
             {'backend': 'memory', 'size': 1, 'max_size': 10000, 'hits': 1, 'misses': 1}
         """
         pass
+
+    def health(self) -> Dict[str, Any]:
+        """Return backend connectivity and health information.
+
+        WHY (OPTB-008): The layered /cache/stats schema requires a
+        backend_health section covering: connected, latency_ms, fallback_active,
+        error.  This default implementation is appropriate for always-available
+        backends (e.g. InMemoryCache).  Backends with network hops (e.g.
+        RedisCache) override this method to perform a live connectivity check.
+
+        Returns:
+            Dict with keys:
+                - connected (bool): True when backend is reachable.
+                - latency_ms (float | None): Round-trip time in ms, or None
+                  if latency measurement is not applicable (e.g. in-memory).
+                - fallback_active (bool): True when operating without the
+                  intended backend (e.g. Redis down, serving from memory).
+                - error (str | None): Last error message, or None if healthy.
+
+        Example:
+            >>> cache = InMemoryCache()
+            >>> info = cache.health()
+            >>> assert info['connected'] is True
+        """
+        # Default: always-available backend, no network latency to measure.
+        return {
+            "connected": True,
+            "latency_ms": None,
+            "fallback_active": False,
+            "error": None,
+        }
 
 
 class InMemoryCache(CacheBackend):
@@ -568,3 +600,53 @@ class RedisCache(CacheBackend):
             "hits": self._hits,
             "misses": self._misses,
         }
+
+    def health(self) -> Dict[str, Any]:
+        """Return Redis connectivity and latency health information.
+
+        WHY (OPTB-008): Overrides the CacheBackend default to perform an
+        actual network round-trip (PING) so the layered /cache/stats endpoint
+        can report real Redis connectivity, latency, and fallback status.
+
+        Implements fail-open: any exception during the health check is caught,
+        logged, and reflected in the returned dict rather than propagated.
+
+        Returns:
+            Dict with keys:
+                - connected (bool): True when Redis PING succeeded.
+                - latency_ms (float | None): PING round-trip in milliseconds.
+                - fallback_active (bool): True when Redis is unreachable.
+                - error (str | None): Exception message on failure, else None.
+
+        Example:
+            >>> cache = RedisCache(redis_url="redis://localhost:6379")
+            >>> info = cache.health()
+            >>> print(info['connected'], info['latency_ms'])
+        """
+        if self._redis is None:
+            # Connection pool was never established — always fallback.
+            return {
+                "connected": False,
+                "latency_ms": None,
+                "fallback_active": True,
+                "error": "Redis connection not established",
+            }
+
+        try:
+            start = time.perf_counter()
+            self._redis.ping()
+            latency_ms = round((time.perf_counter() - start) * 1000, 3)
+            return {
+                "connected": True,
+                "latency_ms": latency_ms,
+                "fallback_active": False,
+                "error": None,
+            }
+        except Exception as exc:
+            logger.warning("Redis health check failed: %s", exc)
+            return {
+                "connected": False,
+                "latency_ms": None,
+                "fallback_active": True,
+                "error": str(exc),
+            }

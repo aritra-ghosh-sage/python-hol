@@ -208,6 +208,27 @@ class HybridRetriever:
             "hit_rate": hit_rate,
         }
 
+    def get_embedding_cache_stats(self) -> Dict[str, Any]:
+        """Public accessor for L2 embedding cache statistics.
+
+        WHY: The /cache/stats endpoint needs to populate the l2_embedding_cache
+        section of the layered stats schema (OPTB-008).  Exposing a public
+        method avoids reaching into private internals from outside the class
+        boundary.  The implementation delegates directly to the private helper
+        so there is a single source of truth.
+
+        Returns:
+            Dict with keys: hits, misses, size, capacity, hit_rate.
+            Same contract as _get_embedding_cache_stats().
+
+        Example:
+            >>> stats = retriever.get_embedding_cache_stats()
+            >>> print(f"L2 hit rate: {stats['hit_rate']:.2%}")
+        """
+        # Delegate to the private implementation — single source of truth for
+        # the stats computation logic.
+        return self._get_embedding_cache_stats()
+
     def _dedupe_by_source(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Remove duplicate documents from the same source URL.
 
