@@ -87,6 +87,19 @@ def cache_stats_baseline(app_with_cache: TestClient) -> Dict[str, Any]:
     return response.json()
 
 
+def _extract_l1_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the L1 stats object from layered or flat cache stats payloads.
+
+    The API migrated to a layered schema where L1 stats live under
+    `l1_query_cache`. Older tests and callers expected a flat schema.
+    This helper keeps tests resilient across both response shapes.
+    """
+    l1_stats = stats.get("l1_query_cache")
+    if isinstance(l1_stats, dict):
+        return l1_stats
+    return stats
+
+
 # ============================================================================
 # TEST SUITE 1: RESPONSE CACHING (L1)
 # ============================================================================
@@ -316,9 +329,10 @@ class TestL2EmbeddingCache:
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
+        l1_stats = _extract_l1_stats(stats)
         
         # Should have some activity
-        assert stats["hits"] + stats["misses"] > 0
+        assert l1_stats["hits"] + l1_stats["misses"] > 0
 
 
 # ============================================================================
@@ -482,9 +496,10 @@ class TestConcurrentLoad:
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
+        l1_stats = _extract_l1_stats(stats)
         
         # Should have hits (most requests should hit cache)
-        total_activity = stats["hits"] + stats["misses"]
+        total_activity = l1_stats["hits"] + l1_stats["misses"]
         assert total_activity > 0
 
     def test_concurrent_config_and_retrieve(self, app_with_cache: TestClient) -> None:
@@ -559,29 +574,30 @@ class TestCacheStats:
         
         assert response.status_code == 200
         stats = response.json()
+        l1_stats = _extract_l1_stats(stats)
         
-        # Verify all required fields
-        required_fields = ["backend", "hits", "misses", "hit_rate", 
-                          "size", "max_size", "ttl_seconds", "timestamp"]
-        for field in required_fields:
-            assert field in stats
+        # Verify top-level fields.
+        assert "timestamp" in stats
+        if "l1_query_cache" in stats:
+            assert "l2_embedding_cache" in stats
+            assert "backend_health" in stats
         
         # Verify types and ranges
-        assert isinstance(stats["backend"], str)
-        assert isinstance(stats["hits"], int)
-        assert isinstance(stats["misses"], int)
-        assert isinstance(stats["hit_rate"], (int, float))
-        assert isinstance(stats["size"], int)
-        assert isinstance(stats["max_size"], int)
-        assert isinstance(stats["ttl_seconds"], int)
+        assert isinstance(l1_stats["backend"], str)
+        assert isinstance(l1_stats["hits"], int)
+        assert isinstance(l1_stats["misses"], int)
+        assert isinstance(l1_stats["hit_rate"], (int, float))
+        assert isinstance(l1_stats["size"], int)
+        assert isinstance(l1_stats["max_size"], int)
+        assert isinstance(l1_stats["ttl_seconds"], int)
         
         # Verify ranges
-        assert stats["hits"] >= 0
-        assert stats["misses"] >= 0
-        assert 0.0 <= stats["hit_rate"] <= 1.0
-        assert stats["size"] >= 0
-        assert stats["max_size"] > 0
-        assert stats["ttl_seconds"] >= 0
+        assert l1_stats["hits"] >= 0
+        assert l1_stats["misses"] >= 0
+        assert 0.0 <= l1_stats["hit_rate"] <= 1.0
+        assert l1_stats["size"] >= 0
+        assert l1_stats["max_size"] > 0
+        assert l1_stats["ttl_seconds"] >= 0
 
     def test_cache_stats_accuracy(self, app_with_cache: TestClient) -> None:
         """Cache stats are accurate after known operations.
@@ -607,14 +623,15 @@ class TestCacheStats:
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
+        l1_stats = _extract_l1_stats(stats)
         
         # Should have activity
-        total = stats["hits"] + stats["misses"]
+        total = l1_stats["hits"] + l1_stats["misses"]
         assert total >= 5  # At least our 5 requests
         
         # Hit rate should be reasonable
         if total > 0:
-            assert 0.0 <= stats["hit_rate"] <= 1.0
+            assert 0.0 <= l1_stats["hit_rate"] <= 1.0
 
 
 # ============================================================================
