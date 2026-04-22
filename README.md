@@ -95,13 +95,13 @@ Each module has a single, well-defined responsibility:
 
 ## 🗄️ Caching Layer
 
-The hybrid RAG system implements a **3-layer distributed caching architecture** for optimal performance:
+The hybrid RAG system implements a **2-layer runtime caching architecture** for repeated-query performance:
 
 | Layer | Backend | TTL | Hit Rate | Purpose |
 |-------|---------|-----|----------|---------|
-| **L1** | FastAPI Middleware | Configurable | Variable | Cache full query responses |
-| **L2** | LRU (In-Retriever) | Configurable | ~60% on repeated queries | Cache embedding computations |
-| **L3** | Vector DB | Persistent | N/A | Base vector storage |
+| **L1** | Shared query cache | Configurable | Variable | Cache full retrieval results |
+| **L2** | LRU (In-Retriever) | Process lifetime | Variable | Cache embedding computations |
+| **Storage** | Vector DB | Persistent | N/A | Base document/vector storage |
 
 ### Quick Start: Enable Redis Caching
 ```bash
@@ -125,12 +125,38 @@ Set these environment variables to customize caching behavior:
 - `CACHE_MAX_SIZE`: Max entries in memory cache before eviction (default: 10000)
 
 ### For Production Deployments
-- See [docs/CACHE_DEPLOYMENT.md](./docs/CACHE_DEPLOYMENT.md) for advanced configuration
-- See [docs/CACHE_PERF_REPORT.md](./docs/CACHE_PERF_REPORT.md) for performance benchmarks
+- See [docs/CACHE_DEPLOYMENT.md](./docs/CACHE_DEPLOYMENT.md) for the current cache architecture and operations guide
 - Use Redis for distributed deployments and better reliability
-- Monitor cache stats endpoint for hit rates and optimization opportunities
+- Monitor the layered `/cache/stats` endpoint for L1/L2 cache behavior and backend health
 
-## 📊 Code Metrics
+## Documentation Guide
+
+**START HERE:** [docs/DOCUMENTATION_INDEX.md](./docs/DOCUMENTATION_INDEX.md) — Complete documentation map and quick navigation by role
+
+### Core Documentation
+- **[docs/LIBRARY_DESIGN.md](./docs/LIBRARY_DESIGN.md)** — Architecture and design of all library modules
+- **[docs/API_INTEGRATION.md](./docs/API_INTEGRATION.md)** — REST and WebSocket API specifications
+- **[docs/DEPLOYMENT_PRODUCTION.md](./docs/DEPLOYMENT_PRODUCTION.md)** — Production deployment guide
+- **[docs/MONITORING_OBSERVABILITY.md](./docs/MONITORING_OBSERVABILITY.md)** — Monitoring, alerting, and debugging
+- **[docs/SECURITY_COMPLIANCE.md](./docs/SECURITY_COMPLIANCE.md)** — Known vulnerabilities and remediation
+- **[docs/AUTHENTICATION_AUTHORIZATION.md](./docs/AUTHENTICATION_AUTHORIZATION.md)** — Authentication roadmap (v0.2)
+- **[frontend/README.md](./frontend/README.md)** — Next.js 16 frontend guide
+
+### Quick Start Guides
+- **Backend:** [docs/QUICK_START.md](./docs/QUICK_START.md) — Fast-track library usage
+- **Frontend:** [frontend/SETUP.md](./frontend/SETUP.md) — Frontend setup and development
+- **Deployment:** [docs/DEPLOYMENT_PRODUCTION.md#quick-start](./docs/DEPLOYMENT_PRODUCTION.md) — Production deployment steps
+
+### Plan Documents (Historical Reference)
+- **[docs/plan/README.md](./docs/plan/README.md)** — Plan archive index and reading order
+- **[docs/plan/20260420](./docs/plan/20260420)** — Design phase decisions and analysis
+- **[docs/plan/20260420-caching-blueprint](./docs/plan/20260420-caching-blueprint)** — Caching architecture analysis and blueprints
+
+**See [docs/DOCUMENTATION_INDEX.md](./docs/DOCUMENTATION_INDEX.md) for role-based navigation, then use [docs/plan/README.md](./docs/plan/README.md) for historical plan artifacts.**
+
+---
+
+## Code Metrics
 
 | Metric | Before | After |
 |--------|--------|-------|

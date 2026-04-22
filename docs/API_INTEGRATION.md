@@ -10,7 +10,7 @@ Hybrid RAG Retrieval Service, enabling frontend integration and third-party clie
 
 The Hybrid RAG Retrieval Service exposes a production-ready REST API (`api.py`) that wraps the core Python library with:
 - **REST endpoints** for retrieval, configuration, document management
-- **WebSocket support** for real-time chat and streaming responses
+- **WebSocket support** for real-time chat with status and results messages
 - **Request/response validation** using Pydantic models
 - **Comprehensive error handling** with meaningful HTTP status codes
 - **CORS support** configured via `CORS_ORIGINS` environment variable
@@ -73,7 +73,7 @@ curl -X GET http://localhost:8000/health
 
 **Endpoint:** `POST /retrieve`
 
-**Purpose:** Retrieve relevant documents using hybrid search (semantic + keyword). Results are automatically filtered by relevance score threshold (≥ 0.85).
+**Purpose:** Retrieve relevant documents using hybrid search (semantic + keyword). The current implementation filters results using a minimum score threshold of **0.80**.
 
 **Request Model:**
 ```typescript
@@ -141,10 +141,10 @@ curl -X POST http://localhost:8000/retrieve \
 
 **Endpoint:** `POST /retrieve-filtered?min_score=0.5`
 
-**Purpose:** Retrieve documents with custom minimum relevance score filtering. **Note:** The API enforces a floor of 0.85 for chat quality, so `min_score` is clamped to at least 0.85.
+**Purpose:** Retrieve documents with custom minimum relevance score filtering. **Note:** The API currently enforces a floor of **0.80**, so `min_score` is clamped to at least 0.80.
 
 **Query Parameters:**
-- `min_score` (optional, float): Minimum relevance score for filtering (0.0-1.0). Default: 0.5. Actual floor: 0.85.
+- `min_score` (optional, float): Minimum relevance score for filtering (0.0-1.0). Default: 0.5. Actual floor: 0.80.
 
 **Request Model:**
 ```typescript
@@ -377,7 +377,7 @@ curl -X POST http://localhost:8000/documents \
 
 ### 7. List Document Sources
 
-**Endpoint:** `GET /sources`
+**Endpoint:** `GET /documents/sources`
 
 **Purpose:** Retrieve a list of all document sources currently indexed with chunk counts.
 
@@ -397,7 +397,7 @@ curl -X POST http://localhost:8000/documents \
 
 **Example:**
 ```bash
-curl -X GET http://localhost:8000/sources
+curl -X GET http://localhost:8000/documents/sources
 ```
 
 **Response:**
@@ -692,24 +692,289 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8000
 
 ### Caching & Rate Limiting
 - The API currently does **not implement rate limiting**. For production deployments, consider:
-  - Redis-based caching for frequently repeated queries
+  - Redis-backed L1 query caching for repeated requests
   - Rate limiting middleware (e.g., `slowapi` for FastAPI)
-  - Query result caching with TTL
+  - Monitoring both L1 and L2 cache behavior through `/cache/stats`
 
 ### Score Thresholds
-- **Default chat threshold:** 0.85 (floor applied to ensure high-quality results)
-- **Configurable threshold:** `min_score` in `/retrieve-filtered` is clamped to 0.85 minimum
-- Results below threshold are filtered out to maintain chat quality
+- **Default retrieval threshold:** 0.80 in `/retrieve`
+- **Configurable threshold:** `min_score` in `/retrieve-filtered` is clamped to 0.80 minimum
+- Results below the effective threshold are filtered out before response serialization
 
 ### Configuration Updates
 - Configuration updates are **applied immediately** and affect subsequent queries
 - The API temporarily overrides reranking when `enable_rerank` is provided in the request
 - Changes persist until next update (configuration is mutable global state)
 
-### WebSocket Timeout
+### WebSocket Real-Time Chat: Full Protocol Documentation
+
+#### Connection Overview
+
+The WebSocket endpoint provides real-time bidirectional communication for document queries with a simple status-then-results flow.
+
+**URL Formats:**
+- Development: `ws://localhost:8000/ws/chat`
+- Production: `wss://your-domain.com/ws/chat` (TLS required)
+
+#### Message Types & Schemas
+
+All WebSocket messages are JSON objects with a required `type` field.
+
+##### Client → Server: Query Request
+
+```typescript
+{
+  type: "query";
+  query: string;                    // Search query (1-500 chars, REQUIRED)
+  enable_rerank?: boolean;          // Override config reranking (optional)
+}
+```
+
+**Validation:**
+- `query` is required and must be non-empty
+- `query` length must be 1-500 characters
+- Returns error if validation fails
+
+**Example:**
+```javascript
+ws.send(JSON.stringify({
+  type: "query",
+  query: "How do I share offline maps with others?",
+  enable_rerank: true
+}));
+```
+
+##### Server → Client: Status Update
+
+```typescript
+{
+  type: "status";
+  message: string;                  // Status message
+}
+```
+
+**Example:**
+```json
+{
+  "type": "status",
+  "message": "Retrieving documents..."
+}
+```
+
+##### Server → Client: Results (Success)
+
+```typescript
+{
+  type: "results";
+  query: string;                    // Original query echo
+  results: Array<{
+    id: string;                     // Document ID
+    text: string;                   // Document chunk text
+    source: string;                 // Source URL or label
+    score: number;                  // Relevance score (0-1 or negative after fusion)
+  }>;
+  total_results: number;            // Count of results returned
+}
+```
+
+**Score Interpretation:**
+- `score >= 0.80`: High confidence match under the default API threshold
+- `score 0.5-0.80`: Moderate match (may still be filtered out by endpoint thresholds)
+- Negative scores: possible after fusion, indicates keyword-heavy result
+
+**Example:**
+```json
+{
+  "type": "results",
+  "query": "offline maps",
+  "results": [
+    {
+      "id": "doc_001",
+      "text": "Offline maps can be downloaded directly from the Maps app by tapping...",
+      "source": "https://maps.google.com/help/offline",
+      "score": 0.96
+    }
+  ],
+  "total_results": 1
+}
+```
+
+##### Server → Client: Error
+
+```typescript
+{
+  type: "error";
+  message: string;                  // Error message
+  error_code?: string;              // Machine-readable code
+  details?: string;                 // Additional details
+  timestamp: string;                // ISO8601 timestamp
+}
+```
+
+**Common Error Codes:**
+- `VALIDATION_ERROR` - Input validation failed
+- `RETRIEVER_NOT_READY` - Service not initialized
+- `RETRIEVAL_FAILED` - Hybrid search error
+- `RERANKING_FAILED` - Cross-encoder error
+- `INVALID_MESSAGE` - Malformed message
+
+**Example:**
+```json
+{
+  "type": "error",
+  "message": "Query must be between 1 and 500 characters",
+  "error_code": "VALIDATION_ERROR",
+  "timestamp": "2026-04-22T15:30:45Z"
+}
+```
+
+#### Complete Message Flow
+
+1. Client connects: `new WebSocket('ws://localhost:8000/ws/chat')`
+2. Client sends: `query` message
+3. Server sends: one `status` message
+4. Server sends: `results` (success) OR `error` (failure)
+5. Connection remains open for next query
+6. Repeat steps 2-5, OR client calls `ws.close()`
+
+#### Cross-Channel Consistency
+
+**Configuration Awareness:**
+- WebSocket queries use the **current configuration** at time of retrieval
+- If config changes via `PUT /config` while a query is in-flight, that query uses **old config**
+- Next WebSocket query uses the **updated config**
+- Configuration changes apply immediately to all channels (REST + WebSocket)
+
+**Retriever Status:**
+- If retriever is uninitialized, WebSocket connections remain open
+- New query messages receive error: `RETRIEVER_NOT_READY`
+- Connection recovers automatically after retriever re-initializes
+- No automatic client reconnection needed
+
+#### Client Implementation Examples
+
+**Vanilla JavaScript:**
+```javascript
+const ws = new WebSocket('ws://localhost:8000/ws/chat');
+
+ws.onopen = () => console.log('Connected');
+
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  
+  if (msg.type === 'status') {
+    console.log('Status:', msg.message);
+  } else if (msg.type === 'results') {
+    console.log('Results:', msg.results);
+  } else if (msg.type === 'error') {
+    console.error('Error:', msg.message);
+  }
+};
+
+ws.onerror = (error) => console.error('WebSocket error:', error);
+ws.onclose = () => console.log('Disconnected');
+
+// Send a query
+ws.send(JSON.stringify({
+  type: 'query',
+  query: 'How do offline maps work?',
+  enable_rerank: true
+}));
+```
+
+**React Hooks:**
+```typescript
+import { useEffect, useRef, useState } from 'react';
+
+export function useHybridRAG(wsUrl: string) {
+  const [status, setStatus] = useState<string>('');
+  const [results, setResults] = useState<any[]>([]);
+  const [error, setError] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(false);
+  const ws = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    ws.current = new WebSocket(wsUrl);
+    ws.current.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'status') setStatus(msg.message);
+      else if (msg.type === 'results') {
+        setResults(msg.results);
+        setIsLoading(false);
+      } else if (msg.type === 'error') {
+        setError(msg.message);
+        setIsLoading(false);
+      }
+    };
+    
+    return () => ws.current?.close();
+  }, [wsUrl]);
+
+  const query = (queryText: string) => {
+    setIsLoading(true);
+    setResults([]);
+    ws.current?.send(JSON.stringify({
+      type: 'query',
+      query: queryText
+    }));
+  };
+
+  return { query, results, status, error, isLoading };
+}
+```
+
+#### Connection Management
+
+**Heartbeat (Keep-Alive):**
+WebSocket connections may be closed by proxies after inactivity. Implement client-side heartbeat:
+
+```javascript
+const heartbeatInterval = setInterval(() => {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({type: 'ping'}));  // Light keep-alive
+  }
+}, 30000);  // Every 30 seconds
+```
+
+**Automatic Reconnection:**
+```javascript
+async function connectWithRetry(url, maxAttempts = 3) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const ws = new WebSocket(url);
+      await new Promise((resolve, reject) => {
+        ws.onopen = resolve;
+        ws.onerror = reject;
+      });
+      return ws;
+    } catch (error) {
+      if (attempt === maxAttempts) throw error;
+      // Exponential backoff: 1s, 2s, 4s
+      await new Promise(r => setTimeout(r, Math.pow(2, attempt - 1) * 1000));
+    }
+  }
+}
+```
+
+#### Validation & Constraints
+
+**Server-side validation:**
+- `query` is required in each message
+- `query` length: 1-500 characters
+- Retriever must be initialized
+- One query at a time per connection
+
+**Client-side best practices:**
+- Validate query before sending
+- Handle all message types: `status`, `results`, `error`
+- Implement exponential backoff for reconnection
+- Set timeout (e.g., 30s) for retrieval completion
+- Echo query in UI for user confirmation
+
+### WebSocket Timeout & Connection Management
 - No automatic connection timeout configured. For production:
-  - Implement heartbeat mechanism
-  - Set client-side reconnection logic
+  - Implement heartbeat mechanism (see above)
+  - Set client-side reconnection logic (see above)
   - Monitor connection state in frontend
 
 ---

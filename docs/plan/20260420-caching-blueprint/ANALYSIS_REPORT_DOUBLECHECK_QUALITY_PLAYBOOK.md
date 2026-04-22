@@ -408,9 +408,9 @@ All 6 artifacts generated and validated:
    - [ ] Circuit breaker integration
 
 10. **Performance Benchmarking** (2 hours)
-    - [ ] Measure L1 hit latency (target: < 5ms)
-    - [ ] Measure hit rate under load
-    - [ ] Document results in `CACHE_PERF_REPORT.md`
+   - [ ] Measure L1 hit latency (target: < 5ms)
+   - [ ] Measure hit rate under load
+   - [ ] Document results in `docs/CACHE_DEPLOYMENT.md` and index in `docs/DOCUMENTATION_INDEX.md`
 
 ---
 

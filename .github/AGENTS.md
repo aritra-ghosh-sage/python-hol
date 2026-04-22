@@ -78,22 +78,22 @@ The project includes custom AI agents in `.github/agents/` for specialized devel
 | [README.md](../README.md#-caching-layer) | Caching overview and quick start | All users |
 | [docs/QUICK_START.md](../docs/QUICK_START.md#configuring-cache) | Cache configuration tutorial | New users |
 | [docs/CACHE_DEPLOYMENT.md](../docs/CACHE_DEPLOYMENT.md) | Advanced production setup | DevOps/SRE |
-| [docs/CACHE_PERF_REPORT.md](../docs/CACHE_PERF_REPORT.md) | Performance benchmarks | Architecture |
+| [docs/CACHE_DEPLOYMENT.md](../docs/CACHE_DEPLOYMENT.md) | Cache architecture and operations | Architecture |
 
 ### Architecture Layers
 
-The system implements a 3-layer caching architecture:
+The system implements a 2-layer runtime caching architecture:
 
 ```
-L1: Response Cache (FastAPI Middleware)
-    ↓ Intercepts POST /retrieve
-    ↓ Caches full query responses
+L1: Shared Query Cache
+  ↓ Backed by CacheBackend
+  ↓ Used by middleware and shared retrieval flow
 
 L2: Embedding Cache (LRU in HybridRetriever)
     ↓ Caches embedding computations
-    ↓ ~60% hit rate on repeated queries
+  ↓ Speeds up repeated encoder calls
 
-L3: Vector Storage (ChromaDB)
+Storage: Vector Storage (ChromaDB)
     ↓ Persistent document vector store
 ```
 
@@ -212,7 +212,7 @@ watch -n 5 'curl -s http://localhost:8000/cache/stats | jq'
 
 - **Hybrid RAG Architecture**: See [docs/LIBRARY_DESIGN.md](../docs/LIBRARY_DESIGN.md)
 - **API Integration**: See [docs/API_INTEGRATION.md](../docs/API_INTEGRATION.md)
-- **Performance Analysis**: See [docs/CACHE_PERF_REPORT.md](../docs/CACHE_PERF_REPORT.md)
+- **Cache Operations**: See [docs/CACHE_DEPLOYMENT.md](../docs/CACHE_DEPLOYMENT.md)
 - **Security**: Check `.github/instructions/security-and-owasp.instructions.md`
 
 ## Contributing

@@ -8,7 +8,7 @@
 
 ### Documentation in scope
 - `docs/CACHE_DEPLOYMENT.md`
-- `docs/CACHE_PERF_REPORT.md`
+- `docs/DOCUMENTATION_INDEX.md`
 - `docs/plan/20260420/notes.md`
 - `docs/plan/20260420/cache-gap-plan.yaml`
 
@@ -49,7 +49,7 @@ Previously blocking findings **F-1, F-2, F-3 are resolved**. One new/remaining d
 | Request-local rerank override (no global mutation) | PASS | `api.py` computes `effective_enable_rerank` without mutating global config; parity tests in `tests/test_api_shared_retrieval.py` validate isolation. |
 | `PUT /config` invalidation semantics documented with generation bump | PASS | `docs/plan/20260420/notes.md` includes `_cache_generation` increment; `api.py` increments `_cache_generation` and clears cache in `update_config`. |
 | Plan completion status consistency | PASS | `docs/plan/20260420/cache-gap-plan.yaml` marks parity tasks and overall plan status as completed. |
-| Duplicate appendix block in perf report | RESOLVED | `docs/CACHE_PERF_REPORT.md` now has a single Wave 2-3 annotated suite-composition block. |
+| Duplicate appendix block in perf report | RESOLVED | Former performance-report content was superseded and consolidated into active docs. |
 
 ---
 

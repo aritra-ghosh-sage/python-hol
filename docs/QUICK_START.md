@@ -153,103 +153,73 @@ config = HybridRetrieverConfig(
 
 ## Configuring Cache
 
-The system includes automatic multi-layer caching for improved performance on repeated queries. No configuration is required—caching works out-of-the-box with sensible defaults.
+The current implementation uses **two runtime cache layers**:
 
-### Out-of-the-Box Caching
+- **L1 query cache** for full retrieval results
+- **L2 embedding cache** inside `HybridRetriever`
 
-By default, the system uses in-process TTL caching:
-- **Cache Backend**: Memory (development-friendly)
-- **TTL**: 3600 seconds (1 hour)
-- **Max Size**: 10000 entries with automatic LRU eviction
+No separate L3 cache is implemented.
 
-### Environment Variables
+### Defaults
 
-To customize caching behavior, set these environment variables in `.env.local`:
+Development uses an in-memory backend by default:
 
 ```bash
-# Use in-memory cache (default, good for development)
 CACHE_BACKEND=memory
 CACHE_TTL_SECONDS=3600
 CACHE_MAX_SIZE=10000
+```
 
-# Or use Redis for production deployments
+For Redis-backed deployments:
+
+```bash
 CACHE_BACKEND=redis
 REDIS_URL=redis://localhost:6379
 CACHE_TTL_SECONDS=1800
 CACHE_KEY_PREFIX=hybrid_rag_cache:
 ```
 
-See `.env.local.example` for all available cache configuration options.
+### Check Cache Health
 
-### Monitoring Cache Performance
-
-Check cache statistics to understand hit rates and optimize performance:
+`GET /cache/stats` returns a layered response:
 
 ```bash
-# Get cache statistics
-curl http://localhost:8000/cache/stats
+curl http://localhost:8000/cache/stats | jq .
 ```
 
-Response includes:
-- `hits`: Total cache hits
-- `misses`: Total cache misses  
-- `hit_rate`: Calculated as hits/(hits+misses)
-- `size`: Current number of cached entries
-- `backend`: Which cache backend is active
-
-Example response:
 ```json
 {
-  "backend": "memory",
-  "hits": 1500,
-  "misses": 350,
-  "hit_rate": 0.811,
-  "size": 125,
-  "max_size": 10000,
-  "ttl_seconds": 3600,
-  "timestamp": "2026-04-20T10:30:45Z"
+  "l1_query_cache": {
+    "backend": "memory",
+    "hits": 0,
+    "misses": 0,
+    "hit_rate": 0.0,
+    "size": 0,
+    "max_size": 10000,
+    "ttl_seconds": 3600,
+    "corpus_version": "gen0.n0"
+  },
+  "l2_embedding_cache": {
+    "hits": 0,
+    "misses": 0,
+    "hit_rate": 0.0,
+    "size": 0,
+    "capacity": 5000
+  },
+  "backend_health": {
+    "connected": true,
+    "latency_ms": null,
+    "fallback_active": false,
+    "error": null
+  }
 }
 ```
 
-### Bulk Document Ingestion
+### Cache Invalidation Rules
 
-When ingesting many documents, preserve the cache to avoid invalidation:
-
-```bash
-# Preserve cache (recommended for bulk adds)
-curl -X POST http://localhost:8000/documents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ingest_type": "add",
-    "source_type": "text",
-    "content": "Your document content here...",
-    "source_label": "bulk_import_1"
-  }'
-
-# Clear cache (for config changes - default behavior)
-curl -X POST http://localhost:8000/config \
-  -H "Content-Type: application/json" \
-  -d '{"semantic_weight": 0.8, "keyword_weight": 0.2}'
-```
-
-The `ingest_type` parameter controls cache behavior:
-- `"add"`: Preserve existing cache for incremental document additions
-- `"update"`: Clear cache after ingestion (default, ensures accuracy after bulk updates)
-
-### Clearing Cache
-
-Cache is automatically invalidated when configuration changes:
-
-```bash
-# Update configuration - cache automatically cleared
-curl -X PUT http://localhost:8000/config \
-  -H "Content-Type: application/json" \
-  -d '{
-    "semantic_weight": 0.8,
-    "keyword_weight": 0.2,
-    "enable_rerank": false
-  }'
-```
+- `PUT /config` clears the L1 cache
+- `POST /documents` with `ingest_type="update"` clears the L1 cache
+- `POST /documents` with `ingest_type="add"` preserves existing L1 entries
 
 ### Advanced: Production Redis Setup
 
@@ -282,7 +252,7 @@ For production deployments with multiple instances:
    redis-cli INFO stats
    ```
 
-For detailed production configuration, see [docs/CACHE_DEPLOYMENT.md](../docs/CACHE_DEPLOYMENT.md).
+For detailed production configuration, see [CACHE_DEPLOYMENT.md](./CACHE_DEPLOYMENT.md).
 
 ## Error Handling
 

@@ -30,7 +30,7 @@ python-hol/                          # Monorepo root
 │   ├── src/components/              # Feature-based components
 │   ├── src/hooks/                   # Custom React hooks
 │   ├── src/lib/                     # Utilities & API integrations
-│   ├── public/                      # Static assets & PWA service worker
+│   ├── public/                      # Static assets
 │   ├── AGENTS.md                    # Next.js 16 breaking changes guide
 │   ├── CLAUDE.md                    # Claude-specific guidance
 │   ├── SETUP.md                     # Frontend setup guide
@@ -184,12 +184,10 @@ const response = await api.post<APIResponse>("/retrieve", query);
 - Use TypeScript generics for API responses
 - Validate responses at API boundary
 
-**PWA & Offline Support**
-- Serwist-based service worker for PWA capabilities
-- Offline-first architecture with background sync
+**Frontend Runtime**
 - Real-time WebSocket connections available for chat
 - See `src/lib/ws.ts` for WebSocket utilities
-- Static assets cached with Serwist for offline access
+- Static assets are served through standard Next.js handling
 
 ## ⚙️ Build & Development Commands
 
@@ -258,7 +256,6 @@ pnpm lint
 - `zustand@5.0.12` (state management)
 - `zod@4.3.6` (schema validation)
 - `lucide-react@1.8.0` (icons)
-- `@serwist/*@9.5.7` (PWA & service worker support)
 
 ## ⚠️ Known Issues & Workarounds
 
@@ -283,11 +280,8 @@ ef = embedding_functions.SentenceTransformerEmbeddingFunction(
 - Check `node_modules/next/dist/docs/` for current API patterns
 - Heed all deprecation notices before writing code
 
-### 3. Serwist PWA Service Worker
-**Note:** Frontend uses Serwist for PWA support. Be mindful of cache invalidation when updating APIs.
-- Configuration in `next.config.ts`
-- Service worker code in `public/sw.ts`
-- See [@serwist/next documentation](https://serwist.sleep.sh/) for PWA patterns
+### 3. Frontend Runtime Notes
+**Note:** The frontend uses standard Next.js runtime behavior with no offline-install subsystem enabled. Do not add that subsystem back unless explicitly scoped.
 
 ### 4. AI Agent Infrastructure
 **Note:** Project includes custom AI agents in `.github/agents/` for development assistance. See `.github/agents/` for available agents and `.github/skills/` for reusable skill modules.
@@ -355,7 +349,6 @@ See `.github/agents/` for full agent specifications.
 - **Python:** Enable DEBUG logging: `logging.basicConfig(level=logging.DEBUG)`
 - **Frontend:** Check browser console and Network tab for API calls; use `frontend/AGENTS.md` for Next.js 16 debugging
 - **API Connection:** Verify FastAPI running and CORS configured in `api.py`
-- **PWA:** Clear browser cache and service workers if encountering stale content; check IndexedDB in DevTools
 
 ## 🔐 Code Review Checklist
 
