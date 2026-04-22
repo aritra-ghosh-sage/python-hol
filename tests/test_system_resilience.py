@@ -8,10 +8,10 @@ GH-009 acceptance criteria (verbatim from PRODUCT_PRD.md §10.9):
 
 Design intent:
   These tests are written BEFORE any implementation change (Red → Green workflow).
-  They prove that the fail-open principle holds across all three request surfaces:
+  They prove that the fail-open principle holds across the REST request surfaces
+  covered in this file:
     - POST /retrieve  (REST)
     - GET /cache/stats (observability)
-    - WebSocket /ws/chat (real-time)
 
 Test doubles:
   All tests use monkeypatch + lightweight fakes rather than heavy mocks.
