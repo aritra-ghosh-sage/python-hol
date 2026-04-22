@@ -340,6 +340,32 @@ class TestRedisCache:
         call_args = str(mock_conn.setex.call_args)
         assert "app:key1" in call_args
 
+    def test_direct_constructor_rejects_non_tls_in_production(
+        self, mock_redis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct RedisCache() init rejects redis:// URL in production (SEC-004)."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(ValueError, match="rediss://"):
+            RedisCache(redis_url="redis://localhost:6379")
+
+    def test_direct_constructor_rejects_tls_without_auth_in_production(
+        self, mock_redis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct RedisCache() init rejects rediss:// without password in production (SEC-004)."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(ValueError, match="password"):
+            RedisCache(redis_url="rediss://prod-cache.internal:6380")
+
+    def test_direct_constructor_allows_non_production_local_redis(
+        self, mock_redis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct RedisCache() init allows redis:// in non-production (backward compat)."""
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        mock_redis_class, mock_conn = mock_redis
+        # Should NOT raise
+        cache = RedisCache(redis_url="redis://localhost:6379")
+        assert cache is not None
+
 
 class TestRedisCacheProductionGuardrails:
     """SEC-004: Direct RedisCache constructor enforces production security policy."""

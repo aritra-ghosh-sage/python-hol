@@ -396,9 +396,11 @@ class RedisCache(CacheBackend):
         if ttl_seconds < 0:
             raise ValueError(f"ttl_seconds must be non-negative, got {ttl_seconds}")
 
-        # Production-only guardrail: enforce secure transport and authentication.
-        # This mirrors the policy already applied at the CacheSettings config layer
-        # and closes the SEC-004 direct-init gap.
+        # SEC-004 defense-in-depth: enforce production TLS/auth at the constructor
+        # level so that direct RedisCache() calls — not just config-layer creation —
+        # are subject to the same security policy. Only ENVIRONMENT=production
+        # triggers strict validation; all other values remain permissive so that
+        # local dev and CI can use redis://localhost without friction.
         environment = os.getenv("ENVIRONMENT", "").strip().lower()
         if environment == "production":
             parsed = urlparse(redis_url)
