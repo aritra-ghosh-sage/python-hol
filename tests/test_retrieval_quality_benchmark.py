@@ -282,13 +282,14 @@ def _run_warm_cold_benchmark(
 def benchmark_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """Provide a TestClient wired with a slow fake retriever and fresh cache.
 
-    WHY slow fake (10 ms latency): we need a measurable difference between
-    a cache miss (10 ms simulated latency) and a cache hit (<1 ms in-memory).
-    This makes the speedup ratio meaningful even in unit-test context.
+    WHY slow fake (50 ms latency): we need a measurable difference between
+    a cache miss (50 ms simulated latency) and a cache hit (<1 ms in-memory).
+    This keeps the speedup ratio meaningful and more stable on slower CI
+    machines where TestClient and middleware overhead can dominate tiny delays.
     """
     # Fresh cache so hit/miss counters start at zero for each test
     cache = InMemoryCache(ttl_seconds=3600, max_size=10000)
-    retriever = _FakeRetrieverWithLatency(latency_seconds=0.01)  # 10 ms cold
+    retriever = _FakeRetrieverWithLatency(latency_seconds=0.05)  # 50 ms cold
     config = HybridRetrieverConfig(semantic_weight=0.7, keyword_weight=0.3)
 
     monkeypatch.setattr(api, "_cache", cache)
