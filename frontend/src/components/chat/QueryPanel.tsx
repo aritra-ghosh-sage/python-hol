@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect } from "react";
+import { Trash2 } from "lucide-react";
 import { useChat } from "@/hooks/useChat";
 import { getWSClient } from "@/lib/ws";
 import { ChatWindow } from "./ChatWindow";
 import { ChatInput } from "./ChatInput";
 
 export function QueryPanel() {
-  const { messages, sendQuery, isConnected, connectionState } = useChat();
+  const { messages, sendQuery, clearHistory, isConnected, connectionState } = useChat();
 
   // Register debug function (dev mode only)
   useEffect(() => {
@@ -31,19 +32,34 @@ export function QueryPanel() {
   return (
     <div className="flex flex-col h-full">
       {/* Connection Status Bar */}
-      <div className="flex items-center gap-2 px-6 py-3 border-b border-gray-700 bg-gray-800/50">
-        <div
-          className={`w-2 h-2 rounded-full ${
-            isConnected ? "bg-green-500" : "bg-red-500"
-          }`}
-        ></div>
-        <span className="text-sm text-gray-400">
-          {connectionState === "connecting"
-            ? "Connecting..."
-            : isConnected
-              ? "Connected"
-              : "Disconnected"}
-        </span>
+      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-700 bg-gray-800/50">
+        <div className="flex items-center gap-2">
+          <div
+            className={`w-2 h-2 rounded-full ${
+              isConnected ? "bg-green-500" : "bg-red-500"
+            }`}
+          ></div>
+          <span className="text-sm text-gray-400">
+            {connectionState === "connecting"
+              ? "Connecting..."
+              : isConnected
+                ? "Connected"
+                : "Disconnected"}
+          </span>
+        </div>
+
+        {/* WHY: clearHistory() clears both in-memory and localStorage state
+            to prevent restored messages on reload. Button is disabled when
+            history is empty. */}
+        <button
+          onClick={clearHistory}
+          disabled={messages.length === 0}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-red-400 hover:bg-gray-700/50 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Clear chat history"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span>Clear history</span>
+        </button>
       </div>
 
       {/* Chat Area */}
