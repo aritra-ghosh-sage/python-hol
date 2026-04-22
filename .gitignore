@@ -16,3 +16,6 @@ wheels/
 *.bin
 implementation_docs/*.md
 
+# ChromaDB persistent storage (development artefact — too large for git)
+ai_support_kb/
+
