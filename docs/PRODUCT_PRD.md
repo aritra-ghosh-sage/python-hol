@@ -15,8 +15,6 @@ The product serves two connected use cases. First, it gives application develope
 
 This PRD defines the product-level requirements for the overall platform, including the library, API, and frontend experience. It treats the current repository state as the baseline and formalizes the target product behavior needed to make the platform reliable, secure, observable, and easier to adopt.
 
-For release planning, v0.1 is explicitly scoped to internal and trusted-team use only. Authentication and authorization for write and administrative operations are deferred to v0.2, which is the first release intended for broader production exposure.
-
 ## 2. Goals
 
 ### 2.1 Business goals
@@ -61,9 +59,7 @@ For release planning, v0.1 is explicitly scoped to internal and trusted-team use
 - **End user**: Submits natural-language questions through the web UI or an integrated client and expects grounded, relevant, and fast answers.
 - **Platform administrator**: Configures deployment settings, cache backends, CORS, runtime dependencies, and operational monitoring.
 
-### 3.3 Planned access model
-
-Role definitions below describe the target authorization model for v0.2 and later. They are not implemented in v0.1.
+### 3.3 Role-based access
 
 - **End user**: Can submit queries and view returned results with sources.
 - **Knowledge operator**: Can ingest sources, review source lists, and manage non-destructive content updates.
@@ -117,8 +113,7 @@ Role definitions below describe the target authorization model for v0.2 and late
   - The platform must provide health checks and readiness indicators.
   - The platform must log operational events and failures with enough context for debugging.
   - The system must support environment-driven configuration for runtime deployment.
-  - The product must restrict v0.1 deployments to internal, trusted environments until authentication and authorization are implemented.
-  - The product must introduce authentication and authorization for administrative and write operations before public or multi-tenant production rollout.
+  - The product must introduce authentication and authorization for administrative and write operations before production rollout.
   - The platform must define guardrails for file ingestion, request size, and unsafe content handling.
 
 ## 5. User experience
@@ -129,7 +124,7 @@ Role definitions below describe the target authorization model for v0.2 and late
 - An operator can start the API and web app locally, verify service health, and begin querying immediately.
 - A first-time user lands on the query panel by default and can ask a question without prior configuration changes.
 - A knowledge operator can switch to the data panel to add content, then return to the query panel to validate retrieval quality.
-- In v0.1, a trusted internal operator can open settings to tune retrieval weights, reranking, and top-k behavior while watching system health.
+- An administrator can open settings to tune retrieval weights, reranking, and top-k behavior while watching system health.
 
 ### 5.2 Core experience
 
@@ -141,7 +136,7 @@ Role definitions below describe the target authorization model for v0.2 and late
 
   - This ensures a positive experience by closing the loop between knowledge management and retrieval quality.
 
-- **Tune retrieval behavior**: A trusted internal operator adjusts retrieval parameters and sees the effect through repeated test queries.
+- **Tune retrieval behavior**: The administrator adjusts retrieval parameters and sees the effect through repeated test queries.
 
   - This ensures a positive experience by making optimization accessible without code edits or redeployments.
 
@@ -164,7 +159,7 @@ Role definitions below describe the target authorization model for v0.2 and late
 - Real-time chat-style updates over WebSocket for a more immediate retrieval experience.
 - Visible service and connection status indicators.
 - Fast feedback through loaders, toasts, and immediate validation.
-- Responsive frontend architecture for desktop and mobile usage.
+- PWA-ready frontend architecture for installability and resilience.
 
 ## 6. Narrative
 
@@ -209,8 +204,7 @@ Python HOL lets a team go from raw knowledge sources to a usable retrieval exper
 - Retrieved and ingested content may contain internal or proprietary knowledge and must be treated as sensitive by default.
 - The platform must preserve source metadata for auditability and trust.
 - Production deployments must define retention and deletion expectations for vectorized content and cache entries.
-- Administrative and ingestion actions should be authenticated and attributable before public production use.
-- Until that work lands, v0.1 deployments must remain internal-only and limited to trusted operators.
+- Administrative and ingestion actions should be authenticated and attributable before production use.
 - Logs must avoid storing secrets or unnecessarily storing raw sensitive document content.
 
 ### 8.3 Scalability & performance
@@ -335,16 +329,16 @@ Python HOL lets a team go from raw knowledge sources to a usable retrieval exper
   - Cache backend failures do not prevent successful retrieval.
   - Operational logs capture retrieval and ingestion failures with useful context.
 
-### 10.8 Protect write and admin operations for public release
+### 10.8 Protect write and admin operations
 
 - **ID**: GH-008
-- **Description**: As a platform owner, I want v0.1 clearly constrained to internal-only use and v0.2 to add authenticated and authorized access for ingestion and configuration operations so that the platform is safe to run in broader production environments.
+- **Description**: As a platform administrator, I want authenticated and authorized access for ingestion and configuration operations so that the platform is safe to run in production.
 - **Acceptance criteria**:
 
-  - v0.1 documentation explicitly states the product is for internal and trusted-team use only.
-  - Public or multi-tenant deployment is blocked until authentication and authorization are implemented.
-  - v0.2 introduces authenticated access for administrative and write endpoints.
-  - v0.2 role checks distinguish query-only access from operator and admin access.
+  - Administrative and write endpoints require authenticated access.
+  - Role checks distinguish query-only access from operator and admin access.
+  - Unauthorized requests receive appropriate error responses.
+  - Security-sensitive actions are logged without exposing secrets.
 
 ### 10.9 Preserve system responsiveness during cache or dependency issues
 

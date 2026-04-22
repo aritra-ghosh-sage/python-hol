@@ -352,8 +352,8 @@ tasks:
     context_files:
       - path: "docs/CACHE_DEPLOYMENT.md"
         description: "Cache operations and deployment behavior"
-      - path: "docs/CACHE_DEPLOYMENT.md"
-        description: "Current cache operations and runtime behavior"
+      - path: "docs/CACHE_PERF_REPORT.md"
+        description: "Performance and hit-rate reporting"
       - path: "docs/plan/20260420/notes.md"
         description: "Plan outcomes and residual risks"
     diagnosis:

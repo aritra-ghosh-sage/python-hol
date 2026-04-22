@@ -1,7 +1,5 @@
 # 🎯 Caching System Implementation Summary
 
-> Archive note: This is a historical implementation snapshot from 2026-04-20. For current architecture and operational guidance, use `docs/DOCUMENTATION_INDEX.md`, `docs/CACHE_DEPLOYMENT.md`, and `docs/LIBRARY_DESIGN.md`.
-
 **Plan ID:** `20260420-caching-blueprint`  
 **Completion Date:** April 20, 2026  
 **Status:** ✅ **COMPLETE - PRODUCTION READY**
@@ -156,9 +154,11 @@ Exit Code:              0 ✅
   - FAQ section
   - Production checklist
   
-- **Former performance report** (historical)
-  - This report is no longer maintained in the active docs set.
-  - Current operational guidance is consolidated in `docs/CACHE_DEPLOYMENT.md` and `docs/DOCUMENTATION_INDEX.md`.
+- **`docs/CACHE_PERF_REPORT.md`** (created)
+  - Performance benchmarks (latency, throughput)
+  - Coverage analysis by module
+  - System flow validation results
+  - Recommendations for optimization
 
 - **`.github/AGENTS.md`** (created)
   - Cache documentation index
@@ -365,7 +365,7 @@ async def ingest_documents(req: DocumentIngestionRequest):
 
 **Operator Documentation:**
 - [CACHE_DEPLOYMENT.md - Deployment & Configuration](./CACHE_DEPLOYMENT.md)
-- [DOCUMENTATION_INDEX.md - Canonical docs map](../../DOCUMENTATION_INDEX.md)
+- [CACHE_PERF_REPORT.md - Performance Benchmarks](./CACHE_PERF_REPORT.md)
 
 **Developer Documentation:**
 - [Caching Architecture Blueprint](./Caching_Architecture_Blueprint.md)

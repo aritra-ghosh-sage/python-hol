@@ -142,6 +142,6 @@ Tasks CACHE-PARITY-IMPLEMENT (Wave 2) and CACHE-PARITY-TESTS (Wave 3) are comple
 ### Documentation updates (CACHE-REVIEW-DOCS)
 
 - `docs/CACHE_DEPLOYMENT.md` — added section "Cross-Channel Cache Architecture (REST/WS Parity)" covering the shared facade, key identity contract, invalidation semantics, request-local rerank, and observability limitations. Updated FAQ cache-clear entry. Bumped document version to 1.1.
-- `docs/CACHE_DEPLOYMENT.md` — current cache operations guide; supersedes former performance-report references.
+- `docs/CACHE_PERF_REPORT.md` — added Wave 2–3 note to test suite listing and conclusion.
 - `docs/plan/20260420/notes.md` — this addendum.
 

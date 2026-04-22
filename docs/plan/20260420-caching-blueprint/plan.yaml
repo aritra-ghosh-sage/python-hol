@@ -278,13 +278,13 @@ waves:
           - pytest tests/ -v (all test files)
           - Coverage report: pytest --cov=hybrid_rag --cov=api tests/
           - Benchmark: measure cache hit rates, latency with/without cache
-          - Document results in CACHE_DEPLOYMENT.md and DOCUMENTATION_INDEX.md
+          - Document results in CACHE_PERF_REPORT.md
         agent: "gem-implementer"
         effort_hours: 1.0
         dependencies: ["TEST-001", "TEST-002", "TEST-003", "TEST-004", "TEST-005"]
         artifacts:
-          - filename: "docs/CACHE_DEPLOYMENT.md"
-            description: "Current cache runtime behavior and operations guide"
+          - filename: "docs/CACHE_PERF_REPORT.md"
+            description: "Performance benchmarks and test results"
         acceptance_criteria:
           - "All tests pass (pytest exit code 0)"
           - "Coverage >= 85% for cache module"

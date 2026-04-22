@@ -1,175 +1,1065 @@
-# Hybrid RAG Cache Deployment Guide
+# Hybrid RAG Caching System - Deployment Guide
 
-**Applicable to:** Hybrid RAG v0.1.x
+**Document Version:** 1.1  
+**Last Updated:** April 21, 2026  
+**Applicable to:** Hybrid RAG v0.1.0+
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Cross-Channel Cache Architecture (REST/WS Parity)](#cross-channel-cache-architecture-restws-parity)
+3. [Development Setup](#development-setup)
+4. [Production Setup](#production-setup)
+5. [Environment Variables Reference](#environment-variables-reference)
+6. [Troubleshooting](#troubleshooting)
+7. [Monitoring & Observability](#monitoring--observability)
+8. [FAQ](#faq)
+9. [Production Checklist](#production-checklist)
+
+---
 
 ## Overview
 
-The live system has **two implemented cache layers**:
+**Deployment Scenarios for Hybrid RAG Caching**
 
-- **L1 query cache** backed by `hybrid_rag.cache.CacheBackend`
-- **L2 embedding cache** inside `HybridRetriever`
+The Hybrid RAG caching system implements a **two-layer caching strategy**:
 
-ChromaDB is persistent storage, not a cache layer.
+- **L1 Query Cache**: Caches complete retrieval results at the query level
+- **L2 Embedding Cache**: Caches computed embeddings to avoid redundant encoder calls
 
-## Runtime Design
+Both layers support multiple backend implementations:
 
-### L1 Query Cache
+| Backend | Use Case | Data Persistence | Scalability |
+|---------|----------|------------------|-------------|
+| **InMemoryCache** | Local development, single-instance deployments | Lost on restart | Single process |
+| **RedisCache** | Multi-instance production, distributed systems | Persistent (with Redis durability) | Distributed |
 
-The L1 cache stores full retrieval results and is shared across the API layer.
+**Performance Impact** (from [CACHE_PERF_REPORT.md](./CACHE_PERF_REPORT.md)):
+- **Embedding cache hit rate**: 60% on repeated queries
+- **Mean latency**: 946.8 ms (cached) vs 979.2 ms (uncached)
+- **Overall test coverage**: 64% with 163 passing tests
 
-- `api_middleware.py` caches `POST /retrieve` HTTP responses
-- `api.py` caches retrieval results in `_shared_retrieve_documents()` so REST and WebSocket retrieval use the same cache identity
+---
 
-The cache key is derived from:
+## Cross-Channel Cache Architecture (REST/WS Parity)
 
-1. normalized query
-2. effective rerank mode
-3. config fingerprint
-4. corpus version
+*Added in Wave 2–3 (2026-04-21). Source: `docs/plan/20260420/cache-gap-plan.yaml`, task IDs CACHE-PARITY-IMPLEMENT and CACHE-PARITY-TESTS.*
 
-### L2 Embedding Cache
+### Shared Retrieval Facade
 
-`HybridRetriever` stores query embeddings in an in-process LRU cache. This avoids repeated encoder work for repeated queries, but it does not store retrieval responses.
+Both the REST `POST /retrieve` endpoint and the WebSocket `/ws/chat` handler route all retrieval execution through one shared function, `_shared_retrieve_documents(query, enable_rerank)` in `api.py`. This eliminates the previous channel divergence where WS bypassed middleware and hit the retriever directly.
 
-## Backends
+**What the facade does:**
+1. Normalises the query string (whitespace-collapsed).
+2. Resolves the effective rerank mode from the request parameter; the global `_config.enable_rerank` is used as default but is **never mutated at request time**.
+3. Computes a stable cache key from `{normalized_query, effective_enable_rerank, config_fingerprint, corpus_version}`. Transport (`rest`/`ws`) is **excluded** from key identity.
+4. Reads from and writes to the shared L1 cache (`lazy_cache`) with fail-open semantics.
+5. Calls `_retriever.retrieve()` only on a cache miss.
 
-The configurable backend is for **L1 only**.
+### Cache Key Identity Contract
 
-| Backend | Recommended use |
+| Identity Input | Source | Notes |
+|---|---|---|
+| `query` | Request, whitespace-normalised | Equivalent queries map to same key |
+| `effective_enable_rerank` | Request param → `_config.enable_rerank` default | Request override is request-local; no global mutation |
+| `config_fingerprint` | SHA-256 of serialised `_config` retrieval fields | Changes on `PUT /config` |
+| `corpus_version` | `_cache_generation` counter | Changes on `ingest_type=update` and `PUT /config` success |
+| transport | — | **Excluded**. REST and WS share the same cache entries |
+
+### Invalidation Semantics
+
+| Event | L1 Cache Action | Rationale |
+|---|---|---|
+| `POST /documents` with `ingest_type=update` | **Full clear** | Corpus has changed; all cached answers may be stale |
+| `POST /documents` with `ingest_type=add` | **Preserve** | Incremental addition; existing answers remain valid until TTL |
+| `PUT /config` success | **Full clear** | Retrieval parameters changed; stale answers must not be served |
+| TTL expiry | **Evict** | Managed by cache backend (default 3600 s dev / 86400 s prod) |
+| Cache backend error | **Fail-open** | Retrieval proceeds without cache; no 5xx raised |
+
+> **Note:** After `ingest_type=add`, previously cached queries may return pre-add results until TTL expiry. This is intentional eventual-consistency behaviour documented in the approved cache-consistency policy (`docs/plan/20260420/CACHE-CONSISTENCY-POLICY.md`).
+
+### Request-Local Rerank Override
+
+The `enable_rerank` field in `RetrievalRequest` (REST) and in the WS message payload is consumed as a **request-local execution parameter**. The facade resolves it to `effective_enable_rerank` without writing back to `_config`:
+
+```python
+effective_enable_rerank = (
+    _config.enable_rerank if enable_rerank is None else bool(enable_rerank)
+)
+```
+
+Concurrent requests with different `enable_rerank` values do not interfere. The global `_config.enable_rerank` reflects only the last committed `PUT /config` value, never a transient per-request override.
+
+### Observability Limitations and Known Residual Risk
+
+| Limitation | Detail |
 |---|---|
-| `memory` | local development, tests, single-instance deployments |
-| `redis` | multi-instance or persistent deployments |
+| **Cache stats aggregate backend activity** | `GET /cache/stats` reports backend-level hit/miss counters from the shared cache backend. Both HTTP middleware lookups and WS/shared-facade lookups increment the same counters, so WS cache activity is reflected in `/cache/stats`. |
+| **No structured cache-hit header on WS** | REST responses include `X-Cache: HIT/MISS`; WS messages do not expose cache status in the current message schema. |
+| **Fail-open parity test gap** | AC6 (cache backend errors must not cause retrieval failures for WS) is verified for REST via `test_query_cache_middleware.py::test_fail_open_errors` and is covered structurally in `_shared_retrieve_documents` (try/except on all cache calls). However, an independent end-to-end assertion that the WS handler returns a successful `results` message under a faulting cache backend has not been added to `test_api_shared_retrieval.py` as of Wave 3. This is a known test gap, not a production risk. |
 
-## Environment Variables
+---
+
+## Development Setup
+
+### Default: InMemoryCache (No Redis Needed)
+
+For local development, the Hybrid RAG system defaults to **InMemoryCache**, requiring no external dependencies:
+
+- ✅ Zero setup required
+- ✅ Fast in-memory storage with TTL support
+- ✅ Thread-safe LRU eviction
+- ⚠️ Cache data lost on server restart (acceptable for dev)
+- ⚠️ Not suitable for multi-instance deployments
+
+### Configuration
+
+Create `.env.local` in the project root:
 
 ```bash
-# Common
+# Cache configuration for development
 CACHE_BACKEND=memory
 CACHE_TTL_SECONDS=3600
-CACHE_KEY_PREFIX=hybrid_rag_cache:
-
-# In-memory only
 CACHE_MAX_SIZE=10000
-
-# Redis only
-REDIS_URL=redis://localhost:6379/0
 ```
 
-Production Redis notes:
+### Running the Development Server
 
-- use `rediss://` in production
-- require Redis authentication
-- prefer a dedicated Redis DB or key prefix
-
-## Local Verification
+**Option 1: Using the main example**
 
 ```bash
-# Health
-curl -s http://localhost:8000/health | jq .
-
-# Layered cache stats
-curl -s http://localhost:8000/cache/stats | jq .
-
-# Repeated query to trigger L1 activity
-for i in 1 2 3; do
-  curl -s -X POST http://localhost:8000/retrieve \
-    -H "Content-Type: application/json" \
-    -d '{"query":"offline maps"}' > /dev/null
-done
-
-curl -s http://localhost:8000/cache/stats | jq '.l1_query_cache'
-curl -s http://localhost:8000/cache/stats | jq '.l2_embedding_cache'
+cd /home/aritraghosh/projects/python-hol
+source .venv/bin/activate
+python main_example.py
 ```
 
-Expected checks:
+**Option 2: Using FastAPI with auto-reload**
 
-- `/health` returns `{"status":"healthy","retriever_ready":"yes"}` once the retriever is initialized
-- `/cache/stats` returns `l1_query_cache`, `l2_embedding_cache`, `backend_health`, and `timestamp`
-- repeated identical queries should increase L1 hits and usually L2 hits
+```bash
+cd /home/aritraghosh/projects/python-hol
+source .venv/bin/activate
+uvicorn api:app --reload --host 0.0.0.0 --port 8000
+```
 
-## Invalidation Rules
+### Verifying Development Cache
 
-| Event | Behavior |
-|---|---|
-| `PUT /config` success | clear L1 query cache |
-| `POST /documents` with `ingest_type="update"` | clear L1 query cache |
-| `POST /documents` with `ingest_type="add"` | preserve existing L1 entries |
-| backend failure | fail open and continue retrieval without cache |
+Test that caching is working:
 
-L2 embedding cache is process-local and not explicitly cleared on config changes.
+```bash
+# Terminal 1: Start the API
+source .venv/bin/activate
+uvicorn api:app --reload
 
-## Reading `/cache/stats`
+# Terminal 2: Check cache stats
+curl http://localhost:8000/cache/stats | jq .
+```
 
-Example response shape:
+**Expected response** (initially empty):
 
 ```json
 {
-  "l1_query_cache": {
-    "backend": "memory",
-    "hits": 2,
-    "misses": 1,
-    "hit_rate": 0.667,
-    "size": 1,
-    "max_size": 10000,
-    "ttl_seconds": 3600,
-    "corpus_version": "gen0.n1"
-  },
-  "l2_embedding_cache": {
-    "hits": 2,
-    "misses": 1,
-    "hit_rate": 0.667,
-    "size": 1,
-    "capacity": 5000
-  },
-  "backend_health": {
-    "connected": true,
-    "latency_ms": null,
-    "fallback_active": false,
-    "error": null
-  },
-  "timestamp": "2026-04-22T10:30:45.123456Z"
+  "backend": "memory",
+  "hits": 0,
+  "misses": 0,
+  "hit_rate": 0.0,
+  "size": 0,
+  "max_size": 10000,
+  "ttl_seconds": 3600
 }
 ```
 
-Operational focus:
+After running retrieval queries, `hits` and `misses` will increment.
 
-- inspect `.l1_query_cache.hit_rate` for shared query-cache effectiveness
-- inspect `.l2_embedding_cache.hit_rate` for encoder reuse
-- inspect `.backend_health` for Redis connectivity or fail-open fallback
+---
+
+## Production Setup
+
+### Multi-Instance: RedisCache with Connection Pooling
+
+For production deployments with multiple API instances, use **RedisCache** with a centralized Redis instance:
+
+- ✅ Distributed cache shared across instances
+- ✅ Data persistence via Redis durability
+- ✅ Connection pooling for efficiency
+- ✅ Fail-open error handling (graceful degradation)
+- ✅ Comprehensive monitoring support
+
+### Prerequisites
+
+Ensure the following before deploying:
+
+- **Redis >= 6.0** installed and running
+- Redis accessible from your API instances (network connectivity)
+- Redis port (default 6379) open and listening
+- Sufficient Redis memory for cache size (see `CACHE_MAX_SIZE`)
+
+### Installation
+
+**On Linux (Ubuntu/Debian)**
+
+```bash
+sudo apt update
+sudo apt install redis-server
+sudo systemctl start redis-server
+sudo systemctl enable redis-server
+```
+
+**On macOS (Homebrew)**
+
+```bash
+brew install redis
+brew services start redis
+```
+
+**Docker (Recommended for Production)**
+
+```dockerfile
+# Dockerfile.redis
+FROM redis:7-alpine
+EXPOSE 6379
+CMD ["redis-server", "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
+```
+
+Deploy with Docker Compose:
+
+```yaml
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    environment:
+      - MAXMEMORY=1gb
+      - MAXMEMORY_POLICY=allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - CACHE_BACKEND=redis
+      - REDIS_URL=rediss://:strong-password@redis:6379/0
+      - CACHE_TTL_SECONDS=86400
+      - CACHE_KEY_PREFIX=prod_hybrid_rag:
+      - CACHE_MAX_SIZE=100000
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+```
+
+### Production Environment Configuration
+
+Create `.env` in the project root (never commit this file):
+
+```bash
+# Production cache configuration
+CACHE_BACKEND=redis
+REDIS_URL=rediss://:strong-password@redis-instance.internal:6379/0
+CACHE_TTL_SECONDS=86400
+CACHE_KEY_PREFIX=prod_hybrid_rag:
+CACHE_MAX_SIZE=100000
+
+# Production requirement: REDIS_URL must use TLS and include auth
+# Format: rediss://:password@host:port/db
+```
+
+**Configuration Notes:**
+
+| Setting | Recommended Value | Rationale |
+|---------|-------------------|-----------|
+| `CACHE_BACKEND` | `redis` | Multi-instance deployments |
+| `REDIS_URL` | `rediss://:password@redis:6379/0` | TLS + authentication required in production |
+| `CACHE_TTL_SECONDS` | `86400` (24 hours) | Standard production TTL; adjust based on data freshness |
+| `CACHE_KEY_PREFIX` | `prod_hybrid_rag:` | Namespace to avoid collisions with other apps |
+| `CACHE_MAX_SIZE` | `100000` | Larger than development; adjust based on Redis memory |
+
+### Health Check: Verify Redis Connectivity
+
+Before deploying the API, verify Redis is accessible:
+
+```bash
+# Test Redis connectivity
+redis-cli -h redis-instance -p 6379 ping
+
+# Expected output
+PONG
+```
+
+If using Docker:
+
+```bash
+# From Docker Compose
+docker-compose exec redis redis-cli ping
+```
+
+### Starting the Production API
+
+```bash
+source .venv/bin/activate
+uvicorn api:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+The API will automatically:
+1. Load cache configuration from environment
+2. Connect to Redis
+3. Initialize the caching layer
+4. Log initialization status to stdout
+
+**Expected log output:**
+
+```
+INFO:hybrid_rag.cache:Connecting to Redis at rediss://redis-instance:6379/0...
+INFO:hybrid_rag.cache:Redis connection pool initialized with default backend
+INFO:hybrid_rag.retriever:Hybrid retriever initialized with caching enabled
+```
+
+---
+
+## Environment Variables Reference
+
+### Configuration Table
+
+| Variable | Type | Default | Required? | Description |
+|----------|------|---------|-----------|-------------|
+| `CACHE_BACKEND` | string | `'memory'` | No | Cache backend implementation: `'memory'` (local) or `'redis'` (distributed) |
+| `REDIS_URL` | string | `None` | If `backend=redis` | Redis connection URL (format: `rediss://[:password@]host[:port][/db]` in production) |
+| `CACHE_TTL_SECONDS` | int | `3600` | No | Time-to-live for cache entries in seconds; set to 0 for indefinite caching |
+| `CACHE_KEY_PREFIX` | string | `'hybrid_rag_cache:'` | No | Namespace prefix for all cache keys (useful in shared Redis instances) |
+| `CACHE_MAX_SIZE` | int | `10000` | No | Maximum number of entries in InMemoryCache before LRU eviction (ignored for Redis) |
+
+### Examples
+
+**Development (default)**
+
+```bash
+CACHE_BACKEND=memory
+CACHE_TTL_SECONDS=3600
+CACHE_MAX_SIZE=10000
+```
+
+**Production with Redis**
+
+```bash
+CACHE_BACKEND=redis
+REDIS_URL=rediss://:strong-password@redis.prod.internal:6379/0
+CACHE_TTL_SECONDS=86400
+CACHE_KEY_PREFIX=myapp_prod:
+CACHE_MAX_SIZE=100000
+```
+
+**Production with Redis Authentication**
+
+```bash
+CACHE_BACKEND=redis
+REDIS_URL=rediss://user:MySecurePassword123@redis.prod.internal:6379/0
+CACHE_TTL_SECONDS=86400
+CACHE_KEY_PREFIX=myapp_prod:
+```
+
+**Long-Lived Cache (12 hours)**
+
+```bash
+CACHE_BACKEND=redis
+REDIS_URL=redis://redis:6379
+CACHE_TTL_SECONDS=43200
+CACHE_KEY_PREFIX=app_cache:
+```
+
+---
 
 ## Troubleshooting
 
-### L1 hit rate stays at 0
+### Issue 1: Cache is Not Working
 
-Check that:
+**Symptoms:**
+- GET `/cache/stats` shows `hits: 0, misses: 0`
+- Cache size remains 0 after multiple queries
+- Performance improvements not observed
 
-- you are sending identical query payloads
-- the backend is healthy
-- the workload is repeating requests rather than all unique queries
+**Diagnosis Steps:**
 
-```bash
-curl -s http://localhost:8000/cache/stats | jq '.backend_health'
-curl -s http://localhost:8000/cache/stats | jq '.l1_query_cache'
+1. Verify `CACHE_BACKEND` environment variable:
+   ```bash
+   python3 -c "import os; print(f'CACHE_BACKEND={os.getenv(\"CACHE_BACKEND\", \"memory\")}')"
+   ```
+
+2. Check cache stats endpoint:
+   ```bash
+   curl http://localhost:8000/cache/stats | jq .
+   ```
+
+3. Verify API server logs for cache initialization:
+   ```bash
+   # Look for "Cache initialized" message in stdout
+   grep -i "cache" api_server.log | head -10
+   ```
+
+**Solutions:**
+
+- **Restart the API server** to force cache reinitialization:
+  ```bash
+  # Press Ctrl+C if running locally
+  # Or for production:
+  systemctl restart api_service
+  ```
+
+- **Check for errors in logs**:
+  ```bash
+  journalctl -u api_service -n 50 --no-pager | grep -i cache
+  ```
+
+- **Verify configuration**: Ensure `.env` or environment variables are correctly set:
+  ```bash
+  env | grep CACHE
+  ```
+
+---
+
+### Issue 2: Redis Connection Errors
+
+**Symptoms:**
+- API startup fails with `ConnectionError: Error 111 connecting to redis...`
+- Logs show `ECONNREFUSED` or `Name or service not known`
+
+**Error Messages:**
+
+```
+ConnectionError: Error 111 connecting to redis-instance:6379. Connection refused.
+ConnectionError: Name or service not known
+ERROR:hybrid_rag.cache:Failed to connect to Redis: ...
 ```
 
-### Redis configured but cache falls back
+**Root Causes & Solutions:**
 
-Check:
+| Cause | Check | Solution |
+|-------|-------|----------|
+| Redis not running | `redis-cli ping` | Start Redis: `redis-server` or `systemctl start redis-server` |
+| Wrong hostname/port | `REDIS_URL` value | Verify connectivity: `redis-cli -h <host> -p <port> ping` |
+| Network unreachable | Container/host network | Check firewall rules, DNS resolution, VPC routing |
+| Redis auth failed | Redis password required | Add password to `REDIS_URL`: `rediss://:PASSWORD@host:6379` |
+
+**Diagnostic Commands:**
 
 ```bash
-echo "$REDIS_URL"
-redis-cli -u "$REDIS_URL" PING
-curl -s http://localhost:8000/cache/stats | jq '.backend_health'
+# Test Redis availability
+redis-cli -h <hostname> -p 6379 ping
+
+# Test from container
+docker exec <api_container> redis-cli -h redis -p 6379 ping
+
+# Check network connectivity
+nc -zv redis-instance 6379
+
+# Verify environment variable
+docker inspect <api_container> | grep REDIS_URL
 ```
 
-If production uses Redis, ensure the URL uses `rediss://` and includes credentials.
+**Graceful Degradation:**
 
-### Results look stale after data changes
+If Redis is unavailable, the API will **fail-open**: it continues serving live retrieval results without caching. This ensures service availability but without performance benefits.
 
-Use `ingest_type="update"` for bulk replacements and `PUT /config` for config changes. Both clear L1.
+**Fallback Behavior:**
 
-## Related Docs
+```python
+# API behavior when Redis is down:
+# 1. Cache.get() returns None (cache miss)
+# 2. Retrieval proceeds with live computation
+# 3. Cache.set() fails silently (no exceptions)
+# 4. Service remains operational
+```
 
-- [LIBRARY_DESIGN.md](./LIBRARY_DESIGN.md) — architecture and cache design
-- [API_INTEGRATION.md](./API_INTEGRATION.md) — endpoint contracts and WebSocket message shapes
-- [DEPLOYMENT_PRODUCTION.md](./DEPLOYMENT_PRODUCTION.md) — broader deployment checklist
+---
+
+### Issue 3: Low Cache Hit Rate
+
+**Symptoms:**
+- GET `/cache/stats` shows `hits << misses` (e.g., `hits: 5, misses: 245`)
+- Cache hit rate < 10%
+
+**Root Causes:**
+
+| Cause | Typical Hit Rate | Solution |
+|-------|-----------------|----------|
+| Unique queries every time | < 5% | Expected for RAG workloads; monitor for trends |
+| Frequent document ingestion | 5-15% | Ingest operations invalidate cache entries |
+| Short TTL (3600s) | Varies | Increase `CACHE_TTL_SECONDS` if data freshness allows |
+| Cache size too small | Variable | Increase `CACHE_MAX_SIZE` or Redis memory allocation |
+
+**Diagnostics:**
+
+```bash
+# Monitor cache hit rate over time
+watch -n 5 'curl -s http://localhost:8000/cache/stats | jq .hit_rate'
+
+# Check for cache invalidation patterns in logs
+grep -i "cache.*clear\|cache.*flush" api_server.log | tail -20
+```
+
+**Expected Cache Hit Rates:**
+
+For RAG systems, **10-30% hit rate is typical** due to the diversity of queries:
+- Many unique queries (low repeated coverage)
+- Document updates clearing cache
+- Dynamic context windows
+
+**60%+ hit rate would be unusual** and might indicate:
+- Query repetition patterns (e.g., testing)
+- Limited query variance
+- Very large cache capacity relative to usage
+
+**Optimization:**
+
+1. **Increase TTL** for stable data:
+   ```bash
+   CACHE_TTL_SECONDS=172800  # 48 hours instead of 1 hour
+   ```
+
+2. **Expand cache capacity**:
+   ```bash
+   CACHE_MAX_SIZE=500000  # For InMemoryCache
+   # Or increase Redis maxmemory
+   redis-cli CONFIG SET maxmemory 4gb
+   ```
+
+3. **Monitor with /cache/stats**:
+   ```bash
+   # Query every 30 seconds to track trends
+   watch -n 30 'curl -s http://localhost:8000/cache/stats | jq "{hits, misses, hit_rate, size}"'
+   ```
+
+---
+
+### Issue 4: Cache Consuming Too Much Memory
+
+**Symptoms:**
+- Redis memory usage growing unbounded
+- API OOM (Out of Memory) errors
+- System swap usage increasing
+- Slow performance due to memory pressure
+
+**Diagnosis:**
+
+```bash
+# Check Redis memory usage
+redis-cli INFO memory | grep "used_memory_human"
+
+# Output example
+used_memory_human:512M
+
+# Check current cache stats
+curl http://localhost:8000/cache/stats | jq '.size'
+
+# Monitor system memory
+free -h  # Linux
+# or
+vm_stat  # macOS
+```
+
+**Solutions:**
+
+1. **Reduce cache TTL**:
+   ```bash
+   CACHE_TTL_SECONDS=43200  # 12 hours instead of 24 hours
+   ```
+
+2. **Reduce cache max size**:
+   ```bash
+   CACHE_MAX_SIZE=50000  # Smaller LRU cache
+   ```
+
+3. **Increase Redis maxmemory**:
+   ```bash
+   redis-cli CONFIG SET maxmemory 4gb
+   ```
+
+4. **Set eviction policy** (Redis):
+   ```bash
+   redis-cli CONFIG SET maxmemory-policy allkeys-lru
+   # Evicts least-recently-used keys when limit reached
+   ```
+
+5. **Manually clear cache** (for troubleshooting):
+   ```bash
+   # InMemoryCache: Restart API
+   # Redis: Flush specific database
+   redis-cli FLUSHDB
+   ```
+
+**Long-term Monitoring:**
+
+```bash
+# Add to monitoring dashboard
+watch -n 60 'redis-cli INFO memory | grep "used_memory\|maxmemory"'
+```
+
+---
+
+## Monitoring & Observability
+
+### Cache Stats Endpoint
+
+The API provides a real-time monitoring endpoint for cache metrics.
+
+**Endpoint:** `GET /cache/stats`
+
+**Authentication:** None (unauthenticated access)
+
+**Response Schema:**
+
+```json
+{
+  "backend": "memory|redis",
+  "hits": 42,
+  "misses": 158,
+  "hit_rate": 0.21,
+  "size": 18,
+  "max_size": 10000,
+  "ttl_seconds": 3600
+}
+```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `backend` | string | Active cache backend: `"memory"` or `"redis"` |
+| `hits` | int | Number of successful cache lookups (cumulative) |
+| `misses` | int | Number of cache misses (cumulative) |
+| `hit_rate` | float | Hit rate as percentage (0.0-1.0); formula: `hits / (hits + misses)` |
+| `size` | int | Current number of entries in cache |
+| `max_size` | int | Maximum cache capacity before eviction |
+| `ttl_seconds` | int | Time-to-live for cache entries in seconds |
+
+### Example Monitoring Queries
+
+**Check current cache status:**
+
+```bash
+curl http://localhost:8000/cache/stats | jq .
+```
+
+**Extract hit rate:**
+
+```bash
+curl -s http://localhost:8000/cache/stats | jq '.hit_rate'
+```
+
+**Monitor continuously (every 10 seconds):**
+
+```bash
+watch -n 10 'curl -s http://localhost:8000/cache/stats | jq "{backend, hits, misses, hit_rate, size}"'
+```
+
+**Export to monitoring system (Prometheus, DataDog, etc.):**
+
+```bash
+# Parse stats and emit metrics
+curl -s http://localhost:8000/cache/stats | jq -r '
+  "hybrid_rag_cache_hits \(.hits)\n" +
+  "hybrid_rag_cache_misses \(.misses)\n" +
+  "hybrid_rag_cache_hit_rate \(.hit_rate)\n" +
+  "hybrid_rag_cache_size \(.size)"
+' | tee -a metrics.txt
+```
+
+### Health Indicator Thresholds
+
+Use these thresholds to set up alerting:
+
+| Metric | Green | Yellow | Red |
+|--------|-------|--------|-----|
+| **Hit Rate** | > 20% | 10-20% | < 10% (investigate) |
+| **Cache Size** | < 80% of max | 80-95% of max | > 95% (alert on eviction) |
+| **Redis Memory** | < 70% of maxmemory | 70-90% | > 90% (risk of OOM) |
+| **Response Time** | < 500ms | 500-1000ms | > 1000ms |
+
+### Dashboard Setup (Example - Grafana)
+
+Create a Grafana dashboard with these queries:
+
+```promql
+# Cache hit rate over time
+rate(hybrid_rag_cache_hits[5m]) / (rate(hybrid_rag_cache_hits[5m]) + rate(hybrid_rag_cache_misses[5m]))
+
+# Cache size trend
+hybrid_rag_cache_size
+
+# Memory usage
+redis_memory_used_bytes
+
+# Eviction rate
+rate(redis_evicted_keys_total[5m])
+```
+
+### Application Logging
+
+Monitor cache-related log messages in API logs:
+
+```bash
+# View cache-related logs
+journalctl -u api_service | grep -i cache
+
+# Watch for errors
+tail -f api_server.log | grep -i "error\|warning"
+```
+
+**Key Log Patterns:**
+
+- `Cache initialized` - Successful cache setup on startup
+- `Cache hit for key` - Successful cache lookup (debug level)
+- `Cache miss for key` - Cache miss (debug level)
+- `Error connecting to Redis` - Connection failure
+- `Cache stats: hits=X, misses=Y` - Periodic summary
+
+### Redis CLI Monitoring
+
+**Real-time Redis stats:**
+
+```bash
+redis-cli --stat
+
+# Output:
+# keys=1842  mem=2.89M [match] calls/sec=1.23 hits/sec=0.23 misses/sec=0.12 evict/sec=0.00
+```
+
+**Memory breakdown:**
+
+```bash
+redis-cli INFO memory
+
+# Output:
+# used_memory_human:512M
+# used_memory_peak_human:512M
+# maxmemory_human:1G
+# evicted_keys:2344
+```
+
+**Keyspace statistics:**
+
+```bash
+redis-cli INFO keyspace
+
+# Output:
+# db0:keys=1842,expires=1800,avg_ttl=3591200
+```
+
+---
+
+## FAQ
+
+### Q: Do I need Redis for caching?
+
+**A:** No. By default, Hybrid RAG uses **InMemoryCache**, which requires no Redis installation.
+
+- **Use InMemoryCache if:**
+  - Running locally or in development
+  - Single API instance
+  - Cache data loss on restart is acceptable
+
+- **Use RedisCache if:**
+  - Running multiple API instances
+  - Need persistent cache across restarts
+  - Distributed deployment (Kubernetes, etc.)
+
+---
+
+### Q: What if Redis goes down?
+
+**A:** The API implements **fail-open error handling**:
+
+1. **Cache lookup fails** → Returns `None` (cache miss)
+2. **Query proceeds** → Computation runs without cache
+3. **Response served** → User gets fresh results
+4. **No errors** → Service remains operational
+
+**Impact:**
+- ✅ Service continues to function
+- ❌ Performance degradation (no cached results)
+- ❌ Increased latency and compute load
+
+**Recovery:**
+- Redis automatically restarts (if configured with systemd/docker)
+- Cache repopulates gradually as queries execute
+- Hit rate recovers as cache warms up
+
+---
+
+### Q: How do I clear the cache?
+
+**A:** Cache clearing depends on the backend:
+
+**For InMemoryCache:**
+- Restart the API server:
+  ```bash
+  # Stop API
+  Ctrl+C
+  # Start API
+  uvicorn api:app --reload
+  ```
+
+**For RedisCache:**
+- Flush the Redis database:
+  ```bash
+  redis-cli FLUSHDB
+  ```
+
+**Automatic Cache Invalidation:**
+- `PUT /config` endpoint (configuration changes) — full L1 clear
+- `POST /documents` with `ingest_type=update` — full L1 clear
+- `POST /documents` with `ingest_type=add` — **cache preserved** (incremental add, eventual consistency)
+- TTL expiration (automatic)
+
+---
+
+### Q: Can I use Memcached instead of Redis?
+
+**A:** Not currently. The Hybrid RAG caching layer is Redis-specific.
+
+**Rationale:**
+- Redis offers superior performance and feature set
+- Memcached lacks TTL guarantees and distributed transaction support
+- Redis ecosystem is more mature for production systems
+
+**Future Support:**
+- Future versions (v1.1+) may support pluggable backends
+- Contributing a Memcached adapter is welcome
+
+---
+
+### Q: What's the expected cache hit rate?
+
+**A:** For Retrieval-Augmented Generation systems, **10-30% hit rate is typical**.
+
+**Why low hit rates are normal:**
+- Queries are highly diverse (each user asks different questions)
+- Documents frequently update (cache invalidates)
+- Query embeddings are unique (low semantic similarity)
+
+**Typical Breakdown:**
+- 50% queries: Never cached (first occurrence)
+- 30% queries: Cache misses (similar but not identical)
+- 20% queries: Cache hits (identical or very similar queries)
+
+**60%+ hit rates indicate:**
+- Highly repetitive query patterns (unusual)
+- Limited query diversity
+- Very large cache relative to usage
+
+**Monitor hit rate trends:**
+```bash
+# If hit_rate is stable > 20%, caching is healthy
+# If hit_rate drops below 10%, investigate query patterns or cache size
+```
+
+---
+
+### Q: Can I share Redis between multiple applications?
+
+**A:** Yes, using the `CACHE_KEY_PREFIX` setting.
+
+**Setup:**
+
+```bash
+# Application 1
+CACHE_KEY_PREFIX=app1_cache:
+REDIS_URL=rediss://:PASSWORD@shared-redis:6379/0
+
+# Application 2
+CACHE_KEY_PREFIX=app2_cache:
+REDIS_URL=rediss://:PASSWORD@shared-redis:6379/0
+```
+
+This ensures cache keys don't collide:
+- App1 keys: `app1_cache:query_abc123`
+- App2 keys: `app2_cache:query_abc123`
+
+---
+
+### Q: How do I benchmark cache performance?
+
+**A:** Use the included performance testing script:
+
+```bash
+python3 -c "
+import time
+from hybrid_rag.retriever import HybridRetriever
+
+retriever = HybridRetriever()
+query = 'What is machine learning?'
+
+# Warm cache
+retriever.retrieve(query, top_k=5)
+
+# Measure cached performance
+times = []
+for _ in range(10):
+    start = time.time()
+    retriever.retrieve(query, top_k=5)
+    times.append(time.time() - start)
+
+avg_time = sum(times) / len(times)
+print(f'Cached retrieval: {avg_time*1000:.1f}ms')
+"
+```
+
+**Expected Results** (from [CACHE_PERF_REPORT.md](./CACHE_PERF_REPORT.md)):
+- Uncached: ~979 ms
+- Cached (hit): ~947 ms
+- Improvement: ~3.4% with 60% hit rate
+
+---
+
+### Q: Can I adjust cache TTL per query?
+
+**A:** Currently, TTL is global via `CACHE_TTL_SECONDS`. Per-query TTL requires a future enhancement.
+
+**Workaround:**
+- Use high TTL (e.g., 86400s) for stable data
+- Use low TTL (e.g., 300s) for dynamic data
+- Manually flush cache when data updates: `redis-cli FLUSHDB`
+
+---
+
+## Production Checklist
+
+Use this checklist before deploying caching to production:
+
+### Pre-Deployment
+
+- [ ] Redis instance configured and running (version >= 6.0)
+  ```bash
+  redis-cli ping  # Should return PONG
+  ```
+
+- [ ] Redis accessible from all API instances
+  ```bash
+  redis-cli -h <redis-host> -p 6379 ping
+  ```
+
+- [ ] Environment variables configured in production `.env`:
+  ```bash
+  CACHE_BACKEND=redis
+  REDIS_URL=rediss://:strong-password@redis-prod:6379/0
+  CACHE_TTL_SECONDS=86400
+  CACHE_KEY_PREFIX=prod_hybrid_rag:
+  ```
+
+- [ ] Redis password set (required in production):
+  ```bash
+  REDIS_URL=rediss://:PASSWORD@redis-prod:6379/0
+  ```
+
+- [ ] `REDIS_URL` uses `rediss://` scheme (TLS required in production; SEC-004)
+
+- [ ] Redis memory limit configured:
+  ```bash
+  redis-cli CONFIG SET maxmemory 2gb
+  redis-cli CONFIG SET maxmemory-policy allkeys-lru
+  ```
+
+### Deployment
+
+- [ ] API code deployed to all instances
+  ```bash
+  git pull origin main
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  ```
+
+- [ ] Cache backend verified:
+  ```bash
+  python3 -c "from hybrid_rag.config import CacheSettings; print(CacheSettings.from_env().backend)"
+  ```
+
+- [ ] API started with correct workers:
+  ```bash
+  uvicorn api:app --workers 4 --host 0.0.0.0 --port 8000
+  ```
+
+### Post-Deployment Validation
+
+- [ ] Health check passes:
+  ```bash
+  curl http://localhost:8000/health
+  ```
+
+- [ ] Cache stats endpoint responds:
+  ```bash
+  curl http://localhost:8000/cache/stats | jq .
+  ```
+
+- [ ] Initial cache hit rate baseline recorded
+  ```bash
+  curl http://localhost:8000/cache/stats | jq '.hit_rate'
+  ```
+
+- [ ] Monitoring dashboard configured
+  - Set up Grafana or equivalent
+  - Configure alerts for hit_rate < 10% or memory > 90%
+
+### Production Observability
+
+- [ ] Logs configured to capture cache errors
+  ```bash
+  journalctl -u api_service | grep -i cache
+  ```
+
+- [ ] Alert rules set up:
+  - Redis connection failures
+  - Memory pressure (> 80% of maxmemory)
+  - High error rates from cache operations
+
+- [ ] Fail-open behavior tested (simulate Redis outage):
+  ```bash
+  redis-cli SHUTDOWN  # Simulate Redis outage
+  curl http://localhost:8000/retrieve -X POST ...  # API should still work
+  ```
+
+- [ ] Load test completed with caching enabled:
+  ```bash
+  # Run load test with concurrent requests
+  ab -n 1000 -c 50 http://localhost:8000/cache/stats
+  ```
+
+### On-Going Monitoring
+
+- [ ] Cache hit rate monitored daily
+  ```bash
+  # Add to cron job or monitoring dashboard
+  curl -s http://localhost:8000/cache/stats | jq '.hit_rate'
+  ```
+
+- [ ] Memory usage within acceptable bounds (< 80% of maxmemory)
+
+- [ ] No Redis connection errors in logs
+
+- [ ] Backup strategy in place for Redis (if using persistence)
+
+---
+
+## References
+
+- [CACHE_PERF_REPORT.md](./CACHE_PERF_REPORT.md) - Performance benchmarks and test results
+- [API_INTEGRATION.md](./API_INTEGRATION.md) - Complete API endpoint documentation
+- [LIBRARY_DESIGN.md](./LIBRARY_DESIGN.md) - Hybrid RAG architecture and design
+- [Redis Official Documentation](https://redis.io/documentation)
+- [Redis Connection Pooling](https://redis.io/docs/develop/clients/client-side-caching/)
+
+---
+
+**Document Status:** ✅ Production Ready  
+**Maintained By:** Development Team  
+**Last Review:** April 20, 2026

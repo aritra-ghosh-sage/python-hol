@@ -21,10 +21,10 @@ Configuration:
     - CACHE_MAX_SIZE: Max entries in memory cache (default: 10000)
 
 Monitoring:
-    - GET /cache/stats: Returns layered L1/L2 cache stats and backend health
+    - GET /cache/stats: Returns cache hit rate, current size, and backend info
     - All cache failures are non-blocking (fail-open): cache issues never break requests
 
-For detailed caching documentation, see docs/CACHE_DEPLOYMENT.md
+For detailed caching documentation, see docs/CACHE_DEPLOYMENT.md and docs/CACHE_PERF_REPORT.md
 """
 
 import base64
