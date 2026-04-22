@@ -48,12 +48,9 @@ export function QueryPanel() {
           </span>
         </div>
 
-        {/* WHY: The "Clear chat history" button uses clearHistory() from the
-            persistent store so the localStorage entry is also cleared.
-            Without this, a page reload would restore the "cleared" messages
-            from localStorage, surprising the user.
-            The button is disabled when there are no messages to avoid
-            accidental clicks on an already-empty panel. */}
+        {/* WHY: clearHistory() clears both in-memory and localStorage state
+            to prevent restored messages on reload. Button is disabled when
+            history is empty. */}
         <button
           onClick={clearHistory}
           disabled={messages.length === 0}

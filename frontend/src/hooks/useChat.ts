@@ -1,9 +1,8 @@
 "use client";
 
 // WHY: useEffect, useRef, useCallback manage WebSocket lifecycle.
-// useState is used only for transient connection status (not persisted).
-// Chat messages are now stored in useChatStore (Zustand + localStorage) so
-// they survive component unmounts that happen when the user switches tabs.
+// Chat messages are stored in useChatStore (Zustand + localStorage) so they
+// survive panel switches that unmount/remount this component.
 import { useEffect, useState, useRef, useCallback } from "react";
 import { getWSClient } from "@/lib/ws";
 import { WsIncomingMessage } from "@/lib/types";
@@ -15,9 +14,9 @@ export function useChat() {
   // WHY: messages come from the persistent Zustand store instead of local
   // useState.  When the user navigates to a different panel and back, the
   // QueryPanel unmounts and remounts.  A local useState would reset to []
-  // on every remount, which was the bug reported in issue #3.
-  // The store reads from localStorage on the first render, so existing
-  // history appears immediately without a flash of empty content.
+  // on every remount, losing the conversation history (issue #3).
+  // The store reads from localStorage on first render so existing history
+  // appears immediately without a flash of empty content.
   const {
     messages,
     appendMessages,
@@ -28,9 +27,9 @@ export function useChat() {
     clearHistory,
   } = useChatStore();
 
-  // WHY: Connection status is intentionally kept in local useState rather than
-  // the store.  It is a transient runtime property (derived from the WebSocket
-  // singleton) and does not need to survive a remount or page reload.
+  // WHY: Connection status is kept in local useState — it is a transient
+  // runtime property derived from the WebSocket singleton and does not need
+  // to survive a remount or page reload.
   const [isConnected, setIsConnected] = useState(false);
   const [connectionState, setConnectionState] = useState<
     "connecting" | "connected" | "disconnected" | "error"
@@ -44,8 +43,9 @@ export function useChat() {
   }, []);
 
   // WHY: handleWsMessage is wrapped in useCallback so its reference is stable
-  // across renders.  This prevents the WebSocket subscription useEffect below
-  // from re-subscribing on every render.
+  // across renders, preventing unnecessary WebSocket re-subscriptions.
+  // Zustand store methods are stable references (not recreated on state
+  // changes), so this callback is effectively recreated only once.
   const handleWsMessage = useCallback((msg: WsIncomingMessage) => {
     if (msg.type === "status") {
       // Stream progress text into the last in-flight loading bubble.
@@ -93,9 +93,8 @@ export function useChat() {
       }
       unsubscribeStatus();
       unsubscribeMessages();
-      // WHY: We intentionally keep the WebSocket connection alive on unmount
-      // so that an in-progress query is not interrupted when the user briefly
-      // switches panels.  The singleton ws client manages its own lifecycle.
+      // WHY: Keep the WebSocket connection alive on unmount so in-progress
+      // queries are not interrupted when the user briefly switches panels.
     };
   }, [handleWsMessage]);
 
@@ -109,9 +108,8 @@ export function useChat() {
       }
 
       // WHY: IDs are obtained from the store's counter rather than a local
-      // useRef so the counter persists across remounts.  If a local ref were
-      // used, the counter would reset to 0 every time the component mounts,
-      // potentially producing duplicate React keys in the message list.
+      // useRef so the counter persists across remounts, preventing duplicate
+      // React keys after a panel switch.
       const userMsg = {
         id: getNextMessageId("user"),
         role: "user" as const,
@@ -128,8 +126,7 @@ export function useChat() {
         status: "loading" as const,
       };
 
-      // Append both messages atomically so the UI never shows the user bubble
-      // without the loading indicator beside it.
+      // Append both messages atomically to avoid split-render flicker.
       appendMessages([userMsg, loadingMsg]);
 
       // Send via WebSocket.
