@@ -1,6 +1,5 @@
 """Tests for the QueryCacheMiddleware."""
 
-import asyncio
 import hashlib
 import json
 import logging
