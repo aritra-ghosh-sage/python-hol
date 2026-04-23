@@ -1,7 +1,7 @@
-"""End-to-end style tests for WS cache/middleware behaviour (T08 post-retirement).
+"""End-to-end style tests for WS cache/middleware behaviour.
 
 These tests exercise the WebSocket handler coroutine (websocket_chat) with an
-in-process websocket double. POST /retrieve was retired in T08.
+in-process websocket double.
 
 Coverage:
 - B1: WS emits cache.retrieval_* events; no cache.http_* events are emitted
@@ -98,10 +98,10 @@ async def test_b1_ws_emits_retrieval_cache_events(
     ws_http_harness: DeterministicRetriever,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """B1 (T08): WS emits cache.retrieval_* events; no cache.http_* events are emitted.
+    """B1: WS emits cache.retrieval_* events; no cache.http_* events are emitted.
 
-    After T08 the HTTP middleware is gone, so cache.http_* events are never
-    emitted.  The WS path continues to emit cache.retrieval_* events as before.
+    The WS path emits cache.retrieval_* events; cache.http_* events are never
+    emitted because there is no HTTP middleware on the WS path.
     """
     ws = FakeWebSocket(
         incoming_messages=[{"query": "b1-ws-path", "enable_rerank": False}]
@@ -116,7 +116,7 @@ async def test_b1_ws_emits_retrieval_cache_events(
 
 @pytest.mark.asyncio
 async def test_b2_ws_applies_min_score_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """B2 (T08): WS applies the 0.80 min-score filter correctly."""
+    """B2: WS applies the 0.80 min-score filter correctly."""
 
     retriever = DeterministicRetriever(
         results=[
@@ -161,11 +161,7 @@ async def test_b2_ws_applies_min_score_filter(monkeypatch: pytest.MonkeyPatch) -
 async def test_b3_ws_exposes_cache_status_field(
     ws_http_harness: DeterministicRetriever,
 ) -> None:
-    """B3 (T08): WS payload carries cache_status field (HIT/MISS/ERROR).
-
-    The WS cache_status payload-field contract is unchanged after T08 —
-    WS clients still receive ``cache_status`` in the results message.
-    """
+    """B3: WS payload carries cache_status field (HIT/MISS/ERROR)."""
 
     # WS path: warm the shared cache with a first query.
     ws_warm = FakeWebSocket(

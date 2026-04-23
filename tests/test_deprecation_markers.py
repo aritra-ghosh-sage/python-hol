@@ -1,8 +1,4 @@
-"""Tests that verify POST /retrieve retirement is permanent.
-
-Verifies that:
-1. The OpenAPI schema no longer contains the /retrieve path.
-"""
+"""Tests that verify POST /retrieve is absent from the OpenAPI schema."""
 
 from typing import Any, Dict, List, Optional
 
@@ -50,11 +46,10 @@ def deprecation_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 # ---------------------------------------------------------------------------
-# POST /retrieve — OpenAPI schema
 # ---------------------------------------------------------------------------
 
 def test_retrieve_endpoint_removed_from_openapi(deprecation_client: TestClient) -> None:
-    """POST /retrieve must NOT appear in the OpenAPI schema after T08 retirement.
+    """POST /retrieve must NOT appear in the OpenAPI schema.
 
     WHY: The endpoint has been permanently removed. If it reappears in the schema,
     it means the route was accidentally re-registered.
@@ -62,6 +57,6 @@ def test_retrieve_endpoint_removed_from_openapi(deprecation_client: TestClient) 
     schema = deprecation_client.get("/openapi.json").json()
     paths = schema.get("paths", {})
     assert "/retrieve" not in paths, (
-        f"POST /retrieve must not appear in OpenAPI after T08 retirement; "
+        f"POST /retrieve must not appear in OpenAPI; "
         f"found paths: {list(paths.keys())}"
     )

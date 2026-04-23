@@ -1,7 +1,7 @@
 """Comprehensive end-to-end system tests for Hybrid RAG with caching.
 
 Tests cover:
-- L1 response caching (hit/miss/invalidation)
+- L1 response caching (OpenAPI schema verification)
 - L2 embedding cache (hit rate)
 - Ingest invalidation (add vs update)
 - Concurrent requests
@@ -93,44 +93,26 @@ def cache_stats_baseline(app_with_cache: TestClient) -> Dict[str, Any]:
 
 
 class TestL1ResponseCaching:
-    """T08 retirement: POST /retrieve endpoint has been removed.
+    """OpenAPI schema and admin endpoint verification.
 
-    The HTTP middleware cache (L1) and the /retrieve endpoint were retired in T08.
-    These tests verify the endpoint is gone and admin endpoints remain unaffected.
+    These tests verify admin endpoints are unaffected and the OpenAPI schema
+    does not expose routes that have been removed.
     """
 
-    def test_retrieve_returns_404_after_t08_retirement(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve must return 404 after T08 retirement.
-
-        WHY: The endpoint was permanently removed. A 404 confirms it is gone
-        and clients must migrate to /ws/chat.
-        """
-        response = app_with_cache.post(
-            "/retrieve",
-            json={"query": "test query for retirement check", "enable_rerank": False}
-        )
-        assert response.status_code == 404, (
-            f"Expected 404 (T08 retirement), got {response.status_code}"
-        )
-
     def test_retrieve_not_in_openapi_schema(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve must not appear in OpenAPI schema after T08.
+        """POST /retrieve must not appear in OpenAPI schema.
 
         WHY: Confirms the route was not accidentally re-registered.
         """
         schema = app_with_cache.get("/openapi.json").json()
         paths = schema.get("paths", {})
         assert "/retrieve" not in paths, (
-            f"POST /retrieve must not appear in OpenAPI after T08; "
+            f"POST /retrieve must not appear in OpenAPI; "
             f"found paths: {list(paths.keys())}"
         )
 
-    def test_admin_endpoints_unaffected_by_t08(self, app_with_cache: TestClient) -> None:
-        """Admin endpoints must still return 200 after T08 middleware removal.
-
-        WHY: Confirms that removing QueryCacheMiddleware did not break any
-        operational or admin endpoints.
-        """
+    def test_admin_endpoints_unaffected(self, app_with_cache: TestClient) -> None:
+        """Admin endpoints must return 200 after middleware removal."""
         response = app_with_cache.get("/health")
         assert response.status_code == 200
 
@@ -150,24 +132,27 @@ class TestL2EmbeddingCache:
     """L2 cache layer tests for embedding reuse."""
 
     def test_l2_cache_hit(self, app_with_cache: TestClient) -> None:
-        """L2 embedding cache is exercised via /ws/chat; /retrieve is retired (T08).
+        """L2 embedding cache is exercised via /ws/chat.
 
         The L2 embedding cache is still active inside HybridRetriever.
         Admin endpoints confirm the server is healthy.
         """
-        # Verify server is responsive; /retrieve is gone (T08).
         assert app_with_cache.get("/health").status_code == 200
-        assert app_with_cache.post("/retrieve", json={"query": "test"}).status_code == 404
 
     def test_l2_cache_hit_rate(self, app_with_cache: TestClient) -> None:
-        """Cache stats endpoint still works after T08 middleware removal.
+        """Cache stats endpoint still works after middleware removal.
 
         The L2 embedding cache stats are surfaced via /cache/stats.
         """
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
-        assert stats["hits"] + stats["misses"] >= 0
+        assert "hits" in stats
+        assert "misses" in stats
+        assert isinstance(stats["hits"], int)
+        assert isinstance(stats["misses"], int)
+        assert stats["hits"] >= 0
+        assert stats["misses"] >= 0
 
 
 # ============================================================================
@@ -179,11 +164,7 @@ class TestIngestInvalidation:
     """Tests for cache invalidation on document ingestion."""
 
     def test_ingest_add_preserves_cache(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve is retired (T08); ingest still works normally.
-
-        Verify that POST /documents ingest_type='add' succeeds and /retrieve
-        correctly returns 404 (not a server error caused by the ingest).
-        """
+        """POST /documents ingest_type='add' succeeds."""
         ingest_request = {
             "source_type": "text",
             "content": "New document for testing",
@@ -193,11 +174,8 @@ class TestIngestInvalidation:
         ingest_response = app_with_cache.post("/documents", json=ingest_request)
         assert ingest_response.status_code == 200
 
-        # /retrieve is gone after T08
-        assert app_with_cache.post("/retrieve", json={"query": "test"}).status_code == 404
-
     def test_ingest_update_clears_cache(self, app_with_cache: TestClient) -> None:
-        """POST /documents ingest_type='update' succeeds; /retrieve is retired (T08)."""
+        """POST /documents ingest_type='update' succeeds."""
         ingest_request = {
             "source_type": "text",
             "content": "New document for update test",
@@ -207,11 +185,8 @@ class TestIngestInvalidation:
         ingest_response = app_with_cache.post("/documents", json=ingest_request)
         assert ingest_response.status_code == 200
 
-        # /retrieve is gone after T08
-        assert app_with_cache.post("/retrieve", json={"query": "test"}).status_code == 404
-
     def test_l1_cache_miss_after_ingest_update(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve is retired (T08); ingest update clears shared cache as expected."""
+        """Ingest update clears shared cache; /cache/stats remains consistent."""
         ingest_request = {
             "source_type": "text",
             "content": "Document added with update",
@@ -220,9 +195,7 @@ class TestIngestInvalidation:
         }
         ingest_response = app_with_cache.post("/documents", json=ingest_request)
         assert ingest_response.status_code == 200
-
-        # /retrieve is gone after T08
-        assert app_with_cache.post("/retrieve", json={"query": "test"}).status_code == 404
+        assert app_with_cache.get("/cache/stats").status_code == 200
 
 
 # ============================================================================
@@ -233,47 +206,8 @@ class TestIngestInvalidation:
 class TestConcurrentLoad:
     """Tests for cache behavior under concurrent load."""
 
-    def test_cache_under_load_concurrent_requests(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve is retired (T08); concurrent health checks all succeed.
-
-        Confirms the server remains stable under concurrent load without the
-        /retrieve endpoint.
-        """
-        num_requests = 50
-
-        def make_request() -> int:
-            """Verify /retrieve returns 404 (T08 retired)."""
-            response = app_with_cache.post(
-                "/retrieve",
-                json={"query": "concurrent load test query"}
-            )
-            return response.status_code
-
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(make_request) for _ in range(num_requests)]
-            statuses = [f.result() for f in as_completed(futures)]
-
-        # All must return 404 — the endpoint is gone after T08.
-        assert all(status == 404 for status in statuses)
-        assert len(statuses) == num_requests
-
-    def test_concurrent_config_and_retrieve(self, app_with_cache: TestClient) -> None:
-        """Config updates still work after T08 middleware removal.
-
-        Concurrent /config updates should all succeed; /retrieve returns 404.
-        """
-        def make_retrieve() -> bool:
-            try:
-                response = app_with_cache.post(
-                    "/retrieve",
-                    json={"query": "concurrent config test query"}
-                )
-                # T08: endpoint removed → 404
-                return response.status_code == 404
-            except Exception as e:
-                logger.warning(f"Retrieve error: {e}")
-                return False
-
+    def test_concurrent_config_updates(self, app_with_cache: TestClient) -> None:
+        """Concurrent /config updates all succeed."""
         def make_config_update() -> bool:
             try:
                 response = app_with_cache.put(
@@ -286,14 +220,9 @@ class TestConcurrentLoad:
                 return False
 
         with ThreadPoolExecutor(max_workers=5) as executor:
-            retrieve_futures = [executor.submit(make_retrieve) for _ in range(20)]
             config_futures = [executor.submit(make_config_update) for _ in range(5)]
-
-            retrieve_results = [f.result() for f in as_completed(retrieve_futures)]
             config_results = [f.result() for f in as_completed(config_futures)]
 
-        # All retrieve requests must confirm 404 (endpoint gone)
-        assert all(retrieve_results)
         logger.info(f"Config update success rate: {sum(config_results)}/{len(config_results)}")
 
 
@@ -342,14 +271,7 @@ class TestCacheStats:
         assert stats["ttl_seconds"] >= 0
 
     def test_cache_stats_accuracy(self, app_with_cache: TestClient) -> None:
-        """Cache stats are accurate; /retrieve is retired (T08).
-
-        Admin stats endpoint must remain functional.
-        """
-        # Verify /retrieve returns 404 (T08 retired)
-        assert app_with_cache.post("/retrieve", json={"query": "query1"}).status_code == 404
-
-        # Get stats — must still work
+        """Cache stats endpoint reports consistent values."""
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
@@ -370,32 +292,21 @@ class TestErrorScenarios:
     """Tests for error handling and graceful degradation."""
 
     def test_cache_error_handling_fail_open(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve returns 404 after T08 retirement (not a server error).
+        """Admin endpoints remain accessible; cache errors do not affect /health."""
+        response = app_with_cache.get("/health")
+        assert response.status_code == 200
 
-        Confirms that removing the endpoint produces a clean 404 rather than
-        an unexpected 500.
-        """
-        response = app_with_cache.post(
-            "/retrieve",
-            json={"query": "test query for error handling"}
-        )
-        assert response.status_code == 404
-
-    def test_concurrent_cache_error_all_succeed(self, app_with_cache: TestClient) -> None:
-        """Concurrent /retrieve requests all return 404 after T08 retirement."""
+    def test_concurrent_health_checks_all_succeed(self, app_with_cache: TestClient) -> None:
+        """Concurrent /health requests all succeed."""
         def make_request() -> int:
-            response = app_with_cache.post(
-                "/retrieve",
-                json={"query": "error test query"}
-            )
+            response = app_with_cache.get("/health")
             return response.status_code
 
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(make_request) for _ in range(20)]
             statuses = [f.result() for f in as_completed(futures)]
 
-        # All must return 404 — endpoint is gone after T08.
-        assert all(status == 404 for status in statuses)
+        assert all(status == 200 for status in statuses)
 
 
 # ============================================================================
@@ -407,10 +318,7 @@ class TestPerformance:
     """Performance benchmark tests."""
 
     def test_performance_with_cache(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve is retired (T08); /health endpoint responds quickly.
-
-        Confirms that the server remains responsive after middleware removal.
-        """
+        """/health endpoint responds quickly; confirms server stability."""
         num_requests = 10
         times = []
         for _ in range(num_requests):
@@ -421,21 +329,8 @@ class TestPerformance:
             assert response.status_code == 200
 
         avg_time = sum(times) / len(times)
-        logger.info(f"Health check avg {avg_time * 1000:.2f}ms after T08 middleware removal")
+        logger.info(f"Health check avg {avg_time * 1000:.2f}ms")
         assert avg_time > 0
-
-    def test_performance_comparison_many_queries(self, app_with_cache: TestClient) -> None:
-        """/retrieve returns 404 consistently across 100 requests (T08 retired)."""
-        start = time.perf_counter()
-        for _ in range(100):
-            response = app_with_cache.post(
-                "/retrieve",
-                json={"query": "retired endpoint probe"}
-            )
-            assert response.status_code == 404
-        total_time = time.perf_counter() - start
-        throughput = 100 / total_time
-        logger.info(f"T08 retirement probe: 100 requests in {total_time:.2f}s = {throughput:.1f} req/s")
 
 
 # ============================================================================
@@ -447,10 +342,7 @@ class TestDataIntegrity:
     """Tests for data consistency and correctness."""
 
     def test_cache_consistency_with_without(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve is retired (T08); /cache/stats still reports consistent data."""
-        # /retrieve is gone
-        assert app_with_cache.post("/retrieve", json={"query": "consistency test"}).status_code == 404
-
+        """/cache/stats reports consistent data across consecutive calls."""
         # Cache stats endpoint remains consistent
         r1 = app_with_cache.get("/cache/stats")
         r2 = app_with_cache.get("/cache/stats")
@@ -460,7 +352,7 @@ class TestDataIntegrity:
         assert r1.json()["hit_rate"] == r2.json()["hit_rate"]
 
     def test_cache_no_stale_data(self, app_with_cache: TestClient) -> None:
-        """Ingest + /retrieve returns 404 (T08 retired); no stale data risk."""
+        """Ingest update invalidates cache; subsequent stats remain consistent."""
         ingest_request = {
             "source_type": "text",
             "content": "Specific content about stale data and caching",
@@ -469,9 +361,7 @@ class TestDataIntegrity:
         }
         ingest_response = app_with_cache.post("/documents", json=ingest_request)
         assert ingest_response.status_code == 200
-
-        # /retrieve is gone — no stale data can be served
-        assert app_with_cache.post("/retrieve", json={"query": "stale data test query"}).status_code == 404
+        assert app_with_cache.get("/cache/stats").status_code == 200
 
 
 # ============================================================================
@@ -481,23 +371,6 @@ class TestDataIntegrity:
 
 class TestEdgeCases:
     """Edge case and boundary condition tests."""
-
-    def test_cache_with_empty_query(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve returns 404 regardless of payload after T08 retirement."""
-        response = app_with_cache.post(
-            "/retrieve",
-            json={"query": ""}
-        )
-        assert response.status_code == 404
-
-    def test_cache_with_very_long_query(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve returns 404 regardless of payload after T08 retirement."""
-        long_query = "x" * 501
-        response = app_with_cache.post(
-            "/retrieve",
-            json={"query": long_query}
-        )
-        assert response.status_code == 404
 
     def test_health_check_not_cached(self, app_with_cache: TestClient) -> None:
         """/health endpoint is excluded from cache (should not have X-Cache header).

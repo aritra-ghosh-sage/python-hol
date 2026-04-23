@@ -519,10 +519,9 @@ class TestCorpusVersionFormatContract:
 
 
 class TestXCacheHeaderContract:
-    """Contract test for X-Cache header absence on admin endpoints after T08.
+    """Contract test for X-Cache header absence on admin endpoints.
 
-    POST /retrieve was retired in T08. The only remaining assertion is that
-    GET /cache/stats does not carry an X-Cache header.
+    Asserts that GET /cache/stats does not carry an X-Cache header.
     """
 
     def test_x_cache_header_absent_on_stats_endpoint(
@@ -531,8 +530,8 @@ class TestXCacheHeaderContract:
         """GET /cache/stats must NOT carry an X-Cache header.
 
         WHAT: Confirms that the /cache/stats path has no X-Cache header.
-        WHY: After T08 middleware removal, no path should receive X-Cache headers
-        from the retired QueryCacheMiddleware.
+        WHY: No path should receive X-Cache headers; the middleware that
+        injected this header has been removed.
         """
         response = stats_client.get("/cache/stats")
         assert response.status_code == 200
@@ -980,15 +979,13 @@ class TestFallbackSemanticsContract:
 class TestCrossIssueDecisionContract:
     """Contract tests pinning the cross-issue architectural decisions.
 
-    WHAT CONTRACT: Three explicit cross-issue decisions made during OPTB-007
+    WHAT CONTRACT: Two explicit cross-issue decisions made during OPTB-007
     through OPTB-012 are enforced here:
 
       1. The cache response header is named 'X-Cache' (not 'X-Cache-Status'
          or 'Cache-Status').
       2. The pre-OPTB-008 flat stat fields (hits, misses, hit_rate, size,
          backend) are not present at the top level of /cache/stats.
-      3. POST /retrieve returns HTTP 200 even when the cache is faulting
-         (fail-open / graceful degradation).
 
     WHY THIS CLASS: Cross-issue decisions are the most likely to be
     accidentally reverted because no single issue 'owns' them.  Pinning them

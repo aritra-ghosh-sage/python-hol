@@ -169,7 +169,7 @@ async def test_websocket_uses_shared_facade_and_preserves_message_contract(monke
 async def test_parity_repeated_equivalent_query_rest_then_ws_hits_shared_cache(
     parity_harness: FakeRetriever,
 ) -> None:
-    """T08: Two identical WS queries share the cache (REST path is retired).
+    """Two identical WS queries share the same cache key.
 
     WHY: The shared retrieval cache is keyed by (query, rerank, corpus_version).
     The second identical WS query must be a cache HIT with zero additional retriever calls.
@@ -197,7 +197,7 @@ async def test_parity_repeated_equivalent_query_rest_then_ws_hits_shared_cache(
 async def test_parity_config_update_invalidates_shared_cache_for_rest_and_ws(
     parity_harness: FakeRetriever,
 ) -> None:
-    """T08: Config update invalidates shared cache; subsequent WS query is a miss."""
+    """Config update invalidates shared cache; subsequent WS query is a miss."""
 
     ws1 = FakeWebSocket(incoming_messages=[{"query": "cfg parity", "enable_rerank": False}])
     await api.websocket_chat(ws1)
@@ -221,7 +221,7 @@ async def test_parity_config_update_invalidates_shared_cache_for_rest_and_ws(
 async def test_parity_ingest_add_bumps_version_and_update_also_invalidates(
     parity_harness: FakeRetriever,
 ) -> None:
-    """T08: ingest_type add bumps corpus_version (WS miss); update clears cache and bumps again.
+    """ingest_type add bumps corpus_version (WS miss); update clears cache and bumps again.
 
     WHY: When 'add' ingests new documents, the collection count changes which means
     _build_corpus_version_token() returns a new token.  Subsequent WS queries built
@@ -289,7 +289,7 @@ async def test_parity_ingest_add_bumps_version_and_update_also_invalidates(
 async def test_rerank_override_isolation_no_global_config_bleed_under_mixed_calls(
     parity_harness: FakeRetriever,
 ) -> None:
-    """T08: WS-only mixed rerank calls keep override request-local without mutating global config."""
+    """WS-only mixed rerank calls keep override request-local without mutating global config."""
 
     ws_no_rerank = FakeWebSocket(incoming_messages=[{"query": "rerank isolation", "enable_rerank": False}])
     await api.websocket_chat(ws_no_rerank)
@@ -319,7 +319,7 @@ async def test_rerank_override_isolation_no_global_config_bleed_under_mixed_call
 async def test_parity_corpus_version_bumps_on_add_both_transports_see_miss(
     parity_harness: FakeRetriever,
 ) -> None:
-    """T08: Both WS queries observe a cache miss after an 'add' ingest bumps corpus_version.
+    """Both WS queries observe a cache miss after an 'add' ingest bumps corpus_version.
 
     WHY: _build_corpus_version_token() incorporates the live collection count.
     When 'add' inserts documents the count grows, producing a new version token.
@@ -376,7 +376,7 @@ async def test_parity_corpus_version_bumps_on_add_both_transports_see_miss(
 async def test_parity_corpus_version_bumps_on_update_both_transports_see_miss(
     parity_harness: FakeRetriever,
 ) -> None:
-    """T08: Both WS queries observe a cache miss after an 'update' ingest bumps corpus_version.
+    """Both WS queries observe a cache miss after an 'update' ingest bumps corpus_version.
 
     WHY: 'update' increments _cache_generation AND clears the L1 cache, then
     _build_corpus_version_token() produces a new token (gen incremented, count grown).
@@ -431,7 +431,7 @@ async def test_parity_corpus_version_bumps_on_update_both_transports_see_miss(
 async def test_parity_ws_first_rest_second_shares_same_corpus_version_key(
     parity_harness: FakeRetriever,
 ) -> None:
-    """T08: Two WS queries share the same cache key under the same corpus_version.
+    """Two WS queries share the same cache key under the same corpus_version.
 
     WHY: Both WS calls use _shared_retrieve_documents which computes the cache key
     using the module-level _corpus_version token.  Because that token is shared state,
