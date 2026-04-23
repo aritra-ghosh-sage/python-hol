@@ -89,16 +89,14 @@ L1 caches **complete HTTP response bodies** for `POST /retrieve` requests. A cac
 
 ### Cache key identity
 
-The L1 cache key is a SHA-256 hash of four inputs:
+The HTTP middleware (`QueryCacheMiddleware`) derives the L1 cache key from the request body:
 
 | Input | Source | Notes |
 |-------|--------|-------|
-| `query` | Request body, whitespace-normalised | Equivalent queries (same normalised form) share a key |
-| `enable_rerank` | Request param → `_config.enable_rerank` default | Requests with different rerank values are cached separately (ADR-002) |
-| `config_fingerprint` | SHA-256 of serialised `_config` retrieval fields | Changes on every `PUT /config` success |
-| `corpus_version` | `_corpus_version` module variable | Changes on explicit invalidation events (see §5) |
+| `query` (via body) | Request body, canonically serialised JSON | Equivalent queries (same normalised form) share a key |
+| `enable_rerank` | Extracted from request body | Requests with different rerank values are cached separately (ADR-002) |
 
-**Transport is excluded.** REST `POST /retrieve` and WebSocket `/ws/chat` calls that produce identical key inputs share the same L1 cache entry (see `CACHE_DEPLOYMENT.md` §Cross-Channel Cache Architecture for the shared facade details).
+> **Shared retrieval facade key.** `_shared_retrieve_documents` in `api.py` — which handles application-layer caching for both HTTP and WebSocket paths — uses a richer key that also includes `config_fingerprint` (SHA-256 of `_config` retrieval fields) and `corpus_version` (`_corpus_version` module variable). REST `POST /retrieve` and WebSocket `/ws/chat` calls share the same application-layer cache entries via `_shared_retrieve_documents` (WebSocket bypasses the HTTP middleware entirely and goes through this facade). See `CACHE_DEPLOYMENT.md` §Cross-Channel Cache Architecture for details.
 
 ### Configurable backends
 
@@ -337,7 +335,7 @@ Distributing embedding vectors would require serialising and deserialising numpy
 | `ERROR` | Response status is non-200 (response not cached). |
 
 **Current implementation note:** Cache backend exceptions during L1 get/set are logged and reflected in cache health/stat counters, but they do **not** currently change the response header to `X-Cache: ERROR`; successful fallback responses still return `X-Cache: MISS`.
-**Paths where `X-Cache` is NOT set:** `GET` requests and all excluded paths (`/health`, `/config`, `/ingest`, `/documents`, `/documents/sources`, `/cache/stats`).
+**Paths where `X-Cache` is NOT set:** `GET` requests and all excluded paths (`/health`, `/config`, `/documents`, `/cache/stats`).
 
 **WebSocket (`/ws/chat`):** Cache activity is reflected in `GET /cache/stats` counters (both transports share the same cache backend), but the WebSocket message schema does not include a cache-status field. `X-Cache` is an HTTP-only header.
 
