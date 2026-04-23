@@ -216,6 +216,7 @@ def stats_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
     monkeypatch.setattr(api, "_cache", FakeCacheForStats())
     monkeypatch.setattr(api, "_retriever", FakeRetrieverWithEmbeddingStats())
+    monkeypatch.setattr(api, "_cache_generation", 0)
     return TestClient(api.app)
 
 
