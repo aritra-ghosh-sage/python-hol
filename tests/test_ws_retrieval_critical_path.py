@@ -354,3 +354,4 @@ async def test_ws_empty_results_on_all_below_threshold(monkeypatch: pytest.Monke
     assert results_msg["type"] == "results"
     assert results_msg["total_results"] == 0
     assert results_msg["results"] == []
+
