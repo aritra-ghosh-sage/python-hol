@@ -405,8 +405,8 @@ class LayeredCacheStatsResponse(BaseModel):
     The layered schema gives consumers an unambiguous contract.
 
     All L1 metrics (hits, misses, hit_rate, size, backend, etc.) are accessed
-    via l1_query_cache.  The deprecated top-level mirrors were removed in
-    OPTB-008 completion.  Clients must migrate to the nested paths.
+    via l1_query_cache.  The deprecated top-level mirrors were removed; clients
+    must use the nested paths.
 
     Attributes:
         l1_query_cache: L1 query-response cache metrics + corpus_version.
