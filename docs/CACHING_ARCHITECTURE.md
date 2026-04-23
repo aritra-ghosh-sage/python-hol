@@ -238,7 +238,7 @@ Reports whether the L1 cache backend is reachable and whether the system is oper
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `timestamp` | ISO-8601 string (UTC) | UTC timestamp at which these statistics were captured. Format: `YYYY-MM-DDTHH:MM:SS.sssZ`. Use this to detect stale dashboards or caching of the `/cache/stats` response itself. |
+| `timestamp` | ISO-8601 string (UTC) | UTC timestamp at which these statistics were captured. Format: ISO-8601 UTC, for example `YYYY-MM-DDTHH:MM:SS.sssZ` or `YYYY-MM-DDTHH:MM:SS.sss+00:00`. Use this to detect stale dashboards or caching of the `/cache/stats` response itself. |
 
 ---
 
