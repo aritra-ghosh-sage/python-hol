@@ -822,7 +822,7 @@ echo '{"query": "offline maps"}' | websocat ws://localhost:8000/ws/chat
 
 1. Replace `POST /retrieve` calls with a WebSocket connection to `/ws/chat`.
 2. Send `{"query": "<your query>"}` as a JSON message after the connection is established.
-3. The server streams status updates followed by the final result with `type: "result"`.
+3. The server streams status updates followed by the final result with `type: "results"`.
 
 **Before (deprecated REST):**
 ```bash
@@ -837,7 +837,7 @@ const ws = new WebSocket("ws://localhost:8000/ws/chat");
 ws.onopen = () => ws.send(JSON.stringify({ query: "offline maps" }));
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
-  if (msg.type === "result") console.log(msg.results);
+  if (msg.type === "results") console.log(msg.results);
 };
 ```
 
