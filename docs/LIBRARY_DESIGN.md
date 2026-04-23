@@ -295,7 +295,7 @@ logging.config.dictConfig({
 ## Future Enhancements
 
 1. Add async retrieval support
-2. Implemented in v0.1.0 — see [CACHING_ARCHITECTURE.md](./docs/CACHING_ARCHITECTURE.md)
+2. Implemented in v0.1.0 — see [CACHING_ARCHITECTURE.md](./CACHING_ARCHITECTURE.md)
 3. `GET /cache/stats` metrics endpoint implemented in v0.1.0
 4. Support for custom embedding models
 5. Batch retrieval operations
