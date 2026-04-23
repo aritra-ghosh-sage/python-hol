@@ -940,14 +940,22 @@ async def retrieve(request: RetrievalRequest, http_request: Request) -> Retrieva
             detail="Retriever service not initialized. Try again later.",
         )
 
-    # OPTB-012: Extract correlation ID from headers for per-request log tracing.
-    # Honour X-Request-ID first (most common), then X-Correlation-ID (AWS/GCP style).
-    # Fall back to auto-generated UUID when neither header is present.
-    correlation_id: str = (
+    # OPTB-012: Prefer the request-scoped correlation ID established by the
+    # QueryCacheMiddleware (stored on request.state.correlation_id) so that
+    # middleware logs and handler logs share exactly one ID per request.
+    # Fall back to header extraction and finally to a fresh UUID only when
+    # the middleware has not run (e.g. in direct-handler unit tests).
+    correlation_id: str = getattr(http_request.state, "correlation_id", None) or (
         http_request.headers.get("X-Request-ID")
         or http_request.headers.get("X-Correlation-ID")
         or str(uuid.uuid4())
     )
+    # Write back so any code path called after this point can find the ID on
+    # request.state without re-deriving it.
+    try:
+        http_request.state.correlation_id = correlation_id
+    except Exception:
+        pass
 
     try:
         logger.info(f"Retrieval request: {request.query[:50]}...")

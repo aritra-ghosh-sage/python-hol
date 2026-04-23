@@ -1,5 +1,6 @@
 """Tests for shared retrieval facade usage across REST and WebSocket handlers."""
 
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
 
@@ -17,17 +18,27 @@ def _fake_http_request(headers: Optional[Dict[str, str]] = None) -> Any:
     The retrieve handler now accepts an ``http_request: Request`` argument to
     extract the X-Request-ID header for correlation-aware cache logging (OPTB-012).
     Tests that call the handler as a plain coroutine need to supply a stub that
-    satisfies ``request.headers.get(...)``.
+    satisfies ``request.headers.get(...)`` and ``request.state``.
+
+    ``state`` is a ``SimpleNamespace`` (no pre-existing attributes) rather than
+    a MagicMock so that ``getattr(stub.state, "correlation_id", None)`` returns
+    ``None`` instead of a truthy MagicMock instance.  This ensures the handler
+    follows the correct fallback path (header → UUID) in unit tests.
 
     Args:
         headers: Optional dict of headers to expose on the stub.
 
     Returns:
-        A MagicMock whose ``.headers.get(...)`` returns values from *headers*.
+        A stub whose ``.headers.get(...)`` returns values from *headers* and
+        whose ``.state`` starts as an empty ``SimpleNamespace``.
     """
     stub = MagicMock()
     stub.headers = MagicMock()
     stub.headers.get = (headers or {}).get
+    # Use SimpleNamespace so attribute access on .state behaves like a plain
+    # object: missing attributes raise AttributeError (caught by getattr default),
+    # and assignments persist within the stub for the duration of the test.
+    stub.state = SimpleNamespace()
     return stub
 
 

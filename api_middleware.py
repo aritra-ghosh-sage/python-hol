@@ -266,6 +266,17 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
             or request.headers.get("X-Correlation-ID")
             or str(uuid.uuid4())
         )
+        # Stash the ID on request.state so downstream handlers (e.g. the
+        # /retrieve endpoint) can reuse the same value rather than generating
+        # a second, unrelated UUID.  All logs for a single HTTP request then
+        # carry a single consistent correlation_id regardless of which layer
+        # emits them (middleware vs. handler vs. shared retrieval).
+        try:
+            request.state.correlation_id = correlation_id
+        except Exception:
+            # request.state may not be writable in all ASGI edge cases;
+            # swallow the error so middleware never breaks the request path.
+            pass
 
         try:
             # Read request body (using replay pattern)

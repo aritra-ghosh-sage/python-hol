@@ -70,13 +70,25 @@ class _FakeCollection:
     Note 5: The leading underscore signals that this class is module-private.
     Python does not enforce this, but it communicates intent to other developers
     reading the file.
+
+    The count is now stateful: it starts at 5 (matching the "gen0.n5"
+    corpus_version token used by most tests) and is incremented by add() so
+    that _build_corpus_version_token() returns a genuinely different token
+    after each ingest-add operation.  Without this, prev_version and
+    new_version in the invalidation log would be identical, which would let
+    the AC-1 ingest-add assertion pass vacuously.
     """
+
+    def __init__(self) -> None:
+        # Start at 5 so _build_corpus_version_token() returns "gen0.n5" —
+        # matching the corpus_version= "gen0.n5" default in _patch_standard_app.
+        self._count: int = 5
 
     def count(self) -> int:  # noqa: D102
         # Note 6: noqa: D102 silences the "Missing docstring in public method"
         # linter warning for this one-liner helper. It keeps test files concise
         # without disabling linting globally.
-        return 5
+        return self._count
 
     def add(
         self,
@@ -84,11 +96,16 @@ class _FakeCollection:
         documents: List[str],
         metadatas: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        """Accept document additions without persisting anything."""
-        # Note 7: The body is intentionally empty (pass). This is the simplest
-        # possible fake for a write operation — it acknowledges the call without
-        # any side effects, keeping tests hermetic (isolated from each other).
-        pass
+        """Simulate document addition by incrementing the tracked count.
+
+        WHY: _build_corpus_version_token() calls collection.count() to derive
+        the corpus_version token.  A no-op add() would leave the count
+        unchanged, making prev_version == new_version and the ingest-add
+        invalidation log impossible to distinguish from a no-op.  Incrementing
+        by len(ids) mirrors what a real ChromaDB collection does.
+        """
+        # Each id corresponds to one document chunk stored in the collection.
+        self._count += len(ids)
 
 
 class _FakeRetriever:
@@ -369,6 +386,23 @@ class TestAC1InvalidationLogs:
         combined = " ".join(invalidation_logs)
         assert "prev_version=" in combined
         assert "new_version=" in combined
+
+        # Extract tokens and verify they differ — if the fake collection does
+        # not track count, _build_corpus_version_token() returns the same value
+        # for both and the log would be misleading.
+        log_line = invalidation_logs[0]
+        prev_token = ""
+        new_token = ""
+        for part in log_line.split():
+            if part.startswith("prev_version="):
+                prev_token = part.split("=", 1)[1]
+            if part.startswith("new_version="):
+                new_token = part.split("=", 1)[1]
+
+        assert prev_token != new_token, (
+            f"prev_version '{prev_token}' must differ from new_version '{new_token}' "
+            "after ingest_type=add (the collection count dimension must change)."
+        )
 
 
 # ===========================================================================
