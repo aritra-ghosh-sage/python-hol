@@ -22,7 +22,7 @@ Example:
     >>> app.add_middleware(
     ...     QueryCacheMiddleware,
     ...     cache_backend=cache,
-    ...     excluded_paths=["/health", "/config", "/ingest", "/cache/stats"]
+    ...     excluded_paths=["/health", "/config", "/cache/stats"]
     ... )
     >>>
     >>> # All POST /retrieve requests now cached with X-Cache header
@@ -81,10 +81,20 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
     (ADR-002), ensuring that requests with different reranking settings are cached
     separately.
 
+    Transition-period scope (T05):
+        During the /retrieve → /ws/chat migration, POST /retrieve is the only
+        cache-eligible endpoint.  Admin and operational endpoints (health, config,
+        documents, cache/stats) are explicitly listed in ``excluded_paths``
+        so that their non-interception is deterministic and auditable, independent
+        of any future changes to the positive path-matching logic in
+        ``_should_cache_request``.
+
     Attributes:
         cache_backend: CacheBackend instance for storing/retrieving cached responses.
         excluded_paths: List of URL paths that should NOT be cached.
-            Defaults to ['/health', '/config', '/ingest', '/documents', '/documents/sources', '/cache/stats'].
+            Defaults to ['/health', '/config', '/documents',
+            '/documents/sources', '/cache/stats'].  All admin and operational
+            endpoints must appear here to guarantee explicit non-interception.
 
     Example:
         >>> from hybrid_rag.cache import InMemoryCache
@@ -94,7 +104,7 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         >>> middleware = QueryCacheMiddleware(
         ...     app=app,
         ...     cache_backend=cache,
-        ...     excluded_paths=['/health', '/ingest']
+        ...     excluded_paths=['/health', '/metrics']
         ... )
     """
 
@@ -110,7 +120,7 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
             app: The ASGI application to wrap.
             cache_backend: CacheBackend instance for caching responses.
             excluded_paths: List of URL paths to exclude from caching.
-                Defaults to ['/health', '/config', '/ingest', '/documents', '/documents/sources', '/cache/stats'].
+                Defaults to ['/health', '/config', '/documents', '/documents/sources', '/cache/stats'].
 
         Example:
             >>> from hybrid_rag.cache import InMemoryCache
@@ -126,7 +136,6 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         self.excluded_paths: List[str] = excluded_paths or [
             "/health",
             "/config",
-            "/ingest",
             "/documents",
             "/documents/sources",
             "/cache/stats",
@@ -144,6 +153,14 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         is the SEC-002 pattern — consuming the request stream has side effects
         (memory allocation, stream exhaustion), so the gate must be cheap and
         early.
+
+        Transition-period scope (T05):
+            Cache interception is intentionally limited to POST /retrieve for the
+            duration of the /retrieve → /ws/chat migration.  The positive path
+            check (method == POST and path == /retrieve) enforces this allowlist.
+            The ``excluded_paths`` check adds a second, explicit layer so that
+            admin or operational paths are never accidentally cache-intercepted
+            even if the positive allowlist logic is later extended.
 
         A request is cached if:
         - Method is POST

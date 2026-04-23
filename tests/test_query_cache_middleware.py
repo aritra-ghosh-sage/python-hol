@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import threading
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -83,11 +84,6 @@ def app(cache_backend: MockCacheBackend) -> FastAPI:
             "total_results": 1,
         }
 
-    @fast_app.post("/ingest")
-    async def ingest(data: Dict[str, Any]) -> Dict[str, str]:
-        """Test ingest endpoint (excluded from cache)."""
-        return {"status": "success"}
-
     @fast_app.post("/documents")
     async def documents(data: Dict[str, Any]) -> Dict[str, str]:
         """Test documents endpoint (excluded from cache)."""
@@ -102,6 +98,21 @@ def app(cache_backend: MockCacheBackend) -> FastAPI:
     async def health() -> Dict[str, str]:
         """Test health endpoint (excluded from cache)."""
         return {"status": "ok"}
+
+    @fast_app.get("/cache/stats")
+    async def cache_stats() -> Dict[str, Any]:
+        """Test cache stats admin endpoint (excluded from cache)."""
+        return {"backend": "mock", "hits": 0, "misses": 0}
+
+    @fast_app.get("/config")
+    async def get_config() -> Dict[str, Any]:
+        """Test config endpoint (excluded from cache)."""
+        return {"semantic_weight": 0.7, "keyword_weight": 0.3}
+
+    @fast_app.put("/config")
+    async def update_config(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Test config update endpoint (excluded from cache)."""
+        return {"semantic_weight": 0.7, "keyword_weight": 0.3}
 
     @fast_app.post("/error")
     async def error_endpoint() -> Dict[str, str]:
@@ -143,7 +154,6 @@ class TestQueryCacheMiddlewareInitialization:
         # Ensure upload-related and admin paths are excluded by default.
         assert "/health" in middleware.excluded_paths
         assert "/config" in middleware.excluded_paths
-        assert "/ingest" in middleware.excluded_paths
         assert "/documents" in middleware.excluded_paths
         assert "/documents/sources" in middleware.excluded_paths
         assert "/cache/stats" in middleware.excluded_paths
@@ -389,17 +399,6 @@ class TestExcludedPaths:
         # Should not cache health checks
         assert cache_backend.set_calls == 0
 
-    def test_ingest_endpoint_not_cached(
-        self, client: TestClient, cache_backend: MockCacheBackend
-    ) -> None:
-        """Ingest endpoint is in excluded paths and not cached."""
-        cache_backend.set_calls = 0
-        response = client.post("/ingest", json={"data": "test"})
-
-        assert response.status_code == 200
-        # Should not cache ingest operations
-        assert cache_backend.set_calls == 0
-
     def test_documents_endpoint_not_cached(
         self, client: TestClient, cache_backend: MockCacheBackend
     ) -> None:
@@ -636,8 +635,8 @@ class TestHTTPMethods:
         """Only POST /retrieve is cached, not other endpoints."""
         cache_backend.set_calls = 0
 
-        # POST to ingest (excluded)
-        client.post("/ingest", json={"data": "test"})
+        # POST to documents (excluded)
+        client.post("/documents", json={"source_type": "text"})
         assert cache_backend.set_calls == 0
 
         # POST to retrieve (should cache)
@@ -825,3 +824,128 @@ class TestAcceptanceCriteria:
         # Implementation will use logger at appropriate levels
         response = client.post("/retrieve", json={"query": "test"})
         assert response.status_code == 200
+
+
+class TestTransitionScopeRules:
+    """T05: Verify middleware scope rules are deterministic during transition period.
+
+    During the /retrieve → /ws/chat migration, only POST /retrieve must be
+    cache-intercepted. Admin and operational endpoints must never be intercepted,
+    regardless of HTTP method or payload shape.
+    """
+
+    def test_retrieve_intercepted_during_transition(
+        self, client: TestClient, cache_backend: MockCacheBackend
+    ) -> None:
+        """POST /retrieve (transitional endpoint) remains cache-intercepted."""
+        cache_backend.get_calls = 0
+        cache_backend.set_calls = 0
+
+        response = client.post("/retrieve", json={"query": "transition test"})
+
+        assert response.status_code == 200
+        assert cache_backend.get_calls > 0, "Middleware must check cache for POST /retrieve"
+
+    def test_cache_stats_admin_endpoint_not_intercepted(
+        self, client: TestClient, cache_backend: MockCacheBackend
+    ) -> None:
+        """GET /cache/stats (admin monitoring) must never be cache-intercepted."""
+        cache_backend.get_calls = 0
+        cache_backend.set_calls = 0
+
+        response = client.get("/cache/stats")
+
+        assert response.status_code == 200
+        assert cache_backend.get_calls == 0, "/cache/stats must bypass the cache gate"
+        assert cache_backend.set_calls == 0, "/cache/stats must not be stored in cache"
+
+    def test_config_get_endpoint_not_intercepted(
+        self, client: TestClient, cache_backend: MockCacheBackend
+    ) -> None:
+        """GET /config (live configuration) must never be cache-intercepted."""
+        cache_backend.get_calls = 0
+        cache_backend.set_calls = 0
+
+        response = client.get("/config")
+
+        assert response.status_code == 200
+        assert cache_backend.get_calls == 0
+        assert cache_backend.set_calls == 0
+
+    def test_config_put_endpoint_not_intercepted(
+        self, client: TestClient, cache_backend: MockCacheBackend
+    ) -> None:
+        """PUT /config (state-changing) must never be cache-intercepted."""
+        cache_backend.get_calls = 0
+        cache_backend.set_calls = 0
+
+        response = client.put("/config", json={"semantic_weight": 0.8})
+
+        assert response.status_code == 200
+        assert cache_backend.get_calls == 0
+        assert cache_backend.set_calls == 0
+
+    def test_cache_stats_in_default_excluded_paths(self) -> None:
+        """/cache/stats appears in the default excluded_paths list."""
+        middleware = QueryCacheMiddleware(
+            app=FastAPI(), cache_backend=MockCacheBackend()
+        )
+        assert "/cache/stats" in middleware.excluded_paths
+
+    def test_documents_sources_in_default_excluded_paths(self) -> None:
+        """/documents/sources appears in the default excluded_paths list."""
+        middleware = QueryCacheMiddleware(
+            app=FastAPI(), cache_backend=MockCacheBackend()
+        )
+        assert "/documents/sources" in middleware.excluded_paths
+
+    def test_should_cache_only_post_retrieve(self) -> None:
+        """_should_cache_request returns True only for JSON POST /retrieve."""
+        inner_app = FastAPI()
+        cache = MockCacheBackend()
+        middleware = QueryCacheMiddleware(app=inner_app, cache_backend=cache)
+
+        admin_paths = ["/health", "/config", "/cache/stats", "/documents/sources"]
+        for path in admin_paths:
+            mock_request = MagicMock()
+            mock_request.method = "POST"
+            mock_request.url.path = path
+            mock_request.headers.get = MagicMock(return_value="application/json")
+            assert not middleware._should_cache_request(mock_request), (
+                f"Admin path {path} must not be cache-eligible"
+            )
+
+    def test_concurrent_requests_cache_stability(
+        self, app: FastAPI, cache_backend: MockCacheBackend
+    ) -> None:
+        """Concurrent POST /retrieve requests produce stable, consistent cache results.
+
+        Exercises the cache under concurrent load to confirm that parallel
+        requests do not corrupt entries or produce inconsistent X-Cache headers.
+        """
+        results = []
+        errors: list[Exception] = []
+
+        def make_request() -> None:
+            try:
+                tc = TestClient(app)
+                r = tc.post("/retrieve", json={"query": "concurrent-test"})
+                results.append(
+                    (r.status_code, r.headers.get("X-Cache", ""))
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=make_request) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Concurrent requests raised exceptions: {errors}"
+        assert all(
+            status == 200 for status, _ in results
+        ), "All concurrent requests must return HTTP 200"
+        assert all(
+            x_cache in ("HIT", "MISS") for _, x_cache in results
+        ), "All concurrent responses must carry X-Cache: HIT or MISS"

@@ -974,11 +974,23 @@ app.add_middleware(
 )
 logger.info(f"CORS enabled for origins: {allow_origins}")
 
-# Register cache middleware BEFORE routes (important for ASGI chain order)
+# Register cache middleware BEFORE routes (important for ASGI chain order).
+#
+# Transition-period scope (T05):
+# Only POST /retrieve is cache-intercepted during the /retrieve → /ws/chat
+# migration. All admin and operational endpoints are explicitly listed in
+# excluded_paths so that their non-interception is deterministic and auditable,
+# regardless of any future changes to the positive path-matching logic.
 app.add_middleware(
     QueryCacheMiddleware,
     cache_backend=lazy_cache,
-    excluded_paths=["/health", "/config", "/documents", "/cache/stats"],
+    excluded_paths=[
+        "/health",             # Health check — must never be served from cache
+        "/config",             # Configuration read/write — reflects live state
+        "/documents",          # Document ingestion — mutates corpus
+        "/documents/sources",  # Document listing — must reflect live collection
+        "/cache/stats",        # Admin monitoring — must reflect live counters
+    ],
 )
 logger.info("QueryCacheMiddleware registered with lazy cache wrapper")
 
