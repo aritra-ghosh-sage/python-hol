@@ -5,9 +5,8 @@ including health checks, retrieval endpoints, configuration management,
 document ingestion, and WebSocket-based chat.
 
 CACHING ARCHITECTURE:
-    L1 Response Cache (T08 retired): HTTP middleware cache for POST /retrieve has
-        been removed. The WS/shared retrieval path is now the only user-facing
-        retrieval flow.
+    L1 WebSocket Cache: The /ws/chat endpoint is the sole retrieval path; results
+        are cached by the shared retrieval handler (_shared_retrieve_documents).
     L2 Embedding Cache: Integrated into HybridRetriever as an LRU cache for
         embedding computations. Hits on semantically similar queries reduce model
         inference latency.

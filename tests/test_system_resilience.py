@@ -203,11 +203,12 @@ class TestAC1RetrievalContinuesWithFailingCache:
 
 
 class TestAC2ControlledErrorsForUninitializedRetriever:
-    """Prove AC-2: consistent 503 from retriever-dependent endpoints when not initialised.
+    """Prove AC-2: controlled errors from admin endpoints when the retriever is not initialised.
 
-    503 "Service Unavailable" is the canonical HTTP status for a temporarily
-    unavailable dependency. It tells callers to retry later rather than
-    giving up permanently (408) or hiding the cause (500).
+    GET /config returns 503 when _config is None so callers can apply a single
+    retry policy for temporarily unavailable dependencies.  GET /health always
+    returns 200 (required by load-balancer probes) with retriever_ready='no' in
+    the body to signal the unready state without failing the probe.
     """
 
     def test_get_config_returns_503_when_config_is_none(
