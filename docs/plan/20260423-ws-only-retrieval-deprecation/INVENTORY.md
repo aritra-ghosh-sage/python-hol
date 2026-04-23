@@ -151,7 +151,7 @@ the WebSocket path or be retired with documented rationale.
 
 | Test file | Function | Requires backend? | Migration path |
 |-----------|----------|-------------------|----------------|
-| `tests/test_retrieval_filtering.py` | `TestRestApi.test_retrieve_filtered_enforces_threshold` | Yes | **Retire** — `/retrieve-filtered` has no WS equivalent; score filtering is already enforced by the shared facade's `min_score_threshold=0.80` floor applied to both transports. Retire with explicit rationale comment in the test file. |
+| `tests/test_retrieval_filtering.py` | `TestRestApi.test_retrieve_filtered_enforces_threshold` | Yes | **Retire** — `/retrieve-filtered` has no WS equivalent, but the threshold rationale must remain explicit: this inventory references a shared facade `min_score_threshold=0.80`, while the public docs in `docs/API_INTEGRATION.md` currently describe the `/retrieve-filtered` clamp/floor as `0.85`. Resolve or document that `0.80` vs `0.85` discrepancy before using the shared-floor behavior as the deprecation rationale; then retire with an explicit rationale comment in the test file. |
 
 ---
 
