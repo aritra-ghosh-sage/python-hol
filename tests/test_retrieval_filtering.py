@@ -91,7 +91,6 @@ def test_filter_logic_preserves_order():
 
 def test_floor_enforcement_logic():
     """Unit test: floor enforcement takes max of two thresholds."""
-    # Simulating retrieve-filtered behavior
     requested_min_score = 0.5
     enforced_floor = 0.80
     effective_min_score = max(enforced_floor, requested_min_score)
@@ -188,34 +187,6 @@ class TestRestApi:
             assert scores == sorted(scores, reverse=True), (
                 f"Results not sorted descending: {scores}"
             )
-
-    def test_retrieve_filtered_enforces_threshold(self, skip_if_no_backend):
-        """Verify /retrieve-filtered endpoint enforces min 0.80 threshold."""
-        import requests
-        
-        try:
-            response = requests.post(
-                "http://localhost:8000/retrieve-filtered?min_score=0.5",
-                json={"query": "test"},
-                timeout=10
-            )
-        except requests.exceptions.ConnectionError:
-            pytest.skip("Backend not available at localhost:8000")
-        
-        # Skip if retriever not initialized (503) or error (500)
-        if response.status_code in (503, 500):
-            pytest.skip(f"Backend error: {response.status_code}. Start backend with: python api.py")
-        
-        assert response.status_code == 200
-        data = response.json()
-        
-        # All results must be >= 0.80 (floor enforced), not 0.5
-        if data["results"]:
-            for result in data["results"]:
-                assert result["score"] >= 0.80, (
-                    f"Result with score {result['score']} below floor 0.80 found"
-                )
-
 
 # ============================================================================
 # WebSocket Tests (mock-based, no backend required)

@@ -1007,11 +1007,17 @@ async def health_check() -> HealthResponse:
 @app.post(
     "/retrieve",
     response_model=RetrievalResponse,
-    tags=["Retrieval"],
+    tags=["Internal"],
     summary="Retrieve relevant documents",
+    deprecated=True,
 )
-async def retrieve(retrieval_request: RetrievalRequest, http_request: Request) -> RetrievalResponse:
+async def retrieve(
+    retrieval_request: RetrievalRequest, http_request: Request
+) -> RetrievalResponse:
     """Retrieve documents relevant to the provided query.
+
+    Internal endpoint — not intended for end-user consumption.
+    Use the WebSocket endpoint ``ws://host/ws/chat`` for client-facing retrieval.
 
     Performs hybrid retrieval combining semantic and keyword search,
     with optional cross-encoder reranking.
@@ -1089,100 +1095,6 @@ async def retrieve(retrieval_request: RetrievalRequest, http_request: Request) -
     except Exception as e:
         logger.error(f"Unexpected error during retrieval: {e}")
         raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
-
-
-@app.post(
-    "/retrieve-filtered",
-    response_model=RetrievalResponse,
-    tags=["Retrieval"],
-    summary="Retrieve documents with score filtering",
-)
-async def retrieve_filtered(
-    retrieval_request: RetrievalRequest, http_request: Request, min_score: float = 0.5
-) -> RetrievalResponse:
-    """Retrieve documents with optional minimum score filtering.
-
-    Similar to /retrieve but filters results by minimum relevance score.
-
-    Args:
-        retrieval_request: RetrievalRequest with query and optional reranking setting.
-        http_request: Raw HTTP request used to extract correlation headers
-            (X-Request-ID / X-Correlation-ID) for per-request log tracing.
-        min_score: Minimum relevance score (0.0-1.0) for results. Defaults to 0.5.
-
-    Returns:
-        RetrievalResponse with filtered documents.
-
-    Raises:
-        HTTPException: 400 if min_score invalid, 503 if not initialized, 500 if fails.
-
-    Example:
-        POST /retrieve-filtered?min_score=0.8
-        {
-            "query": "How do I update maps?"
-        }
-    """
-    if not 0.0 <= min_score <= 1.0:
-        logger.warning(f"Invalid min_score: {min_score}")
-        raise HTTPException(
-            status_code=400, detail="min_score must be in range [0.0, 1.0]"
-        )
-
-    if _retriever is None or _config is None:
-        logger.error("Retriever not initialized")
-        raise HTTPException(
-            status_code=503,
-            detail="Retriever service not initialized. Try again later.",
-        )
-
-    # OPTB-012: Same correlation ID resolution as /retrieve — prefer the ID
-    # already placed on request.state by QueryCacheMiddleware, then fall back
-    # to validated header extraction, then auto-generate a UUID.
-    correlation_id: str = getattr(http_request.state, "correlation_id", None) or (
-        _sanitize_correlation_id(http_request.headers.get("X-Request-ID"))
-        or _sanitize_correlation_id(http_request.headers.get("X-Correlation-ID"))
-        or str(uuid.uuid4())
-    )
-    try:
-        http_request.state.correlation_id = correlation_id
-    except Exception:
-        pass
-
-    try:
-        logger.info(
-            f"Filtered retrieval request: {retrieval_request.query[:50]}... (min_score={min_score})"
-        )
-
-        results = _shared_retrieve_documents(
-            retrieval_request.query,
-            enable_rerank=retrieval_request.enable_rerank,
-            correlation_id=correlation_id,
-        )
-
-        # Filter results by minimum score, enforcing floor of 0.80 for chat quality
-        effective_min_score = max(0.80, min_score)
-        doc_results = _to_filtered_document_results(
-            results, min_score_threshold=effective_min_score
-        )
-
-        logger.info(f"Filtered retrieval complete: {len(doc_results)} results after filtering")
-        return RetrievalResponse(
-            query=retrieval_request.query, results=doc_results, total_results=len(doc_results)
-        )
-
-    except RetrievalError as e:
-        logger.error(f"Retrieval error: {e}")
-        raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
-    except RetrieverNotInitializedError as e:
-        logger.error(f"Retriever not initialized: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail="Retriever service not initialized. Try again later.",
-        )
-    except Exception as e:
-        logger.error(f"Unexpected error during filtered retrieval: {e}")
-        raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
-
 
 @app.get(
     "/config",
