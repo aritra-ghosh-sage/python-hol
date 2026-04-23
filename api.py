@@ -825,13 +825,14 @@ def _shared_retrieve_documents(
             log records (OPTB-012).  Auto-generated as a UUID if None.
         _out_cache_status: Optional mutable list.  When provided, the function
             appends the retrieval-layer cache outcome as its first element:
-            ``"HIT"``, ``"MISS"``, or ``"ERROR"``.  Callers that need the
-            cache status (e.g. the WS handler implementing the T03 payload-field
-            contract) pass an **empty** ``[]`` here and read
-            ``_out_cache_status[0]`` after the call.  The list must be empty
-            when passed; the function will append exactly one element.  REST
-            callers that do not need the status omit this argument; their
-            behaviour is unchanged.
+            ``"HIT"``, ``"MISS"``, or ``"ERROR"``.  Exactly one element is
+            always appended (including the ``_cache is None`` case, which
+            produces ``"MISS"`` because the retriever is always invoked).
+            Callers that need the cache status (e.g. the WS handler
+            implementing the T03 payload-field contract) pass an **empty**
+            ``[]`` here and read ``_out_cache_status[0]`` after the call.
+            The list must be empty when passed.  REST callers that do not
+            need the status omit this argument; their behaviour is unchanged.
     """
     if _retriever is None or _config is None:
         raise RetrieverNotInitializedError("Retriever not initialized")
@@ -913,6 +914,8 @@ def _shared_retrieve_documents(
                     effective_correlation_id,
                     _corpus_version,
                 )
+                if _out_cache_status is not None:
+                    _out_cache_status.append("MISS")
         except Exception as e:
             logger.warning("Shared retrieval cache read failed: %s", e)
             logger.info(
@@ -923,6 +926,11 @@ def _shared_retrieve_documents(
             )
             if _out_cache_status is not None:
                 _out_cache_status.append("ERROR")
+    else:
+        # No cache backend available — retriever will always be invoked.
+        # Emit MISS so callers always receive exactly one status element.
+        if _out_cache_status is not None:
+            _out_cache_status.append("MISS")
     results = _retriever.retrieve(query, enable_rerank=effective_enable_rerank)
 
     if _cache is not None:
@@ -1588,9 +1596,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 # T03 WS cache-status contract: include retrieval-layer cache
                 # outcome in the results payload so WS clients have the same
                 # cache visibility that REST clients get via X-Cache header.
-                # Treat a missing or unrecognised status as a defensive MISS
-                # fallback. An empty list does not imply any specific cache
-                # configuration; it only means no explicit status was emitted.
+                # _shared_retrieve_documents always appends exactly one element;
+                # the fallback handles any unexpected empty-list edge case.
                 _raw_status = ws_cache_status_out[0] if ws_cache_status_out else "MISS"
                 ws_cache_status: Literal["HIT", "MISS", "ERROR"] = (
                     _raw_status if _raw_status in ("HIT", "MISS", "ERROR") else "MISS"
