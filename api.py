@@ -839,20 +839,24 @@ def _shared_retrieve_documents(
                     _corpus_version,
                 )
                 return cached_results
+            if cached_results is None:
+                # OPTB-012: Structured miss telemetry — `cache.retrieval_miss` identifies the
+                # retrieval layer and records corpus_version so operators can distinguish
+                # expected post-invalidation misses from unexpected misses on a stable corpus.
+                # Guard: only emitted when the cache read succeeds and returns no value;
+                # cache read failures are tracked separately via `cache.retrieval_error`.
+                logger.info(
+                    "cache.retrieval_miss correlation_id=%s corpus_version=%s",
+                    effective_correlation_id,
+                    _corpus_version,
+                )
         except Exception as e:
             logger.warning("Shared retrieval cache read failed: %s", e)
-
-        # OPTB-012: Structured miss telemetry — `cache.retrieval_miss` identifies the
-        # retrieval layer and records corpus_version so operators can distinguish
-        # expected post-invalidation misses from unexpected misses on a stable corpus.
-        # Guard: only emitted when a cache backend is configured; a cacheless deployment
-        # has no L1 hit/miss semantics so logging a miss would be misleading.
-        logger.info(
-            "cache.retrieval_miss correlation_id=%s corpus_version=%s",
-            effective_correlation_id,
-            _corpus_version,
-        )
-
+            logger.info(
+                "cache.retrieval_error correlation_id=%s corpus_version=%s",
+                effective_correlation_id,
+                _corpus_version,
+            )
     results = _retriever.retrieve(query, enable_rerank=effective_enable_rerank)
 
     if _cache is not None:
