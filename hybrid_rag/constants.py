@@ -26,12 +26,8 @@ STOP_WORDS = {
 # T03: Structured telemetry event labels for cache observability (RSK-001).
 # Defined here as named constants so dashboards and alert rules can reference
 # a single authoritative source and refactors never silently break label
-# matching.  Both HTTP-layer (middleware) and retrieval-layer events are
-# included so the full observability contract is captured in one place.
+# matching.
 CACHE_TELEMETRY_LABELS = {
-    # HTTP middleware layer — emitted by QueryCacheMiddleware
-    "http_hit": "cache.http_hit",
-    "http_miss": "cache.http_miss",
     # Retrieval layer — emitted by _shared_retrieve_documents
     "retrieval_hit": "cache.retrieval_hit",
     "retrieval_miss": "cache.retrieval_miss",
