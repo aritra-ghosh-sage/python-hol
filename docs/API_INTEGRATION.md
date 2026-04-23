@@ -151,7 +151,6 @@ curl -X POST http://localhost:8000/retrieve \
 | `Sunset` | `Sat, 31 Oct 2026 23:59:59 GMT` | Planned removal date (RFC 8594) |
 | `Link` | `</ws/chat>; rel="successor-version"` | Recommended replacement endpoint |
 
----
 
 ---
 
@@ -770,7 +769,7 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8000
   - Upstream proxy-level throttling (nginx, API Gateway)
 
 ### Score Thresholds
-- **Default chat threshold:** 0.85 (floor applied to ensure high-quality results)
+- **Default chat threshold:** 0.80 (floor applied to ensure high-quality results)
 - Results below threshold are filtered out to maintain chat quality
 
 ### Configuration Updates
