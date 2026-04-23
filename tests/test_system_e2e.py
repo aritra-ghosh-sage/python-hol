@@ -131,12 +131,13 @@ class TestL2EmbeddingCache:
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
-        assert "hits" in stats
-        assert "misses" in stats
-        assert isinstance(stats["hits"], int)
-        assert isinstance(stats["misses"], int)
-        assert stats["hits"] >= 0
-        assert stats["misses"] >= 0
+        l2_stats = stats["l2_embedding_cache"]
+        assert "hits" in l2_stats
+        assert "misses" in l2_stats
+        assert isinstance(l2_stats["hits"], int)
+        assert isinstance(l2_stats["misses"], int)
+        assert l2_stats["hits"] >= 0
+        assert l2_stats["misses"] >= 0
 
 
 # ============================================================================
@@ -230,41 +231,59 @@ class TestCacheStats:
         
         assert response.status_code == 200
         stats = response.json()
-        
-        # Verify all required fields
-        required_fields = ["backend", "hits", "misses", "hit_rate", 
-                          "size", "max_size", "ttl_seconds", "timestamp"]
+
+        required_fields = ["l1_query_cache", "l2_embedding_cache", "backend_health", "timestamp"]
         for field in required_fields:
             assert field in stats
-        
-        # Verify types and ranges
-        assert isinstance(stats["backend"], str)
-        assert isinstance(stats["hits"], int)
-        assert isinstance(stats["misses"], int)
-        assert isinstance(stats["hit_rate"], (int, float))
-        assert isinstance(stats["size"], int)
-        assert isinstance(stats["max_size"], int)
-        assert isinstance(stats["ttl_seconds"], int)
-        
-        # Verify ranges
-        assert stats["hits"] >= 0
-        assert stats["misses"] >= 0
-        assert 0.0 <= stats["hit_rate"] <= 1.0
-        assert stats["size"] >= 0
-        assert stats["max_size"] > 0
-        assert stats["ttl_seconds"] >= 0
+
+        l1_stats = stats["l1_query_cache"]
+        l2_stats = stats["l2_embedding_cache"]
+        backend_health = stats["backend_health"]
+
+        assert isinstance(l1_stats["backend"], str)
+        assert isinstance(l1_stats["hits"], int)
+        assert isinstance(l1_stats["misses"], int)
+        assert isinstance(l1_stats["hit_rate"], (int, float))
+        assert isinstance(l1_stats["size"], int)
+        assert isinstance(l1_stats["max_size"], int)
+        assert isinstance(l1_stats["ttl_seconds"], int)
+        assert isinstance(l1_stats["corpus_version"], str)
+
+        assert l1_stats["hits"] >= 0
+        assert l1_stats["misses"] >= 0
+        assert 0.0 <= l1_stats["hit_rate"] <= 1.0
+        assert l1_stats["size"] >= 0
+        assert l1_stats["max_size"] >= 0
+        assert l1_stats["ttl_seconds"] >= 0
+
+        assert isinstance(l2_stats["hits"], int)
+        assert isinstance(l2_stats["misses"], int)
+        assert isinstance(l2_stats["hit_rate"], (int, float))
+        assert isinstance(l2_stats["size"], int)
+        assert isinstance(l2_stats["capacity"], int)
+        assert l2_stats["hits"] >= 0
+        assert l2_stats["misses"] >= 0
+        assert 0.0 <= l2_stats["hit_rate"] <= 1.0
+        assert l2_stats["size"] >= 0
+        assert l2_stats["capacity"] >= 0
+
+        assert isinstance(backend_health["connected"], bool)
+        assert isinstance(backend_health["fallback_active"], bool)
+        assert backend_health["latency_ms"] is None or isinstance(backend_health["latency_ms"], (int, float))
+        assert backend_health["error"] is None or isinstance(backend_health["error"], str)
 
     def test_cache_stats_accuracy(self, app_with_cache: TestClient) -> None:
         """Cache stats endpoint reports consistent values."""
         stats_response = app_with_cache.get("/cache/stats")
         assert stats_response.status_code == 200
         stats = stats_response.json()
+        l1_stats = stats["l1_query_cache"]
 
-        total = stats["hits"] + stats["misses"]
+        total = l1_stats["hits"] + l1_stats["misses"]
         assert total >= 0
 
         if total > 0:
-            assert 0.0 <= stats["hit_rate"] <= 1.0
+            assert 0.0 <= l1_stats["hit_rate"] <= 1.0
 
 
 # ============================================================================
@@ -333,7 +352,7 @@ class TestDataIntegrity:
         assert r1.status_code == 200
         assert r2.status_code == 200
         # hit_rate should not regress
-        assert r1.json()["hit_rate"] == r2.json()["hit_rate"]
+        assert r1.json()["l1_query_cache"]["hit_rate"] == r2.json()["l1_query_cache"]["hit_rate"]
 
     def test_cache_no_stale_data(self, app_with_cache: TestClient) -> None:
         """Ingest update invalidates cache; subsequent stats remain consistent."""
