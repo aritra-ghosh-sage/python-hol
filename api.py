@@ -827,9 +827,11 @@ def _shared_retrieve_documents(
             appends the retrieval-layer cache outcome as its first element:
             ``"HIT"``, ``"MISS"``, or ``"ERROR"``.  Callers that need the
             cache status (e.g. the WS handler implementing the T03 payload-field
-            contract) pass a ``[]`` here and read ``_out_cache_status[0]`` after
-            the call.  REST callers that do not need the status omit this
-            argument; their behaviour is unchanged.
+            contract) pass an **empty** ``[]`` here and read
+            ``_out_cache_status[0]`` after the call.  The list must be empty
+            when passed; the function will append exactly one element.  REST
+            callers that do not need the status omit this argument; their
+            behaviour is unchanged.
     """
     if _retriever is None or _config is None:
         raise RetrieverNotInitializedError("Retriever not initialized")
@@ -1586,8 +1588,12 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 # T03 WS cache-status contract: include retrieval-layer cache
                 # outcome in the results payload so WS clients have the same
                 # cache visibility that REST clients get via X-Cache header.
+                # Empty list means _cache is None (caching disabled or not yet
+                # initialised), which is functionally equivalent to a MISS:
+                # the retriever was always invoked and nothing was stored.
+                _raw_status = ws_cache_status_out[0] if ws_cache_status_out else "MISS"
                 ws_cache_status: Literal["HIT", "MISS", "ERROR"] = (
-                    ws_cache_status_out[0] if ws_cache_status_out else "MISS"  # type: ignore[assignment]
+                    _raw_status if _raw_status in ("HIT", "MISS", "ERROR") else "MISS"
                 )
 
                 # Send results (total_results reflects post-filter count)

@@ -234,7 +234,13 @@ async def test_b3_http_and_ws_both_expose_cache_status_in_their_respective_contr
         json={"query": "b3-header-vs-ws", "enable_rerank": False},
     )
     assert response.status_code == 200
-    assert response.headers.get("X-Cache") in {"MISS", "HIT", "ERROR"}
+    # The fixture uses a fresh InMemoryCache so the first REST call must be a
+    # MISS at both the middleware layer (X-Cache: MISS) and the retrieval layer.
+    # If the middleware served a HIT, the retriever was never called and the
+    # shared-retrieve:* key was never populated, so the subsequent WS call
+    # would also be a MISS rather than a HIT.  Assert MISS to verify the cache
+    # was actually populated before expecting a WS HIT below.
+    assert response.headers.get("X-Cache") == "MISS"
 
     ws = FakeWebSocket(
         incoming_messages=[{"query": "b3-header-vs-ws", "enable_rerank": False}]
@@ -245,7 +251,7 @@ async def test_b3_http_and_ws_both_expose_cache_status_in_their_respective_contr
     # T03 contract: WS results message MUST carry cache_status
     assert "cache_status" in ws_results
     assert ws_results["cache_status"] in {"HIT", "MISS", "ERROR"}
-    # Second call (same query, shared cache warm from REST call above) → HIT
+    # Second call (same query, shared cache warm from REST MISS above) → HIT
     assert ws_results["cache_status"] == "HIT"
 
 
@@ -371,6 +377,20 @@ async def test_c3_ws_cache_invalidation_shows_miss_after_config_update(
     warm_results = _extract_ws_results_message(ws_warm)
     assert warm_results["cache_status"] == "MISS"
 
+    # Verify the warm query was actually cached by confirming a repeat query is a HIT.
+    ws_verify_warm = FakeWebSocket(
+        incoming_messages=[{"query": query, "enable_rerank": False}]
+    )
+    await api.websocket_chat(ws_verify_warm)
+    verify_results = _extract_ws_results_message(ws_verify_warm)
+    assert verify_results["cache_status"] == "HIT", (
+        "Expected HIT on repeated query before invalidation — "
+        "cache was not populated by the warm query"
+    )
+
+    # Capture corpus_version before invalidation for comparison.
+    corpus_version_before = api._corpus_version  # type: ignore[attr-defined]
+
     # Step 2: invalidate by changing config (this bumps _cache_generation and
     # rebuilds _corpus_version, so existing shared-retrieve keys are stale).
     from fastapi.testclient import TestClient
@@ -382,6 +402,13 @@ async def test_c3_ws_cache_invalidation_shows_miss_after_config_update(
     )
     assert config_response.status_code == 200, config_response.text
 
+    # Verify config update actually changed corpus_version (invalidation occurred).
+    corpus_version_after = api._corpus_version  # type: ignore[attr-defined]
+    assert corpus_version_after != corpus_version_before, (
+        f"corpus_version did not change after PUT /config: "
+        f"before={corpus_version_before!r}, after={corpus_version_after!r}"
+    )
+
     # Step 3: same query post-invalidation must be a MISS again.
     caplog.clear()
     ws_post = FakeWebSocket(incoming_messages=[{"query": query, "enable_rerank": False}])
@@ -390,8 +417,9 @@ async def test_c3_ws_cache_invalidation_shows_miss_after_config_update(
 
     post_results = _extract_ws_results_message(ws_post)
     assert post_results["cache_status"] == "MISS", (
-        "Expected MISS after cache invalidation, got HIT — "
-        "cache_generation or corpus_version was not bumped correctly"
+        f"Expected MISS after cache invalidation (corpus_version changed from "
+        f"{corpus_version_before!r} to {corpus_version_after!r}), got HIT — "
+        "old cache entry should have been invalidated by the new corpus_version key"
     )
 
     log_messages = [r.message for r in caplog.records]
