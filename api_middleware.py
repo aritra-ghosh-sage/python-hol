@@ -54,7 +54,7 @@ def _sanitize_correlation_id(raw: Optional[str]) -> Optional[str]:
 
 
 class QueryCacheMiddleware(BaseHTTPMiddleware):
-    """ASGI middleware for caching HTTP responses (T08 retired - no longer registered in api.py).
+    """ASGI middleware for caching HTTP responses.
 
     This middleware intercepts HTTP requests and caches responses for POST /retrieve
     endpoints. It uses a stable cache key generated from the request body and
