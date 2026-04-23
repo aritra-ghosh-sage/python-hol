@@ -302,12 +302,12 @@ curl -X PUT http://localhost:8000/config \
 
 **`ingest_type` and Cache Invalidation:**
 
-| Value | Default? | L1 Cache Behaviour | corpus_version |
-|-------|----------|--------------------|----------------|
-| `"add"` | No | Preserved; new documents become visible after TTL expiry | Unchanged |
-| `"update"` | ✅ Yes | Full L1 cache clear on ingest | Incremented |
+| Value | Default? | Cache behaviour | corpus_version |
+|-------|----------|-----------------|----------------|
+| `"add"` | No | Existing L1/TTL cache entries are not proactively cleared, but freshness is still invalidated via a rebuilt version token; stale cached results may remain until TTL expiry | Rebuilt/changed after successful ingest |
+| `"update"` | ✅ Yes | Full L1 cache clear on ingest; version token also changes | Incremented/changed |
 
-Use `"update"` (the default) when replacing or materially changing existing content and immediate cache freshness is required. Pass `"add"` explicitly for append-only ingestion to avoid unnecessary cache churn.
+Use `"update"` (the default) when replacing or materially changing existing content and immediate L1 cache clearing is required. Pass `"add"` explicitly for append-only ingestion when you want to avoid proactively clearing existing L1/TTL entries; note that successful `"add"` operations still rebuild `corpus_version`, so version-aware clients will observe a new token immediately even if some cached results age out by TTL.
 
 **Response Model:**
 ```typescript
