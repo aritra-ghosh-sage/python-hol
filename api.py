@@ -932,14 +932,14 @@ async def health_check() -> HealthResponse:
     tags=["Retrieval"],
     summary="Retrieve relevant documents",
 )
-async def retrieve(request: RetrievalRequest, http_request: Request) -> RetrievalResponse:
+async def retrieve(retrieval_request: RetrievalRequest, http_request: Request) -> RetrievalResponse:
     """Retrieve documents relevant to the provided query.
 
     Performs hybrid retrieval combining semantic and keyword search,
     with optional cross-encoder reranking.
 
     Args:
-        request: RetrievalRequest with query and optional reranking setting.
+        retrieval_request: RetrievalRequest with query and optional reranking setting.
         http_request: Raw HTTP request used to extract correlation headers
             (X-Request-ID / X-Correlation-ID) for per-request log tracing.
 
@@ -983,11 +983,11 @@ async def retrieve(request: RetrievalRequest, http_request: Request) -> Retrieva
         pass
 
     try:
-        logger.info(f"Retrieval request: {request.query[:50]}...")
+        logger.info(f"Retrieval request: {retrieval_request.query[:50]}...")
 
         results = _shared_retrieve_documents(
-            request.query,
-            enable_rerank=request.enable_rerank,
+            retrieval_request.query,
+            enable_rerank=retrieval_request.enable_rerank,
             correlation_id=correlation_id,
         )
         doc_results = _to_filtered_document_results(
@@ -996,7 +996,7 @@ async def retrieve(request: RetrievalRequest, http_request: Request) -> Retrieva
 
         logger.info(f"Retrieval complete: {len(doc_results)} results after filtering")
         return RetrievalResponse(
-            query=request.query, results=doc_results, total_results=len(doc_results)
+            query=retrieval_request.query, results=doc_results, total_results=len(doc_results)
         )
 
     except RetrievalError as e:
@@ -1020,14 +1020,14 @@ async def retrieve(request: RetrievalRequest, http_request: Request) -> Retrieva
     summary="Retrieve documents with score filtering",
 )
 async def retrieve_filtered(
-    request: RetrievalRequest, http_request: Request, min_score: float = 0.5
+    retrieval_request: RetrievalRequest, http_request: Request, min_score: float = 0.5
 ) -> RetrievalResponse:
     """Retrieve documents with optional minimum score filtering.
 
     Similar to /retrieve but filters results by minimum relevance score.
 
     Args:
-        request: RetrievalRequest with query and optional reranking setting.
+        retrieval_request: RetrievalRequest with query and optional reranking setting.
         http_request: Raw HTTP request used to extract correlation headers
             (X-Request-ID / X-Correlation-ID) for per-request log tracing.
         min_score: Minimum relevance score (0.0-1.0) for results. Defaults to 0.5.
@@ -1072,11 +1072,13 @@ async def retrieve_filtered(
 
     try:
         logger.info(
-            f"Filtered retrieval request: {request.query[:50]}... (min_score={min_score})"
+            f"Filtered retrieval request: {retrieval_request.query[:50]}... (min_score={min_score})"
         )
 
         results = _shared_retrieve_documents(
-            request.query, enable_rerank=request.enable_rerank, correlation_id=correlation_id
+            retrieval_request.query,
+            enable_rerank=retrieval_request.enable_rerank,
+            correlation_id=correlation_id,
         )
 
         # Filter results by minimum score, enforcing floor of 0.80 for chat quality
@@ -1087,7 +1089,7 @@ async def retrieve_filtered(
 
         logger.info(f"Filtered retrieval complete: {len(doc_results)} results after filtering")
         return RetrievalResponse(
-            query=request.query, results=doc_results, total_results=len(doc_results)
+            query=retrieval_request.query, results=doc_results, total_results=len(doc_results)
         )
 
     except RetrievalError as e:
