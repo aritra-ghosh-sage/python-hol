@@ -238,31 +238,8 @@ async def test_ingest_request_with_type() -> None:
 
 
 # ============================================================================
-# TEST: MIDDLEWARE REGISTRATION
+# NOTE: Middleware tests removed in T09 - QueryCacheMiddleware deprecated
 # ============================================================================
-
-
-def test_middleware_is_registered_before_routes(client: TestClient) -> None:
-    """Test that QueryCacheMiddleware is registered in the app."""
-    # The middleware should be in app.user_middleware or app.middleware
-    # We verify this by checking the app's middleware stack
-    assert app is not None
-    # In FastAPI, middleware is added to the ASGI app via add_middleware
-    # The test here verifies the API layer accepts requests properly
-
-
-def test_middleware_excluded_paths(client: TestClient) -> None:
-    """Test that excluded paths are not cached."""
-    # These endpoints should NOT be cached by the middleware
-    excluded_paths = ["/health", "/config", "/documents", "/cache/stats"]
-
-    for path in excluded_paths:
-        # Verify these paths exist and respond (they shouldn't error out)
-        # The middleware should not interfere
-        if path == "/health":
-            response = client.get(path)
-            assert response.status_code in [200, 503]  # Might be not ready
-        # Other endpoints tested elsewhere
 
 
 # ============================================================================
@@ -455,28 +432,8 @@ def test_ingest_request_updated_model_has_docstring() -> None:
 
 
 # ============================================================================
-# TEST: INTEGRATION - SYSTEM FLOW
+# NOTE: Deprecated tests removed in T09 - POST /retrieve endpoint removed
 # ============================================================================
-
-
-def test_retrieve_endpoint_works_with_cache_middleware(client: TestClient) -> None:
-    """Test that POST /retrieve works end-to-end with cache middleware."""
-    # This is an integration test verifying the complete flow
-    # Test POST /retrieve with middleware intercepting
-
-
-def test_cache_hit_miss_flow() -> None:
-    """Test complete cache hit/miss flow."""
-    # First request: MISS (cache hit but empty)
-    # Second identical request: HIT (response from cache)
-    # Third request with different params: MISS (different cache key)
-
-
-def test_config_update_invalidates_cache(client: TestClient) -> None:
-    """Test that updating config invalidates query cache."""
-    # Set up: cache contains old results
-    # Update config: cache.clear() called
-    # Verify: subsequent queries get fresh results with new config
 
 
 # ============================================================================
