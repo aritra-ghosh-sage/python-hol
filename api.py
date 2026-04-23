@@ -987,7 +987,6 @@ app.add_middleware(
     excluded_paths=[
         "/health",             # Health check — must never be served from cache
         "/config",             # Configuration read/write — reflects live state
-        "/ingest",             # Legacy ingest alias — mutates corpus
         "/documents",          # Document ingestion — mutates corpus
         "/documents/sources",  # Document listing — must reflect live collection
         "/cache/stats",        # Admin monitoring — must reflect live counters

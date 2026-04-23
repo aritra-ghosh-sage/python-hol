@@ -85,11 +85,6 @@ def app(cache_backend: MockCacheBackend) -> FastAPI:
             "total_results": 1,
         }
 
-    @fast_app.post("/ingest")
-    async def ingest(data: Dict[str, Any]) -> Dict[str, str]:
-        """Test ingest endpoint (excluded from cache)."""
-        return {"status": "success"}
-
     @fast_app.post("/documents")
     async def documents(data: Dict[str, Any]) -> Dict[str, str]:
         """Test documents endpoint (excluded from cache)."""
@@ -160,7 +155,6 @@ class TestQueryCacheMiddlewareInitialization:
         # Ensure upload-related and admin paths are excluded by default.
         assert "/health" in middleware.excluded_paths
         assert "/config" in middleware.excluded_paths
-        assert "/ingest" in middleware.excluded_paths
         assert "/documents" in middleware.excluded_paths
         assert "/documents/sources" in middleware.excluded_paths
         assert "/cache/stats" in middleware.excluded_paths
@@ -406,17 +400,6 @@ class TestExcludedPaths:
         # Should not cache health checks
         assert cache_backend.set_calls == 0
 
-    def test_ingest_endpoint_not_cached(
-        self, client: TestClient, cache_backend: MockCacheBackend
-    ) -> None:
-        """Ingest endpoint is in excluded paths and not cached."""
-        cache_backend.set_calls = 0
-        response = client.post("/ingest", json={"data": "test"})
-
-        assert response.status_code == 200
-        # Should not cache ingest operations
-        assert cache_backend.set_calls == 0
-
     def test_documents_endpoint_not_cached(
         self, client: TestClient, cache_backend: MockCacheBackend
     ) -> None:
@@ -653,8 +636,8 @@ class TestHTTPMethods:
         """Only POST /retrieve is cached, not other endpoints."""
         cache_backend.set_calls = 0
 
-        # POST to ingest (excluded)
-        client.post("/ingest", json={"data": "test"})
+        # POST to documents (excluded)
+        client.post("/documents", json={"source_type": "text"})
         assert cache_backend.set_calls == 0
 
         # POST to retrieve (should cache)
@@ -942,7 +925,7 @@ class TestTransitionScopeRules:
         requests do not corrupt entries or produce inconsistent X-Cache headers.
         """
         results = []
-        errors: list[Exception] = []
+        errors: List[Exception] = []
 
         def make_request() -> None:
             try:
