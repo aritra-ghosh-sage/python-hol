@@ -34,6 +34,7 @@ Example:
 import hashlib
 import json
 import logging
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import Request
@@ -255,6 +256,17 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         cache_key: str = ""
         should_check_cache: bool = True
 
+        # OPTB-012: Extract the per-request correlation ID from headers so every
+        # cache hit/miss log record can be linked back to the originating request.
+        # Honour X-Request-ID first (most common), then X-Correlation-ID (AWS/GCP
+        # style).  Generate a synthetic ID when neither header is present so the
+        # log is always traceable even for callers that omit the header.
+        correlation_id: str = (
+            request.headers.get("X-Request-ID")
+            or request.headers.get("X-Correlation-ID")
+            or str(uuid.uuid4())
+        )
+
         try:
             # Read request body (using replay pattern)
             body = await self._read_request_body(request)
@@ -272,6 +284,13 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
             try:
                 cached_response = self.cache_backend.get(cache_key)
                 if cached_response is not None:
+                    # OPTB-012: Structured hit telemetry — the correlation_id links
+                    # this event to the originating request in upstream log streams.
+                    logger.info(
+                        "cache.hit correlation_id=%s path=%s",
+                        correlation_id,
+                        request.url.path,
+                    )
                     logger.debug(
                         f"Cache HIT for {request.method} {request.url.path} "
                         f"(key: {cache_key[:16]}..., size: {len(cached_response)} bytes)"
@@ -291,6 +310,13 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
                 )
 
             if cache_key:
+                # OPTB-012: Structured miss telemetry — logged at the middleware layer
+                # so REST cache misses are visible without needing to grep the handler.
+                logger.info(
+                    "cache.miss correlation_id=%s path=%s",
+                    correlation_id,
+                    request.url.path,
+                )
                 logger.debug(
                     f"Cache MISS for {request.method} {request.url.path} "
                     f"(key: {cache_key[:16]}...)"
