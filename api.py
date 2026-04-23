@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Literal, Optional
 from contextlib import asynccontextmanager
 
 import requests
-from fastapi import FastAPI, HTTPException, Request, WebSocketDisconnect, WebSocket
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocketDisconnect, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -965,10 +965,18 @@ async def health_check() -> HealthResponse:
     "/retrieve",
     response_model=RetrievalResponse,
     tags=["Retrieval"],
-    summary="Retrieve relevant documents",
+    summary="[DEPRECATED] Retrieve relevant documents",
+    deprecated=True,
 )
-async def retrieve(retrieval_request: RetrievalRequest, http_request: Request) -> RetrievalResponse:
+async def retrieve(
+    retrieval_request: RetrievalRequest, http_request: Request, response: Response
+) -> RetrievalResponse:
     """Retrieve documents relevant to the provided query.
+
+    .. deprecated::
+        This endpoint is deprecated and will be removed in v2.0 (planned sunset: 2026-10-31).
+        Migrate to the WebSocket endpoint ``ws://host/ws/chat`` for real-time retrieval.
+        See docs/API_INTEGRATION.md for the migration guide.
 
     Performs hybrid retrieval combining semantic and keyword search,
     with optional cross-encoder reranking.
@@ -977,6 +985,7 @@ async def retrieve(retrieval_request: RetrievalRequest, http_request: Request) -
         retrieval_request: RetrievalRequest with query and optional reranking setting.
         http_request: Raw HTTP request used to extract correlation headers
             (X-Request-ID / X-Correlation-ID) for per-request log tracing.
+        response: FastAPI response object used to inject deprecation headers.
 
     Returns:
         RetrievalResponse with relevant documents and scores.
@@ -991,6 +1000,9 @@ async def retrieve(retrieval_request: RetrievalRequest, http_request: Request) -
             "enable_rerank": true
         }
     """
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Sat, 31 Oct 2026 23:59:59 GMT"
+    response.headers["Link"] = '</ws/chat>; rel="successor-version"'
     if _retriever is None or _config is None:
         logger.error("Retriever not initialized")
         raise HTTPException(
@@ -1052,12 +1064,21 @@ async def retrieve(retrieval_request: RetrievalRequest, http_request: Request) -
     "/retrieve-filtered",
     response_model=RetrievalResponse,
     tags=["Retrieval"],
-    summary="Retrieve documents with score filtering",
+    summary="[DEPRECATED] Retrieve documents with score filtering",
+    deprecated=True,
 )
 async def retrieve_filtered(
-    retrieval_request: RetrievalRequest, http_request: Request, min_score: float = 0.5
+    retrieval_request: RetrievalRequest,
+    http_request: Request,
+    response: Response,
+    min_score: float = 0.5,
 ) -> RetrievalResponse:
     """Retrieve documents with optional minimum score filtering.
+
+    .. deprecated::
+        This endpoint is deprecated and will be removed in v2.0 (planned sunset: 2026-10-31).
+        Migrate to the WebSocket endpoint ``ws://host/ws/chat`` for real-time retrieval.
+        See docs/API_INTEGRATION.md for the migration guide.
 
     Similar to /retrieve but filters results by minimum relevance score.
 
@@ -1065,6 +1086,7 @@ async def retrieve_filtered(
         retrieval_request: RetrievalRequest with query and optional reranking setting.
         http_request: Raw HTTP request used to extract correlation headers
             (X-Request-ID / X-Correlation-ID) for per-request log tracing.
+        response: FastAPI response object used to inject deprecation headers.
         min_score: Minimum relevance score (0.0-1.0) for results. Defaults to 0.5.
 
     Returns:
@@ -1079,6 +1101,9 @@ async def retrieve_filtered(
             "query": "How do I update maps?"
         }
     """
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Sat, 31 Oct 2026 23:59:59 GMT"
+    response.headers["Link"] = '</ws/chat>; rel="successor-version"'
     if not 0.0 <= min_score <= 1.0:
         logger.warning(f"Invalid min_score: {min_score}")
         raise HTTPException(

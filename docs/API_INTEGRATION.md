@@ -69,7 +69,12 @@ curl -X GET http://localhost:8000/health
 
 ---
 
-### 2. Document Retrieval
+### 2. Document Retrieval ⚠️ DEPRECATED
+
+> **⚠️ Deprecation Notice**
+> `POST /retrieve` is deprecated as of 2026-04-23 and will be removed in **v2.0** (planned sunset: **2026-10-31**).
+> All clients should migrate to the WebSocket endpoint `ws://host/ws/chat` before the sunset date.
+> See [WebSocket Endpoint](#websocket-endpoint) for the migration guide.
 
 **Endpoint:** `POST /retrieve`
 
@@ -142,10 +147,18 @@ curl -X POST http://localhost:8000/retrieve \
 | `X-Cache` | `HIT` | Response served from L1 cache |
 | `X-Cache` | `MISS` | Response computed fresh and stored in cache |
 | `X-Cache` | `ERROR` | Non-200 response |
+| `Deprecation` | `true` | Endpoint is deprecated |
+| `Sunset` | `Sat, 31 Oct 2026 23:59:59 GMT` | Planned removal date (RFC 8594) |
+| `Link` | `</ws/chat>; rel="successor-version"` | Recommended replacement endpoint |
 
 ---
 
-### 3. Filtered Document Retrieval
+### 3. Filtered Document Retrieval ⚠️ DEPRECATED
+
+> **⚠️ Deprecation Notice**
+> `POST /retrieve-filtered` is deprecated as of 2026-04-23 and will be removed in **v2.0** (planned sunset: **2026-10-31**).
+> All clients should migrate to the WebSocket endpoint `ws://host/ws/chat` before the sunset date.
+> See [WebSocket Endpoint](#websocket-endpoint) for the migration guide.
 
 **Endpoint:** `POST /retrieve-filtered?min_score=0.5`
 
@@ -169,6 +182,8 @@ curl -X POST http://localhost:8000/retrieve \
 - `400 Bad Request` - Invalid min_score (outside 0-1 range)
 - `500 Internal Server Error` - Retrieval failed
 - `503 Service Unavailable` - Retriever not initialized
+
+**Response Headers:** Same deprecation headers as `/retrieve` (`Deprecation`, `Sunset`, `Link`).
 
 **Example:**
 ```bash
@@ -823,18 +838,53 @@ curl http://localhost:8000/health
 **Swagger UI:**
 Visit `http://localhost:8000/docs` in a browser to explore and test all endpoints interactively.
 
-**Retrieve documents:**
+**Retrieve documents (legacy — deprecated):**
 ```bash
 curl -X POST http://localhost:8000/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query": "test query"}'
+# Response will include: Deprecation: true, Sunset: Sat, 31 Oct 2026 23:59:59 GMT
 ```
 
-**WebSocket test (bash + websocat):**
+**WebSocket test (bash + websocat) — preferred:**
 ```bash
 # Install websocat if needed: cargo install websocat
 echo '{"query": "offline maps"}' | websocat ws://localhost:8000/ws/chat
 ```
+
+---
+
+## Deprecation Schedule
+
+| Endpoint | Deprecated | Planned Removal | Replacement |
+|----------|------------|-----------------|-------------|
+| `POST /retrieve` | 2026-04-23 | 2026-10-31 (v2.0) | `ws://host/ws/chat` |
+| `POST /retrieve-filtered` | 2026-04-23 | 2026-10-31 (v2.0) | `ws://host/ws/chat` |
+
+### Migration Guide: REST → WebSocket
+
+1. Replace `POST /retrieve` calls with a WebSocket connection to `/ws/chat`.
+2. Send `{"query": "<your query>"}` as a JSON message after the connection is established.
+3. The server streams status updates followed by the final result with `type: "result"`.
+
+**Before (deprecated REST):**
+```bash
+curl -X POST http://localhost:8000/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"query": "offline maps"}'
+```
+
+**After (WebSocket):**
+```javascript
+const ws = new WebSocket("ws://localhost:8000/ws/chat");
+ws.onopen = () => ws.send(JSON.stringify({ query: "offline maps" }));
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.type === "result") console.log(msg.results);
+};
+```
+
+Clients can detect deprecated endpoints by checking for the `Deprecation: true` response header.
 
 ---
 
