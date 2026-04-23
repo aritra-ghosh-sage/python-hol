@@ -27,7 +27,6 @@ STOP_WORDS = {
 # Defined here as named constants so dashboards and alert rules can reference
 # a single authoritative source and refactors never silently break label
 # matching.
-# NOTE (T09): HTTP middleware layer telemetry removed - QueryCacheMiddleware deprecated.
 CACHE_TELEMETRY_LABELS = {
     # Retrieval layer — emitted by _shared_retrieve_documents
     "retrieval_hit": "cache.retrieval_hit",
