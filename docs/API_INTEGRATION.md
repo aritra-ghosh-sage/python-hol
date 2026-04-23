@@ -69,88 +69,21 @@ curl -X GET http://localhost:8000/health
 
 ---
 
-### 2. Document Retrieval ⚠️ DEPRECATED
+### 2. Document Retrieval ❌ REMOVED
 
-> **⚠️ Deprecation Notice**
-> `POST /retrieve` is deprecated as of 2026-04-23 and will be removed in **v2.0** (planned sunset: **2026-10-31**).
-> All clients should migrate to the WebSocket endpoint `ws://host/ws/chat` before the sunset date.
-> See [WebSocket Endpoint](#websocket-endpoint) for the migration guide.
-
-**Endpoint:** `POST /retrieve`
-
-**Purpose:** Retrieve relevant documents using hybrid search (semantic + keyword). Results are automatically filtered by relevance score threshold (≥ 0.80).
-
-**Request Model:**
-```typescript
-{
-  query: string;                    // Search query (1-500 chars, required)
-  enable_rerank?: boolean;          // Override reranking setting (optional)
-}
-```
-
-**Response Model:**
-```typescript
-{
-  query: string;                    // Original search query
-  results: Array<{
-    id: string;                     // Document identifier
-    text: string;                   // Document content
-    source: string;                 // Source URL or label
-    score: float;                   // Relevance score (may be negative after fusion)
-  }>;
-  total_results: number;            // Count of results after filtering
-}
-```
-
-**Status Codes:**
-- `200 OK` - Retrieval successful
-- `400 Bad Request` - Invalid query (validation error)
-- `500 Internal Server Error` - Retrieval failed
-- `503 Service Unavailable` - Retriever not initialized
-
-**Example:**
-```bash
-curl -X POST http://localhost:8000/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "How do I download maps for offline use?",
-    "enable_rerank": true
-  }'
-```
-
-**Response:**
-```json
-{
-  "query": "How do I download maps for offline use?",
-  "results": [
-    {
-      "id": "doc_001",
-      "text": "Offline maps can be downloaded directly from the Maps app...",
-      "source": "https://maps.google.com/help/offline",
-      "score": 0.95
-    },
-    {
-      "id": "doc_002",
-      "text": "To download a map area for offline access...",
-      "source": "https://maps.google.com/help/offline",
-      "score": 0.92
-    }
-  ],
-  "total_results": 2
-}
-```
-
-#### Response Headers
-
-| Header | Value | Meaning |
-|--------|-------|---------|
-| `X-Cache` | `HIT` | Response served from L1 cache |
-| `X-Cache` | `MISS` | Response computed fresh and stored in cache |
-| `X-Cache` | `ERROR` | Non-200 response |
-| `Deprecation` | `true` | Endpoint is deprecated |
-| `Sunset` | `Sat, 31 Oct 2026 23:59:59 GMT` | Planned removal date (RFC 8594) |
-| `Link` | `</ws/chat>; rel="successor-version"` | Recommended replacement endpoint |
-
+> **⛔ REMOVED**
+> `POST /retrieve` was **removed** on 2026-04-23 (v1.0.0, Task T08) as part of the WebSocket-only retrieval migration.
+>
+> **Migration Path**: All document retrieval operations now use the WebSocket endpoint `ws://host/ws/chat`.
+> See [WebSocket Endpoint](#websocket-endpoint) for the current API contract.
+>
+> **Historical Context**: This endpoint was deprecated in v0.9.0 and removed in v1.0.0 to:
+> - Eliminate code duplication (single retrieval path)
+> - Enable streaming responses for better UX
+> - Simplify cache architecture (unified WS-only cache layer)
+> - Support future real-time conversational features
+>
+> **Rollback Reference**: To restore pre-removal state for debugging, see `docs/plan/20260423-ws-only-retrieval-deprecation/T07-gate-record.md` (tag `pre-retrieve-removal-v1`, commit `a8e3ec7`)
 
 ---
 
@@ -548,8 +481,11 @@ ws.send(JSON.stringify({
     score: float;
   }>;
   total_results: number;
+  cache_status: "HIT" | "MISS" | "ERROR";  // Cache observability (T03)
 }
 ```
+
+**Note on Cache Observability**: The `cache_status` field provides WS clients with equivalent cache visibility to the `X-Cache` header that existed on the former REST endpoint. See `docs/plan/20260423-ws-only-retrieval-deprecation/T03-*` for implementation details.
 
 **3. Error Message** (sent on failure)
 ```typescript
@@ -634,51 +570,14 @@ All error responses follow FastAPI's standard exception format:
 
 ### Frontend (React/Next.js)
 
-**REST Endpoint Integration:**
-```typescript
-// src/lib/api.ts
-export async function retrieveDocuments(query: string, enableRerank?: boolean) {
-  const response = await fetch('http://localhost:8000/retrieve', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, enable_rerank: enableRerank })
-  });
-  
-  if (!response.ok) {
-    throw new Error(`Retrieval failed: ${response.statusText}`);
-  }
-  
-  return response.json();
-}
+**Note**: As of v1.0.0, all document retrieval uses WebSocket. The REST `POST /retrieve` endpoint has been removed.
 
-export async function getConfig() {
-  const response = await fetch('http://localhost:8000/config');
-  if (!response.ok) throw new Error('Failed to fetch config');
-  return response.json();
-}
-
-export async function updateConfig(updates: Partial<Config>) {
-  const response = await fetch('http://localhost:8000/config', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updates)
-  });
-  
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail);
-  }
-  
-  return response.json();
-}
-```
-
-**WebSocket Integration:**
+**WebSocket Integration (Current):**
 ```typescript
 // src/lib/ws.ts
 export class ChatWebSocket {
   private ws: WebSocket;
-  
+
   connect(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -686,14 +585,14 @@ export class ChatWebSocket {
       this.ws.onerror = (error) => reject(error);
     });
   }
-  
+
   async sendQuery(query: string, enableRerank?: boolean): Promise<RetrievalResponse> {
     return new Promise((resolve, reject) => {
       let results: RetrievalResponse | null = null;
-      
+
       const handleMessage = (event: MessageEvent) => {
         const msg = JSON.parse(event.data);
-        
+
         if (msg.type === 'status') {
           console.log('Status:', msg.message);
         } else if (msg.type === 'results') {
@@ -705,12 +604,12 @@ export class ChatWebSocket {
           reject(new Error(msg.message));
         }
       };
-      
+
       this.ws.addEventListener('message', handleMessage);
       this.ws.send(JSON.stringify({ query, enable_rerank: enableRerank }));
     });
   }
-  
+
   close() {
     this.ws.close();
   }
@@ -723,7 +622,7 @@ const ws = useRef<ChatWebSocket | null>(null);
 useEffect(() => {
   ws.current = new ChatWebSocket();
   ws.current.connect('ws://localhost:8000/ws/chat');
-  
+
   return () => ws.current?.close();
 }, []);
 
@@ -731,9 +630,52 @@ async function handleQuery(query: string) {
   try {
     const response = await ws.current.sendQuery(query);
     setResults(response);
+    console.log('Cache status:', response.cache_status);  // Monitor cache hits
   } catch (error) {
     console.error('Query failed:', error);
   }
+}
+```
+
+**Admin Endpoint Integration (HTTP):**
+```typescript
+// src/lib/api.ts - Admin-only operations
+export async function getConfig() {
+  const response = await fetch('http://localhost:8000/config');
+  if (!response.ok) throw new Error('Failed to fetch config');
+  return response.json();
+}
+
+export async function updateConfig(updates: Partial<Config>) {
+  const response = await fetch('http://localhost:8000/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates)
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail);
+  }
+
+  return response.json();
+}
+
+export async function ingestDocument(source_type: string, content: string, source_label?: string) {
+  const response = await fetch('http://localhost:8000/documents', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_type, content, source_label, ingest_type: 'update' })
+  });
+
+  if (!response.ok) throw new Error('Ingestion failed');
+  return response.json();
+}
+
+export async function getCacheStats() {
+  const response = await fetch('http://localhost:8000/cache/stats');
+  if (!response.ok) throw new Error('Failed to fetch cache stats');
+  return response.json();
 }
 ```
 
@@ -795,53 +737,63 @@ curl http://localhost:8000/health
 ```
 
 **Swagger UI:**
-Visit `http://localhost:8000/docs` in a browser to explore and test all endpoints interactively.
+Visit `http://localhost:8000/docs` in a browser to explore and test all admin endpoints interactively.
 
-**Retrieve documents (internal — not for end-user use):**
+**Cache stats (admin observability):**
 ```bash
-curl -X POST http://localhost:8000/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query": "test query"}'
+curl http://localhost:8000/cache/stats | jq .
 ```
 
-**WebSocket test (bash + websocat) — preferred:**
+**WebSocket test (bash + websocat) — Preferred for retrieval:**
 ```bash
 # Install websocat if needed: cargo install websocat
 echo '{"query": "offline maps"}' | websocat ws://localhost:8000/ws/chat
+```
+
+**Expected WebSocket Response:**
+```json
+{"type":"status","message":"Retrieving documents..."}
+{"type":"results","query":"offline maps","results":[...],"total_results":2,"cache_status":"MISS"}
 ```
 
 ---
 
 ## Deprecation Schedule
 
-| Endpoint | Status | Replacement |
-|----------|--------|-------------|
-| `POST /retrieve` | Internal (deprecated) | `ws://host/ws/chat` |
+| Endpoint | Status | Replacement | Removal Date |
+|----------|--------|-------------|--------------|
+| `POST /retrieve` | ❌ **REMOVED** (v1.0.0, 2026-04-23) | `ws://host/ws/chat` | T08 |
+| `POST /retrieve-filtered` | ❌ **REMOVED** (v0.9.0, 2026-04-20) | `ws://host/ws/chat` (filtering via threshold) | T04 |
 
 ### Migration Guide: REST → WebSocket
 
+**⚠️ IMPORTANT**: As of v1.0.0, all document retrieval **must** use the WebSocket interface. The REST endpoints have been removed.
+
 1. Replace `POST /retrieve` calls with a WebSocket connection to `/ws/chat`.
 2. Send `{"query": "<your query>"}` as a JSON message after the connection is established.
-3. The server streams status updates followed by the final result with `type: "result"`.
+3. The server streams status updates followed by the final result with `type: "results"`.
+4. Monitor `cache_status` field in results message for cache observability (equivalent to former `X-Cache` header).
 
-**Before (deprecated REST):**
+**Historical REST Approach (REMOVED):**
 ```bash
+# This no longer works - endpoint removed in v1.0.0
 curl -X POST http://localhost:8000/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query": "offline maps"}'
 ```
 
-**After (WebSocket):**
+**Current WebSocket Approach:**
 ```javascript
 const ws = new WebSocket("ws://localhost:8000/ws/chat");
 ws.onopen = () => ws.send(JSON.stringify({ query: "offline maps" }));
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
-  if (msg.type === "result") console.log(msg.results);
+  if (msg.type === "results") {
+    console.log(msg.results);
+    console.log("Cache status:", msg.cache_status);  // HIT | MISS | ERROR
+  }
 };
 ```
-
-The `POST /retrieve` endpoint is internal-only and tagged `deprecated: true` in the OpenAPI schema; end-user clients should use `ws://host/ws/chat` exclusively.
 
 ---
 
