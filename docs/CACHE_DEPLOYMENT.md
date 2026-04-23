@@ -1,7 +1,7 @@
 # Hybrid RAG Caching System - Deployment Guide
 
-**Document Version:** 1.1  
-**Last Updated:** April 21, 2026  
+**Document Version:** 1.2  
+**Last Updated:** April 23, 2026  
 **Applicable to:** Hybrid RAG v0.1.0+
 
 ---
@@ -24,10 +24,7 @@
 
 **Deployment Scenarios for Hybrid RAG Caching**
 
-The Hybrid RAG caching system implements a **two-layer caching strategy**:
-
-- **L1 Query Cache**: Caches complete retrieval results at the query level
-- **L2 Embedding Cache**: Caches computed embeddings to avoid redundant encoder calls
+This guide covers backend selection, environment configuration, deployment runbooks, and operational verification for the Hybrid RAG caching system. For architecture details, layer ownership, and schema reference, see [CACHING_ARCHITECTURE.md](./CACHING_ARCHITECTURE.md).
 
 Both layers support multiple backend implementations:
 
@@ -160,15 +157,34 @@ curl http://localhost:8000/cache/stats | jq .
 
 ```json
 {
-  "backend": "memory",
-  "hits": 0,
-  "misses": 0,
-  "hit_rate": 0.0,
-  "size": 0,
-  "max_size": 10000,
-  "ttl_seconds": 3600
+  "l1_query_cache": {
+    "backend": "memory",
+    "hits": 0,
+    "misses": 0,
+    "hit_rate": 0.0,
+    "size": 0,
+    "max_size": 10000,
+    "ttl_seconds": 3600,
+    "corpus_version": "gen0.n42"
+  },
+  "l2_embedding_cache": {
+    "hits": 0,
+    "misses": 0,
+    "hit_rate": 0.0,
+    "size": 0,
+    "capacity": 1000
+  },
+  "backend_health": {
+    "connected": true,
+    "latency_ms": 0.1,
+    "fallback_active": false,
+    "error": null
+  },
+  "timestamp": "2026-04-23T06:00:00.000000+00:00"
 }
 ```
+
+**Note (OPTB-008 migration):** If your scripts read top-level fields like `.hits` or `.backend`, update them to `.l1_query_cache.hits` and `.l1_query_cache.backend`. See [CACHING_ARCHITECTURE.md](./CACHING_ARCHITECTURE.md#migration-notes) for the full mapping.
 
 After running retrieval queries, `hits` and `misses` will increment.
 
@@ -1052,6 +1068,7 @@ Use this checklist before deploying caching to production:
 
 ## References
 
+- [CACHING_ARCHITECTURE.md](./CACHING_ARCHITECTURE.md) - Layered cache architecture, schema reference, migration guide, cross-issue decisions
 - [CACHE_PERF_REPORT.md](./CACHE_PERF_REPORT.md) - Performance benchmarks and test results
 - [API_INTEGRATION.md](./API_INTEGRATION.md) - Complete API endpoint documentation
 - [LIBRARY_DESIGN.md](./LIBRARY_DESIGN.md) - Hybrid RAG architecture and design
