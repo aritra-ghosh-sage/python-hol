@@ -429,73 +429,49 @@ class TestAC2CorrelationAwareTelemetry:
     def test_cache_miss_log_contains_correlation_id(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """First POST /retrieve must emit a cache.http_miss log with correlation_id.
+        """POST /retrieve is retired (T08); cache.http_miss is no longer emitted.
 
-        WHY: The first request for a query is always a cache miss.  The log
-        must carry a correlation_id so the operator can trace the full path
-        (request → cache miss → retriever call → response).
-
-        The log is emitted by the QueryCacheMiddleware which intercepts the
-        POST /retrieve path at the HTTP layer; the event name is therefore
-        ``cache.http_miss`` (as opposed to ``cache.retrieval_miss`` which is
-        emitted by the shared retrieval function).
+        WHY: The QueryCacheMiddleware is no longer registered in api.py after T08.
+        The HTTP-layer cache.http_miss event is therefore not emitted.
+        Calling POST /retrieve returns 404.
         """
         client = _patch_standard_app(monkeypatch)
 
-        # Note 15: uuid.uuid4() generates a random 128-bit UUID. Using a
-        # fresh UUID per test guarantees that assertions about the specific ID
-        # appearing in logs cannot accidentally pass from a previous test run.
         corr_id = str(uuid.uuid4())
-        # Note 16: caplog.at_level is a context manager. It temporarily sets
-        # the capture level to INFO for the duration of the `with` block and
-        # resets it afterwards. Logs emitted outside the block are not captured.
         with caplog.at_level(logging.INFO):
             response = client.post(
                 "/retrieve",
                 json={"query": "what is hybrid retrieval"},
-                # Note 17: Passing the correlation ID in X-Request-ID simulates
-                # how an API gateway or load balancer tags requests. The middleware
-                # reads this header and injects it into every log record it emits.
                 headers={"X-Request-ID": corr_id},
             )
 
-        assert response.status_code == 200, response.text
+        # T08: endpoint removed → 404
+        assert response.status_code == 404, response.text
 
-        # Note 18: caplog.records is a list of logging.LogRecord objects.
-        # LogRecord.message is the formatted message string (after % substitution).
+        # cache.http_miss must NOT appear (middleware is gone)
         miss_logs = [
             r.message for r in caplog.records if "cache.http_miss" in r.message
         ]
-        assert miss_logs, (
-            "Expected a 'cache.http_miss' log for a cold-cache retrieval. "
-            f"All logs: {[r.message for r in caplog.records]}"
-        )
-        assert any(corr_id in m for m in miss_logs), (
-            f"cache.http_miss log must include correlation_id='{corr_id}'.  "
-            f"Miss logs found: {miss_logs}"
+        assert not miss_logs, (
+            "cache.http_miss must not be emitted after T08 middleware removal. "
+            f"Got: {miss_logs}"
         )
 
     def test_cache_hit_log_contains_correlation_id(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Second POST /retrieve for same query must emit cache.http_hit with corr ID.
+        """POST /retrieve is retired (T08); cache.http_hit is no longer emitted.
 
-        WHY: Cache hits are the steady-state case in production.  Operators
-        must be able to confirm a request was served from cache for a specific
-        correlation ID — essential for debugging latency anomalies.
-
-        The hit is served by the QueryCacheMiddleware which short-circuits the
-        handler on repeated identical requests; the event name is therefore
-        ``cache.http_hit`` (as opposed to ``cache.retrieval_hit`` which is
-        emitted by the shared retrieval function).
+        WHY: The QueryCacheMiddleware is no longer registered in api.py after T08.
+        The HTTP-layer cache.http_hit event is therefore not emitted.
+        Calling POST /retrieve returns 404.
         """
         client = _patch_standard_app(monkeypatch)
         query_payload = {"query": "correlation hit test"}
 
-        # First call — populates the middleware cache (cache.http_miss)
+        # Both calls return 404 — no handler runs.
         client.post("/retrieve", json=query_payload)
 
-        # Second call — should hit the middleware cache
         corr_id = str(uuid.uuid4())
         with caplog.at_level(logging.INFO):
             response = client.post(
@@ -504,76 +480,72 @@ class TestAC2CorrelationAwareTelemetry:
                 headers={"X-Request-ID": corr_id},
             )
 
-        assert response.status_code == 200, response.text
+        assert response.status_code == 404, response.text
 
+        # cache.http_hit must NOT appear (middleware is gone)
         hit_logs = [
             r.message for r in caplog.records if "cache.http_hit" in r.message
         ]
-        assert hit_logs, (
-            "Expected a 'cache.http_hit' log on the second identical request. "
-            f"All logs: {[r.message for r in caplog.records]}"
-        )
-        assert any(corr_id in m for m in hit_logs), (
-            f"cache.http_hit log must include correlation_id='{corr_id}'.  "
-            f"Hit logs found: {hit_logs}"
+        assert not hit_logs, (
+            "cache.http_hit must not be emitted after T08 middleware removal. "
+            f"Got: {hit_logs}"
         )
 
     def test_cache_miss_log_contains_corpus_version(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """cache.retrieval_miss from _shared_retrieve_documents must include corpus_version.
+        """POST /retrieve is retired (T08); no cache.retrieval_miss from HTTP path.
 
-        WHY: Knowing the corpus_version at the time of a miss tells operators
-        whether the miss was expected (just after an invalidation event, version
-        changed) or unexpected (version unchanged — potential stampede).
-
-        This log is emitted by the shared retrieval function in ``api`` which
-        has access to the live corpus_version token; the event name is therefore
-        ``cache.retrieval_miss``.
+        WHY: cache.retrieval_miss is emitted by _shared_retrieve_documents which
+        is only reachable via the WS path after T08. Calling POST /retrieve
+        returns 404 without invoking _shared_retrieve_documents.
         """
         client = _patch_standard_app(monkeypatch, corpus_version="gen2.n10")
 
         with caplog.at_level(logging.INFO, logger="api"):
-            client.post(
+            response = client.post(
                 "/retrieve",
                 json={"query": "version check on miss"},
             )
 
+        # T08: endpoint removed → 404
+        assert response.status_code == 404, response.text
+
+        # No cache.retrieval_miss from HTTP path (endpoint is gone)
         miss_logs = [
             r.message for r in caplog.records if "cache.retrieval_miss" in r.message
         ]
-        assert miss_logs, "Expected at least one cache.retrieval_miss log."
-        combined = " ".join(miss_logs)
-        assert "corpus_version=" in combined, (
-            "cache.retrieval_miss log must contain 'corpus_version='.  Got: " + combined
+        assert not miss_logs, (
+            "No cache.retrieval_miss should be emitted via HTTP after T08. "
+            f"Got: {miss_logs}"
         )
 
     def test_generated_correlation_id_used_when_header_absent(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """cache.http_miss log must carry a synthetic UUID when no header is sent.
+        """POST /retrieve is retired (T08); no cache.http_miss is emitted.
 
-        WHY: Not all callers set X-Request-ID.  The system must auto-generate
-        a correlation ID so every log record is traceable, even without the
-        caller's cooperation.
+        WHY: The QueryCacheMiddleware is no longer registered. Calling POST
+        /retrieve returns 404, so no cache events are emitted at all.
         """
         client = _patch_standard_app(monkeypatch)
 
         with caplog.at_level(logging.INFO):
-            client.post(
+            response = client.post(
                 "/retrieve",
                 json={"query": "no header correlation"},
-                # Deliberately omit X-Request-ID header
             )
 
+        # T08: endpoint removed → 404
+        assert response.status_code == 404, response.text
+
+        # No cache.http_miss from HTTP path (middleware is gone)
         miss_logs = [
             r.message for r in caplog.records if "cache.http_miss" in r.message
         ]
-        assert miss_logs, "Expected cache.http_miss log even without X-Request-ID header."
-        combined = " ".join(miss_logs)
-        assert "correlation_id=" in combined, (
-            "cache.http_miss log must include a generated correlation_id even "
-            "when no X-Request-ID header is present.  Got: " + combined
+        assert not miss_logs, (
+            "cache.http_miss must not be emitted after T08 middleware removal. "
+            f"Got: {miss_logs}"
         )
 
 
@@ -761,22 +733,20 @@ class TestAC4BackendHealthSchemaPreservation:
 
 
 class TestAC5FailOpenWithObservability:
-    """Verify that the new logging code never breaks the retrieval path.
+    """T08: POST /retrieve is retired; these tests verify the 404 retirement response.
 
-    WHY this matters: Log instrumentation is a side-effect.  If a logging call
-    itself raises (e.g. the format string is wrong, or the logger is broken),
-    the request must still return 200 — fail-open applies to observability too.
-    These tests prove the principle holds end-to-end.
+    WHY: The endpoint was removed in T08.  The fail-open principle for cache failures
+    is now verified via the WebSocket path.  These tests confirm the endpoint is gone
+    and returns a clean 404.
     """
 
     def test_retrieve_returns_200_with_failing_cache_and_logging(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """POST /retrieve must return 200 even when cache raises on every call.
+        """T08: POST /retrieve returns 404 after retirement (no longer fail-open path).
 
-        WHY: This is the union of AC-1 (fail-open) and AC-5 (log side-effect).
-        Cache failure must produce a WARNING log (AC-3) AND the response must
-        still be 200 (AC-1).  Both must hold simultaneously.
+        WHY: The endpoint was permanently removed.  A failing cache can no longer
+        cause a 200/500 split here — the endpoint simply does not exist.
         """
         client = _patch_standard_app(monkeypatch, cache=_AlwaysFailingCache())
 
@@ -786,23 +756,18 @@ class TestAC5FailOpenWithObservability:
                 json={"query": "fail-open with observability"},
             )
 
-        assert response.status_code == 200, (
-            "POST /retrieve must return 200 even when cache raises. "
+        assert response.status_code == 404, (
+            "T08: POST /retrieve must be retired (404). "
             f"Got {response.status_code}: {response.text}"
         )
-        # The response body must still be valid (fail-open means correct shape).
-        body = response.json()
-        assert "results" in body, "Response body missing 'results' key."
-        assert "query" in body, "Response body missing 'query' key."
 
     def test_cache_miss_log_does_not_break_response_body(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Correlation-ID log emission must not alter the response payload.
+        """T08: POST /retrieve returns 404 with or without correlation header.
 
-        WHY: A poorly written log call that modifies shared state could corrupt
-        the response.  This test verifies the response body is identical whether
-        or not a correlation header is provided.
+        WHY: The endpoint is retired.  Both requests (with and without X-Request-ID)
+        must return 404 — no body shape or log instrumentation applies to a removed route.
         """
         client = _patch_standard_app(monkeypatch)
         query_payload = {"query": "log side-effect isolation"}
@@ -816,10 +781,9 @@ class TestAC5FailOpenWithObservability:
             headers={"X-Request-ID": str(uuid.uuid4())},
         )
 
-        assert resp_no_header.status_code == 200
-        assert resp_with_header.status_code == 200
-        # Results must be identical — log instrumentation is transparent.
-        assert resp_no_header.json()["results"] == resp_with_header.json()["results"], (
-            "Response results differ between requests with and without "
-            "X-Request-ID header — log instrumentation must be transparent."
+        assert resp_no_header.status_code == 404, (
+            f"T08: POST /retrieve must be retired (404). Got {resp_no_header.status_code}"
+        )
+        assert resp_with_header.status_code == 404, (
+            f"T08: POST /retrieve must be retired (404). Got {resp_with_header.status_code}"
         )

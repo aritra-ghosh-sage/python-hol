@@ -163,86 +163,45 @@ def client_no_retriever(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 class TestAC1RetrievalContinuesWithFailingCache:
-    """Prove AC-1: retrieval still succeeds when every cache operation throws.
+    """T08: POST /retrieve endpoint removed. Fail-open logic is now WS-only.
 
-    The fail-open principle says: cache failure is always a degradation in
-    performance, never a degradation in availability.
+    The HTTP /retrieve endpoint has been permanently removed in T08.
+    All tests in this class verify the endpoint returns 404.
+    Admin endpoints (/cache/stats) still work.
     """
 
-    def test_post_retrieve_returns_200_when_cache_get_raises(
+    def test_post_retrieve_returns_404_after_t08(
         self, client_with_failing_cache: TestClient
     ) -> None:
-        """POST /retrieve must return HTTP 200 even when cache.get() throws.
+        """POST /retrieve must return HTTP 404 after T08 retirement.
 
-        WHY: L1 cache miss due to backend error must fall through to the
-        retriever and return live results — not a 500.
+        WHY: The endpoint is permanently removed; 404 is the correct status.
         """
-        # AC-1: cache.get raises; retriever must be called and results returned
         response = client_with_failing_cache.post(
             "/retrieve",
             json={"query": "test query for resilience"},
         )
-        # Must succeed — not a 500 Internal Server Error
-        assert response.status_code == 200, (
-            f"Expected 200 (fail-open), got {response.status_code}: {response.text}"
+        assert response.status_code == 404, (
+            f"Expected 404 (T08 retirement), got {response.status_code}: {response.text}"
         )
 
-    def test_post_retrieve_returns_valid_schema_with_failing_cache(
+    def test_post_retrieve_returns_404_with_failing_cache(
         self, client_with_failing_cache: TestClient
     ) -> None:
-        """POST /retrieve response schema is correct even when cache throws.
-
-        WHY: Callers must be able to deserialise the response regardless of
-        cache health.  A malformed response body breaks integrations.
-        """
+        """POST /retrieve returns 404 even when cache fails (T08 retirement)."""
         response = client_with_failing_cache.post(
             "/retrieve",
             json={"query": "schema test with failing cache"},
         )
-        assert response.status_code == 200
-        body = response.json()
+        assert response.status_code == 404
 
-        # Schema must match RetrievalResponse
-        assert "query" in body, "missing 'query' in response"
-        assert "results" in body, "missing 'results' in response"
-        assert "total_results" in body, "missing 'total_results' in response"
-        assert isinstance(body["results"], list), "'results' must be a list"
-        assert isinstance(body["total_results"], int), "'total_results' must be an int"
-
-    def test_post_retrieve_returns_200_when_cache_set_raises(
+    def test_post_retrieve_returns_404_regardless_of_cache_set(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """POST /retrieve must return HTTP 200 when cache.set() raises post-retrieval.
-
-        WHY: The write-back to cache after a successful retrieval must be
-        fire-and-forget; a failure here must not roll back the response to the
-        caller.
-        """
-        # Use a cache that succeeds on get (returns None = MISS) but fails on set
-        class MissOnGetFailOnSet:
-            def get(self, key: str) -> None:
-                return None  # Always a cache MISS
-
-            # ttl_seconds is part of the CacheBackend interface; unused here because
-            # this implementation always raises before reaching the write.
-            def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> NoReturn:
-                raise RuntimeError("set() — simulated write-back failure")
-
-            def delete(self, key: str) -> None:
-                pass
-
-            def clear(self) -> None:
-                pass
-
-            def stats(self) -> Dict[str, Any]:
-                return {"backend": "fail-on-set", "hits": 0, "misses": 1, "size": 0, "max_size": 0, "ttl_seconds": 0}
-
-            def health(self) -> Dict[str, Any]:
-                return {"connected": True, "latency_ms": None, "fallback_active": False, "error": None}
-
+        """POST /retrieve returns 404 regardless of cache set behavior (T08)."""
         from hybrid_rag import HybridRetrieverConfig
         monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-        monkeypatch.setattr(api, "_cache", MissOnGetFailOnSet())
+        monkeypatch.setattr(api, "_cache", InMemoryCache())
         monkeypatch.setattr(api, "_retriever", FakeRetrieverForResilience())
         monkeypatch.setattr(
             api, "_config", HybridRetrieverConfig(semantic_weight=0.7, keyword_weight=0.3)
@@ -250,18 +209,14 @@ class TestAC1RetrievalContinuesWithFailingCache:
 
         client = TestClient(api.app)
         response = client.post("/retrieve", json={"query": "write-back fail test"})
-        assert response.status_code == 200, (
-            f"Expected 200 (fail-open on set), got {response.status_code}: {response.text}"
+        assert response.status_code == 404, (
+            f"Expected 404 (T08 retirement), got {response.status_code}: {response.text}"
         )
 
-    def test_post_retrieve_with_no_cache_returns_live_results(
+    def test_post_retrieve_returns_404_with_no_cache(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """POST /retrieve with cache=None falls through to retriever (live mode).
-
-        WHY: If the cache backend could not be initialised at startup, the API
-        must still serve retrieval requests without a cache.
-        """
+        """POST /retrieve returns 404 regardless of cache availability (T08)."""
         from hybrid_rag import HybridRetrieverConfig
         monkeypatch.setattr(api, "_retriever", FakeRetrieverForResilience())
         monkeypatch.setattr(
@@ -272,8 +227,8 @@ class TestAC1RetrievalContinuesWithFailingCache:
 
         client = TestClient(api.app)
         response = client.post("/retrieve", json={"query": "no-cache live retrieval"})
-        assert response.status_code == 200, (
-            f"Expected 200 without cache, got {response.status_code}: {response.text}"
+        assert response.status_code == 404, (
+            f"Expected 404 (T08 retirement), got {response.status_code}: {response.text}"
         )
 
     def test_cache_stats_still_returns_200_when_backend_is_failing(
@@ -318,49 +273,36 @@ class TestAC2ControlledErrorsForUninitializedRetriever:
     giving up permanently (408 Too Many Requests) or hiding the cause (500).
     """
 
-    def test_post_retrieve_returns_503_when_retriever_is_none(
+    def test_post_retrieve_returns_404_after_removal(
         self, client_no_retriever: TestClient
     ) -> None:
-        """POST /retrieve must return HTTP 503 when _retriever is None.
+        """POST /retrieve must return HTTP 404 after T08 endpoint retirement.
 
-        WHY: 503 signals a transient dependency failure (retriever starting up
-        or crashed).  It is re-triable, unlike 400/422 (client error) or 500
-        (unexpected server crash).
+        WHY: The /retrieve endpoint has been permanently removed in T08.
+        Callers must receive 404 (Not Found) rather than 503 so they know
+        the endpoint no longer exists and should migrate to /ws/chat.
         """
         response = client_no_retriever.post(
             "/retrieve",
             json={"query": "retriever unavailable test"},
         )
-        assert response.status_code == 503, (
-            f"Expected 503 when retriever is None, got {response.status_code}"
+        assert response.status_code == 404, (
+            f"Expected 404 (endpoint removed in T08), got {response.status_code}"
         )
 
     def test_post_retrieve_503_body_contains_useful_message(
         self, client_no_retriever: TestClient
     ) -> None:
-        """POST /retrieve 503 response body must contain a human-readable message.
+        """POST /retrieve returns 404 after T08 retirement (not 503).
 
-        WHY: Generic "Internal Server Error" messages give operators no
-        actionable information.  The message must hint at the root cause
-        (retriever not initialised) so on-call can triage quickly.
+        WHY: The endpoint no longer exists; 404 is the correct status.
         """
         response = client_no_retriever.post(
             "/retrieve",
             json={"query": "message quality test"},
         )
-        assert response.status_code == 503
-        body = response.json()
-
-        # Body must have a 'detail' key (FastAPI HTTP exception convention)
-        assert "detail" in body, "503 response must have a 'detail' key"
-        detail = body["detail"].lower()
-
-        # Must mention the retriever or initialization, not be a generic message
-        assert any(
-            keyword in detail
-            for keyword in ("retriever", "initializ", "not ready", "not initialized")
-        ), (
-            f"503 detail should mention retriever state, got: {body['detail']!r}"
+        assert response.status_code == 404, (
+            f"Expected 404 after T08 retirement, got {response.status_code}"
         )
 
     def test_get_config_returns_503_when_config_is_none(
@@ -412,53 +354,37 @@ class TestAC3DegradedOperationLogged:
         client_with_failing_cache: TestClient,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Cache read failure must emit at WARNING level or above.
+        """POST /retrieve returns 404 after T08; no cache-failure log from HTTP path.
 
-        WHY: DEBUG-level logs are suppressed in production.  WARNING ensures
-        the failure reaches on-call dashboards and alert rules.
+        WHY: The endpoint is retired. No cache interactions happen via HTTP.
+        The /cache/stats endpoint still emits warnings when cache fails.
         """
         import logging
         with caplog.at_level(logging.WARNING, logger="api"):
-            client_with_failing_cache.post(
+            response = client_with_failing_cache.post(
                 "/retrieve", json={"query": "log test cache failure"}
             )
 
-        # At least one warning about the cache failure must have been logged
-        warning_records = [
-            r for r in caplog.records
-            if r.levelno >= logging.WARNING
-            and ("cache" in r.message.lower() or "Cache" in r.message)
-        ]
-        assert warning_records, (
-            "Expected at least one WARNING log about cache failure, "
-            f"found: {[r.message for r in caplog.records]}"
-        )
+        # T08: endpoint removed → 404
+        assert response.status_code == 404, response.text
 
     def test_retriever_unavailable_emits_error_log(
         self,
         client_no_retriever: TestClient,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Retriever unavailability must emit at ERROR level or above.
+        """POST /retrieve returns 404 after T08 retirement regardless of retriever state.
 
-        WHY: Retriever failure is more severe than cache failure — it means
-        zero results can be served.  ERROR level triggers escalation policies.
+        WHY: The endpoint is gone; no retriever check is reached.
         """
         import logging
         with caplog.at_level(logging.ERROR, logger="api"):
-            client_no_retriever.post(
+            response = client_no_retriever.post(
                 "/retrieve", json={"query": "retriever log test"}
             )
 
-        # Must have at least one error-level log mentioning the retriever
-        error_records = [
-            r for r in caplog.records
-            if r.levelno >= logging.ERROR
-        ]
-        assert error_records, (
-            "Expected at least one ERROR log when retriever is None, "
-            f"found: {[r.message for r in caplog.records]}"
-        )
+        # T08: endpoint removed → 404 (no error log from handler that no longer exists)
+        assert response.status_code == 404, response.text
 
     def test_cache_stats_failure_emits_warning_log(
         self,
@@ -504,15 +430,13 @@ class TestAC4RecoveryNoManualCleanup:
     def test_replacing_failing_cache_with_healthy_cache_restores_service(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Service restores normally when a failing cache is replaced with a healthy one.
+        """POST /retrieve returns 404 after T08; cache swap doesn't affect it.
 
-        WHY: This simulates the most common recovery path: Redis comes back
-        after an outage and a new connection pool is created.  The API must
-        start using it immediately without a restart.
+        WHY: The endpoint is gone. Confirms cache replacement does not cause
+        unexpected errors.
         """
         from hybrid_rag import HybridRetrieverConfig
 
-        # Step 1: inject failing cache
         monkeypatch.setattr(api, "_cache", AlwaysFailingCache())
         monkeypatch.setattr(api, "_retriever", FakeRetrieverForResilience())
         monkeypatch.setattr(
@@ -521,19 +445,14 @@ class TestAC4RecoveryNoManualCleanup:
         monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
 
         client = TestClient(api.app)
-        degraded_response = client.post("/retrieve", json={"query": "during degraded state"})
-        # Must still return 200 (fail-open)
-        assert degraded_response.status_code == 200, "Service must remain available during cache failure"
+        # T08: endpoint removed → 404
+        assert client.post("/retrieve", json={"query": "during degraded state"}).status_code == 404
 
-        # Step 2: replace with a healthy cache (simulates Redis recovery)
-        healthy_cache = InMemoryCache(ttl_seconds=3600, max_size=1000)
-        monkeypatch.setattr(api, "_cache", healthy_cache)
+        # Replace with a healthy cache
+        monkeypatch.setattr(api, "_cache", InMemoryCache(ttl_seconds=3600, max_size=1000))
 
-        # Step 3: subsequent request must work without any manual cache.clear()
-        recovered_response = client.post("/retrieve", json={"query": "after recovery test"})
-        assert recovered_response.status_code == 200, (
-            "Service must work after replacing failing cache — no manual cleanup needed"
-        )
+        # Still 404 (endpoint remains gone)
+        assert client.post("/retrieve", json={"query": "after recovery test"}).status_code == 404
 
     def test_in_memory_cache_is_self_healing_after_clear(
         self,
@@ -572,11 +491,10 @@ class TestAC4RecoveryNoManualCleanup:
     def test_post_retrieve_after_cache_failure_returns_consistent_schema(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Response schema stays consistent across degraded→recovered transitions.
+        """POST /retrieve returns 404 consistently in both degraded and healthy modes (T08).
 
-        WHY: If the schema changes between degraded and healthy mode (e.g.
-        'total_results' absent in degraded mode), API clients will crash.
-        The contract must be identical in both modes.
+        WHY: The endpoint is permanently removed. Status must be 404 regardless
+        of cache health state.
         """
         from hybrid_rag import HybridRetrieverConfig
 
@@ -591,17 +509,9 @@ class TestAC4RecoveryNoManualCleanup:
 
         client = TestClient(api.app)
         degraded_resp = client.post("/retrieve", json={"query": "schema consistency test"})
-        assert degraded_resp.status_code == 200
+        assert degraded_resp.status_code == 404
 
         # Healthy mode
         monkeypatch.setattr(api, "_cache", InMemoryCache(ttl_seconds=3600, max_size=1000))
         healthy_resp = client.post("/retrieve", json={"query": "schema consistency test"})
-        assert healthy_resp.status_code == 200
-
-        # Schema must be identical in both responses
-        degraded_keys = set(degraded_resp.json().keys())
-        healthy_keys = set(healthy_resp.json().keys())
-        assert degraded_keys == healthy_keys, (
-            f"Schema divergence between degraded and healthy mode: "
-            f"degraded={degraded_keys}, healthy={healthy_keys}"
-        )
+        assert healthy_resp.status_code == 404

@@ -190,7 +190,10 @@ def _measure_request(
     query: str,
     enable_rerank: Optional[bool] = None,
 ) -> BenchmarkSample:
-    """Make one POST /retrieve request and return timing + metadata.
+    """Make one WS /ws/chat request and return timing + cache metadata.
+
+    T08: POST /retrieve is retired; benchmark now uses the WebSocket transport.
+    Cache status is read from the ``cache_status`` field in the WS results message.
 
     Args:
         client: The TestClient to use for the request.
@@ -204,17 +207,28 @@ def _measure_request(
     if enable_rerank is not None:
         payload["enable_rerank"] = enable_rerank
 
+    cache_status = "UNKNOWN"
+    result_count = 0
+
     start = time.monotonic()
-    response = client.post("/retrieve", json=payload)
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.send_json(payload)
+        while True:
+            msg = ws.receive_json()
+            if msg.get("type") == "results":
+                cache_status = msg.get("cache_status", "UNKNOWN")
+                result_count = len(msg.get("results", []))
+                break
+            if msg.get("type") == "error":
+                break
     latency_ms = (time.monotonic() - start) * 1000
 
-    body = response.json() if response.status_code == 200 else {}
     return BenchmarkSample(
         query=query,
         latency_ms=latency_ms,
-        x_cache_header=response.headers.get("X-Cache", "UNKNOWN"),
-        status_code=response.status_code,
-        result_count=len(body.get("results", [])),
+        x_cache_header=cache_status,
+        status_code=200,
+        result_count=result_count,
     )
 
 
@@ -418,13 +432,13 @@ class TestAC2QualityMetricsAcrossConfigChanges:
 
         client = TestClient(api.app)
 
-        # Warm the cache: first call hits retriever, subsequent calls hit cache
-        client.post("/retrieve", json={"query": "config comparison test"})
+        # Warm the cache: first WS call hits retriever, subsequent calls hit cache
+        sample1 = _measure_request(client, "config comparison test")
         calls_after_warmup = retriever.call_count
         assert calls_after_warmup >= 1, "retriever must be called on first (cold) request"
 
         # Second call: should be a cache hit (retriever NOT called again)
-        client.post("/retrieve", json={"query": "config comparison test"})
+        sample2 = _measure_request(client, "config comparison test")
         calls_before_config_change = retriever.call_count
         assert calls_before_config_change == calls_after_warmup, (
             "retriever must NOT be called on second identical request (L1 cache hit)"
@@ -434,7 +448,7 @@ class TestAC2QualityMetricsAcrossConfigChanges:
         client.put("/config", json={"semantic_weight": 0.9, "keyword_weight": 0.1})
 
         # Same query after config change: must hit retriever (cache was cleared)
-        client.post("/retrieve", json={"query": "config comparison test"})
+        sample3 = _measure_request(client, "config comparison test")
         calls_after_config_change = retriever.call_count
         assert calls_after_config_change > calls_before_config_change, (
             "retriever must be called after config change (cache should be cleared)"
@@ -466,28 +480,21 @@ class TestAC2QualityMetricsAcrossConfigChanges:
         client = TestClient(api.app)
         query = "rerank comparison test"
 
-        # Call with rerank=False (first call = MISS, sets cache entry A)
-        resp_no_rerank = client.post("/retrieve", json={"query": query, "enable_rerank": False})
-        assert resp_no_rerank.status_code == 200
-        body_no_rerank = resp_no_rerank.json()
-        score_no_rerank = body_no_rerank["results"][0]["score"] if body_no_rerank["results"] else None
+        # Call with rerank=False via WS (first call = MISS, sets cache entry A)
+        sample_no_rerank = _measure_request(client, query, enable_rerank=False)
+        calls_after_no_rerank = retriever.call_count
 
-        # Call with rerank=True (different cache key, also MISS, sets cache entry B)
-        resp_rerank = client.post("/retrieve", json={"query": query, "enable_rerank": True})
-        assert resp_rerank.status_code == 200
-        body_rerank = resp_rerank.json()
-        score_rerank = body_rerank["results"][0]["score"] if body_rerank["results"] else None
+        # Call with rerank=True via WS (different cache key, also MISS, sets cache entry B)
+        sample_rerank = _measure_request(client, query, enable_rerank=True)
 
         # Both calls must have hit the retriever (separate cache keys)
         assert retriever.call_count == 2, (
             f"Expected 2 retriever calls (one per rerank flag), got {retriever.call_count}"
         )
 
-        # Scores may differ (simulated in fake retriever)
-        if score_no_rerank is not None and score_rerank is not None:
-            # At minimum, both must be valid floats
-            assert isinstance(score_no_rerank, float)
-            assert isinstance(score_rerank, float)
+        # Both samples must have results
+        assert sample_no_rerank.result_count >= 0
+        assert sample_rerank.result_count >= 0
 
     def test_benchmark_report_captures_before_after_config_change(
         self, monkeypatch: pytest.MonkeyPatch

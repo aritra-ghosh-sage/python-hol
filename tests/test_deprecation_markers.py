@@ -54,17 +54,26 @@ def deprecation_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 # POST /retrieve — response body and OpenAPI schema
 # ---------------------------------------------------------------------------
 
-def test_retrieve_response_body_shape(deprecation_client: TestClient) -> None:
-    """Response body must contain the expected top-level keys."""
-    response = deprecation_client.post("/retrieve", json={"query": "test query"})
-    assert response.status_code == 200
-    body = response.json()
-    assert "query" in body
-    assert "results" in body
-    assert "total_results" in body
-
-
-def test_openapi_marks_retrieve_as_deprecated(deprecation_client: TestClient) -> None:
+def test_retrieve_endpoint_removed_from_openapi(deprecation_client: TestClient) -> None:
+    """POST /retrieve must NOT appear in the OpenAPI schema after T08 retirement.
+    
+    WHY: The endpoint has been permanently removed. If it reappears in the schema,
+    it means the route was accidentally re-registered.
+    """
     schema = deprecation_client.get("/openapi.json").json()
-    retrieve_op = schema["paths"]["/retrieve"]["post"]
-    assert retrieve_op.get("deprecated") is True
+    paths = schema.get("paths", {})
+    assert "/retrieve" not in paths, (
+        f"POST /retrieve must not appear in OpenAPI after T08 retirement; "
+        f"found paths: {list(paths.keys())}"
+    )
+
+
+def test_retrieve_returns_404_after_removal(deprecation_client: TestClient) -> None:
+    """POST /retrieve must return 404 after T08 endpoint retirement.
+    
+    WHY: Confirms the route no longer exists at runtime.
+    """
+    response = deprecation_client.post("/retrieve", json={"query": "test query"})
+    assert response.status_code == 404, (
+        f"Expected 404 (endpoint removed), got {response.status_code}"
+    )

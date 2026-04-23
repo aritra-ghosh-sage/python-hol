@@ -1,34 +1,17 @@
-"""ASGI middleware for query result caching in Hybrid RAG API.
+"""ASGI middleware for query result caching in Hybrid RAG API (T08 retired).
 
-This module provides the QueryCacheMiddleware for caching POST /retrieve responses
-at the API layer (L1 cache), improving performance for repeated queries.
+This module provided the QueryCacheMiddleware for caching POST /retrieve responses
+at the API layer (L1 cache).  As of T08, the POST /retrieve endpoint has been
+permanently removed from api.py and the middleware is no longer registered.
+The class is retained here for historical reference and unit-test coverage of
+the middleware logic itself (test_query_cache_middleware.py uses a stub app).
 
-The middleware implements:
+The middleware implemented:
 - ASGI body replay pattern for reading request bodies without stream corruption
 - Stable cache key generation from request body (SHA-256 with enable_rerank)
 - Cache HIT/MISS/ERROR status tracking via X-Cache response header
 - Fail-open error handling: cache failures never crash the API
 - Configurable excluded paths for endpoints that should not be cached
-
-Example:
-    >>> from fastapi import FastAPI
-    >>> from hybrid_rag.config import CacheSettings, create_cache_backend
-    >>> from api_middleware import QueryCacheMiddleware
-    >>>
-    >>> settings = CacheSettings(backend="memory", ttl_seconds=3600)
-    >>> cache = create_cache_backend(settings)
-    >>>
-    >>> app = FastAPI()
-    >>> app.add_middleware(
-    ...     QueryCacheMiddleware,
-    ...     cache_backend=cache,
-    ...     excluded_paths=["/health", "/config", "/cache/stats"]
-    ... )
-    >>>
-    >>> # All POST /retrieve requests now cached with X-Cache header
-    >>> @app.post("/retrieve")
-    >>> async def retrieve(query: str) -> dict:
-    ...     return {"results": [...]}
 """
 
 import hashlib
@@ -71,23 +54,16 @@ def _sanitize_correlation_id(raw: Optional[str]) -> Optional[str]:
 
 
 class QueryCacheMiddleware(BaseHTTPMiddleware):
-    """ASGI middleware for caching POST /retrieve responses.
+    """ASGI middleware for caching HTTP responses (T08 retired - no longer registered in api.py).
 
     This middleware intercepts HTTP requests and caches responses for POST /retrieve
     endpoints. It uses a stable cache key generated from the request body and
     implements the ASGI receive() replay pattern to avoid stream corruption.
 
-    The middleware respects the enable_rerank parameter in cache key generation
-    (ADR-002), ensuring that requests with different reranking settings are cached
-    separately.
-
-    Transition-period scope (T05):
-        During the /retrieve → /ws/chat migration, POST /retrieve is the only
-        cache-eligible endpoint.  Admin and operational endpoints (health, config,
-        documents, cache/stats) are explicitly listed in ``excluded_paths``
-        so that their non-interception is deterministic and auditable, independent
-        of any future changes to the positive path-matching logic in
-        ``_should_cache_request``.
+    NOTE (T08): The POST /retrieve endpoint has been permanently removed from
+    api.py.  This class is kept for historical reference.  The unit tests in
+    test_query_cache_middleware.py exercise the middleware against a stub app and
+    remain valid.
 
     Attributes:
         cache_backend: CacheBackend instance for storing/retrieving cached responses.

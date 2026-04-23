@@ -519,29 +519,21 @@ class TestCorpusVersionFormatContract:
 
 
 class TestXCacheHeaderContract:
-    """Contract tests for the X-Cache response header defined in the cross-issue decision.
+    """Contract tests for X-Cache header after T08 retirement of POST /retrieve.
 
-    WHAT CONTRACT: The header name is exactly 'X-Cache' (not 'X-Cache-Status',
-    not 'Cache-Status').  Its value is one of three documented literals:
-    'HIT', 'MISS', or 'ERROR'.  It appears on POST /retrieve responses and
-    is absent on GET /cache/stats responses (an excluded path).
-
-    WHY THIS CLASS: The header name was confirmed as 'X-Cache' in a cross-issue
-    architectural decision.  If the name drifted (e.g. to 'X-Cache-Status'),
-    any client code or monitoring rule that reads 'X-Cache' would silently
-    stop receiving cache telemetry — no error, just invisible data loss.
+    After T08, POST /retrieve is permanently removed. These tests verify:
+    1. POST /retrieve returns 404 (no X-Cache header is set by a gone endpoint).
+    2. GET /cache/stats still works correctly and has no X-Cache header.
     """
 
-    def test_x_cache_header_present_on_retrieve_miss(
+    def test_retrieve_returns_404_after_t08_retirement(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """POST /retrieve response must carry an X-Cache header on a cache MISS.
+        """POST /retrieve must return 404 after T08 retirement.
 
-        WHAT: Issues a retrieve request against a fully wired app (retriever +
-        cache) and confirms the X-Cache header is present on the response.
-        WHY: Without this header, client-side cache performance monitoring
-        (e.g. browser devtools, Datadog APM) cannot distinguish cache hits from
-        misses and the SLO dashboard shows no data.
+        WHAT: Issues a retrieve request and confirms 404 is returned.
+        WHY: The endpoint has been permanently removed. Any other status
+        (200, 503, 500) indicates accidental re-registration.
         """
         fake_retriever = _FakeRetrievingRetriever()
         monkeypatch.setattr(api, "_retriever", fake_retriever)
@@ -552,21 +544,19 @@ class TestXCacheHeaderContract:
         client = TestClient(api.app)
         response = client.post("/retrieve", json={"query": "test query"})
 
-        # The header must be present (case-insensitive lookup via httpx/requests)
-        assert "x-cache" in {h.lower() for h in response.headers}, (
-            "X-Cache header must be present on POST /retrieve responses"
+        assert response.status_code == 404, (
+            f"POST /retrieve must return 404 after T08 retirement; "
+            f"got {response.status_code}"
         )
 
-    def test_x_cache_header_value_is_documented_literal(
+    def test_x_cache_header_absent_on_retrieve_after_t08(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """X-Cache value must be one of the three documented literals.
+        """POST /retrieve must NOT carry an X-Cache header after T08.
 
-        WHAT: Validates that the X-Cache header value is exactly one of
-        'HIT', 'MISS', or 'ERROR' — no other values are documented.
-        WHY: Monitoring alert rules use exact string matching on X-Cache values.
-        An undocumented value like 'BYPASS' would never match any alert rule
-        and cache anomalies would go undetected.
+        WHAT: Confirms no X-Cache header is emitted for the retired endpoint.
+        WHY: Since the endpoint is gone, no middleware processes the request,
+        so no X-Cache header should be injected.
         """
         fake_retriever = _FakeRetrievingRetriever()
         monkeypatch.setattr(api, "_retriever", fake_retriever)
@@ -575,11 +565,11 @@ class TestXCacheHeaderContract:
         monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
 
         client = TestClient(api.app)
-        response = client.post("/retrieve", json={"query": "documented values test"})
+        response = client.post("/retrieve", json={"query": "test query"})
 
-        x_cache = response.headers.get("x-cache") or response.headers.get("X-Cache")
-        assert x_cache in {"HIT", "MISS", "ERROR"}, (
-            f"X-Cache value must be one of 'HIT', 'MISS', 'ERROR'; got {x_cache!r}"
+        assert response.status_code == 404
+        assert "x-cache" not in {h.lower() for h in response.headers}, (
+            "X-Cache header must NOT be present on 404 responses for the retired endpoint"
         )
 
     def test_x_cache_header_absent_on_stats_endpoint(
@@ -587,31 +577,26 @@ class TestXCacheHeaderContract:
     ) -> None:
         """GET /cache/stats must NOT carry an X-Cache header.
 
-        WHAT: Confirms that the /cache/stats path is correctly excluded from
-        the cache middleware so it does not receive an X-Cache header.
-        WHY: /cache/stats is in the middleware's excluded_paths list.  If it
-        were accidentally cached, the stats response itself could be stale,
-        defeating the purpose of the endpoint.  The absence of the header is
-        the observable proof that the path is excluded.
+        WHAT: Confirms that the /cache/stats path has no X-Cache header.
+        WHY: /cache/stats was in the middleware's excluded_paths list; after T08
+        middleware removal, it should still not carry X-Cache headers.
         """
         response = stats_client.get("/cache/stats")
         assert response.status_code == 200
 
         header_names_lower = {h.lower() for h in response.headers}
         assert "x-cache" not in header_names_lower, (
-            "X-Cache header must NOT be present on GET /cache/stats "
-            "(excluded path — caching the stats endpoint would produce stale data)"
+            "X-Cache header must NOT be present on GET /cache/stats"
         )
 
     def test_x_cache_not_named_x_cache_status(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Cross-issue decision: the header is 'X-Cache', not 'X-Cache-Status'.
+        """POST /retrieve returns 404 with no X-Cache-Status header either (T08).
 
-        WHAT: Confirms the exact header name by asserting 'X-Cache-Status' is
-        absent and 'X-Cache' is present on a retrieve response.
-        WHY: The name was disputed across issues and resolved as 'X-Cache'.
-        This test prevents accidental reversion to the rejected alternative.
+        WHAT: Confirms neither 'X-Cache' nor 'X-Cache-Status' is present on
+        the 404 response for the retired endpoint.
+        WHY: Ensures no middleware artefacts bleed through.
         """
         fake_retriever = _FakeRetrievingRetriever()
         monkeypatch.setattr(api, "_retriever", fake_retriever)
@@ -622,27 +607,18 @@ class TestXCacheHeaderContract:
         client = TestClient(api.app)
         response = client.post("/retrieve", json={"query": "header name test"})
 
+        assert response.status_code == 404
         header_names_lower = {h.lower() for h in response.headers}
-        # Confirmed name
-        assert "x-cache" in header_names_lower, (
-            "The documented header name 'X-Cache' must be present on retrieve responses"
-        )
-        # Rejected alternative
-        assert "x-cache-status" not in header_names_lower, (
-            "The rejected header name 'X-Cache-Status' must NOT be present "
-            "(cross-issue decision resolved header name as 'X-Cache')"
-        )
+        assert "x-cache" not in header_names_lower
+        assert "x-cache-status" not in header_names_lower
 
-    def test_retrieve_returns_200_when_cache_faulting(
+    def test_retrieve_returns_404_when_cache_faulting(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """POST /retrieve must return HTTP 200 even when the cache backend raises.
+        """POST /retrieve must return 404 even when cache backend raises (T08).
 
-        WHAT: Confirms the fail-open contract for the retrieval path: cache
-        errors must never propagate as HTTP 500 to clients.
-        WHY: In production, a Redis outage must degrade gracefully to direct
-        retriever calls, not service downtime.  The X-Cache value in this
-        scenario may be 'ERROR' or 'MISS' — both are acceptable.
+        WHAT: Confirms the endpoint is gone regardless of cache health.
+        WHY: Even if the cache is broken, the route does not exist, so 404.
         """
         fake_retriever = _FakeRetrievingRetriever()
         monkeypatch.setattr(api, "_retriever", fake_retriever)
@@ -653,8 +629,8 @@ class TestXCacheHeaderContract:
         client = TestClient(api.app)
         response = client.post("/retrieve", json={"query": "fail-open test"})
 
-        assert response.status_code == 200, (
-            f"POST /retrieve must return 200 even when cache is faulting; "
+        assert response.status_code == 404, (
+            f"POST /retrieve must return 404 after T08 retirement; "
             f"got {response.status_code}"
         )
 
@@ -1116,12 +1092,12 @@ class TestCrossIssueDecisionContract:
     def test_cache_header_name_is_x_cache_not_x_cache_status(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Decision: the cache header is 'X-Cache', NOT 'X-Cache-Status'.
+        """T08: POST /retrieve returns 404 — no X-Cache or X-Cache-Status header emitted.
 
-        WHAT: Pins the exact header name against the rejected alternative.
-        WHY: The middleware uses 'X-Cache' exclusively.  Using the rejected
-        name 'X-Cache-Status' in any new middleware or proxy config would
-        silently duplicate telemetry under a different name, confusing dashboards.
+        WHAT: After T08 retirement the /retrieve route is gone, so neither
+        'X-Cache' nor the rejected 'X-Cache-Status' alternative should appear
+        on the 404 response.
+        WHY: Confirms no middleware artefacts bleed through for the retired endpoint.
         """
         fake_retriever = _FakeRetrievingRetriever()
         monkeypatch.setattr(api, "_retriever", fake_retriever)
@@ -1132,13 +1108,15 @@ class TestCrossIssueDecisionContract:
         client = TestClient(api.app)
         response = client.post("/retrieve", json={"query": "cross-issue header test"})
 
+        assert response.status_code == 404, (
+            f"T08: POST /retrieve must return 404; got {response.status_code}"
+        )
         header_keys_lower = {k.lower() for k in response.headers}
 
-        # Confirmed name must be present.
-        assert "x-cache" in header_keys_lower, (
-            "Cross-issue decision: header must be named 'X-Cache'"
+        # Neither the confirmed name nor the rejected alternative should appear on a 404.
+        assert "x-cache" not in header_keys_lower, (
+            "X-Cache must NOT be present on the 404 response for the retired endpoint"
         )
-        # Rejected alternatives must be absent.
         assert "x-cache-status" not in header_keys_lower, (
             "Cross-issue decision: 'X-Cache-Status' was REJECTED as a header name"
         )
@@ -1176,14 +1154,12 @@ class TestCrossIssueDecisionContract:
     def test_retrieve_200_on_cache_fault_fail_open_decision(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Decision: POST /retrieve returns 200 even when cache is faulting.
+        """T08 decision: POST /retrieve returns 404 — endpoint permanently retired.
 
-        WHAT: Wires an always-failing cache and confirms the retrieve endpoint
-        still returns 200 with valid JSON.
-        WHY: The fail-open decision was made explicitly to ensure cache
-        infrastructure issues never cause user-visible downtime.  This test
-        makes that decision testable so a future change that lets cache errors
-        propagate as 5xx must change this test — triggering a review.
+        WHAT: Confirms /retrieve is gone, returning 404 regardless of cache state.
+        WHY: The fail-open decision no longer applies because the endpoint is retired
+        in T08.  A future attempt to restore this route must change this test —
+        triggering a review.
         """
         fake_retriever = _FakeRetrievingRetriever()
         monkeypatch.setattr(api, "_retriever", fake_retriever)
@@ -1194,15 +1170,9 @@ class TestCrossIssueDecisionContract:
         client = TestClient(api.app)
         response = client.post("/retrieve", json={"query": "fail-open cross-issue test"})
 
-        assert response.status_code == 200, (
-            f"Cross-issue decision: POST /retrieve must return 200 even when cache "
-            f"is faulting (fail-open); got {response.status_code}"
-        )
-        # Body must still be valid JSON with the expected shape.
-        body = response.json()
-        assert "query" in body and "results" in body, (
-            "POST /retrieve response must contain 'query' and 'results' even "
-            f"when cache is faulting; got keys {list(body.keys())!r}"
+        assert response.status_code == 404, (
+            f"T08: POST /retrieve must be retired (404) — endpoint removed; "
+            f"got {response.status_code}"
         )
 
 

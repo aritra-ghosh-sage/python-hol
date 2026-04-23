@@ -136,21 +136,22 @@ async def test_b1_observability_split_http_vs_ws_events(
     ws_http_harness: DeterministicRetriever,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """B1: HTTP and WS emit different cache event namespaces by design."""
+    """B1 (T08 updated): HTTP /retrieve is retired; WS still emits cache.retrieval_* events.
+
+    After T08, the HTTP path no longer exists so cache.http_* events are never
+    emitted.  The WS path continues to emit cache.retrieval_* events as before.
+    """
 
     client = TestClient(api.app)
     query = "b1-observability-split"
 
-    # Warm once so second HTTP call is a middleware HIT.
-    client.post("/retrieve", json={"query": query, "enable_rerank": False})
+    # /retrieve is removed — must return 404 now.
+    http_response = client.post("/retrieve", json={"query": query, "enable_rerank": False})
+    assert http_response.status_code == 404, (
+        f"Expected 404 (T08 retirement), got {http_response.status_code}"
+    )
 
-    caplog.clear()
-    with caplog.at_level("INFO", logger="api"):
-        client.post("/retrieve", json={"query": query, "enable_rerank": False})
-
-    http_messages = [r.message for r in caplog.records]
-    assert any("cache.http_hit" in msg for msg in http_messages)
-
+    # WS path still emits cache.retrieval_* events.
     caplog.clear()
     ws = FakeWebSocket(
         incoming_messages=[{"query": "b1-ws-path", "enable_rerank": False}]
@@ -165,7 +166,7 @@ async def test_b1_observability_split_http_vs_ws_events(
 
 @pytest.mark.asyncio
 async def test_b2_rest_and_ws_apply_same_min_score_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """B2: Prove current flow applies the same 0.80 filter in both REST and WS."""
+    """B2 (T08 updated): /retrieve is retired; WS still applies the 0.80 min-score filter."""
 
     retriever = DeterministicRetriever(
         results=[
@@ -199,20 +200,21 @@ async def test_b2_rest_and_ws_apply_same_min_score_filter(monkeypatch: pytest.Mo
 
     client = TestClient(api.app)
 
+    # /retrieve is retired — must return 404.
     rest_response = client.post(
         "/retrieve",
         json={"query": "b2-filter", "enable_rerank": False},
     )
-    assert rest_response.status_code == 200, rest_response.text
-    rest_body = rest_response.json()
-    rest_ids = [item["id"] for item in rest_body["results"]]
+    assert rest_response.status_code == 404, (
+        f"Expected 404 (T08 retirement), got {rest_response.status_code}"
+    )
 
+    # WS still applies the same 0.80 filter.
     ws = FakeWebSocket(incoming_messages=[{"query": "b2-filter", "enable_rerank": False}])
     await api.websocket_chat(ws)
     ws_results = _extract_ws_results_message(ws)
     ws_ids = [item["id"] for item in ws_results["results"]]
 
-    assert rest_ids == ["above-threshold"]
     assert ws_ids == ["above-threshold"]
 
 
@@ -220,45 +222,55 @@ async def test_b2_rest_and_ws_apply_same_min_score_filter(monkeypatch: pytest.Mo
 async def test_b3_http_and_ws_both_expose_cache_status_in_their_respective_contracts(
     ws_http_harness: DeterministicRetriever,
 ) -> None:
-    """B3 (updated for T03): REST exposes X-Cache header; WS payload now carries cache_status field.
+    """B3 (T08 updated): /retrieve is retired; WS payload still carries cache_status field.
 
-    T03 decision: payload-field contract.  WS clients receive ``cache_status``
-    (HIT / MISS / ERROR) in the results message so they have the same cache
-    visibility that REST clients get via the ``X-Cache`` response header.
+    T08 decision: POST /retrieve is permanently removed. The WS cache_status
+    payload-field contract is unchanged — WS clients still receive ``cache_status``
+    (HIT / MISS / ERROR) in the results message.
     """
 
     client = TestClient(api.app)
 
+    # /retrieve is retired — must return 404.
     response = client.post(
         "/retrieve",
         json={"query": "b3-header-vs-ws", "enable_rerank": False},
     )
-    assert response.status_code == 200
-    # The fixture uses a fresh InMemoryCache so the first REST call must be a
-    # MISS at both the middleware layer (X-Cache: MISS) and the retrieval layer.
-    # If the middleware served a HIT, the retriever was never called and the
-    # shared-retrieve:* key was never populated, so the subsequent WS call
-    # would also be a MISS rather than a HIT.  Assert MISS to verify the cache
-    # was actually populated before expecting a WS HIT below.
-    assert response.headers.get("X-Cache") == "MISS"
+    assert response.status_code == 404, (
+        f"Expected 404 (T08 retirement), got {response.status_code}"
+    )
 
+    # WS path: warm the shared cache with a first query.
+    ws_warm = FakeWebSocket(
+        incoming_messages=[{"query": "b3-header-vs-ws", "enable_rerank": False}]
+    )
+    await api.websocket_chat(ws_warm)
+    warm_results = _extract_ws_results_message(ws_warm)
+    assert warm_results["cache_status"] == "MISS"
+
+    # Second identical WS query hits the shared retrieval cache.
     ws = FakeWebSocket(
         incoming_messages=[{"query": "b3-header-vs-ws", "enable_rerank": False}]
     )
     await api.websocket_chat(ws)
     ws_results = _extract_ws_results_message(ws)
 
-    # T03 contract: WS results message MUST carry cache_status
+    # T03 contract still holds: WS results message MUST carry cache_status
     assert "cache_status" in ws_results
     assert ws_results["cache_status"] in {"HIT", "MISS", "ERROR"}
-    # Second call (same query, shared cache warm from REST MISS above) → HIT
     assert ws_results["cache_status"] == "HIT"
 
 
 def test_b4_rest_miss_causes_two_cache_writes_middleware_plus_shared_facade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """B4: First REST /retrieve miss writes two cache keys at different layers."""
+    """B4 (T08 updated): /retrieve is retired; it returns 404, not two cache writes.
+
+    After T08 the HTTP middleware no longer exists so the second cache write
+    (middleware key) no longer occurs. The test now confirms:
+    1. POST /retrieve returns 404 (endpoint gone).
+    2. No cache write occurs via the HTTP path (only WS/shared-retrieve path writes cache).
+    """
 
     retriever = DeterministicRetriever()
     counting_cache = CountingCache()
@@ -283,13 +295,14 @@ def test_b4_rest_miss_causes_two_cache_writes_middleware_plus_shared_facade(
         "/retrieve",
         json={"query": "b4-double-write", "enable_rerank": False},
     )
-    assert response.status_code == 200, response.text
-
-    # One write from _shared_retrieve_documents (shared-retrieve:*),
-    # one write from QueryCacheMiddleware (cache:*).
-    assert len(counting_cache.set_keys) >= 2, counting_cache.set_keys
-    assert any(key.startswith("shared-retrieve:") for key in counting_cache.set_keys)
-    assert any(key.startswith("cache:") for key in counting_cache.set_keys)
+    # T08: endpoint removed — no handler runs, no cache writes from HTTP path.
+    assert response.status_code == 404, (
+        f"Expected 404 (T08 retirement), got {response.status_code}"
+    )
+    # No cache writes from the HTTP path since the endpoint is gone.
+    assert not any(key.startswith("cache:") for key in counting_cache.set_keys), (
+        "No middleware cache writes expected after T08 retirement"
+    )
 
 
 # ---------------------------------------------------------------------------
