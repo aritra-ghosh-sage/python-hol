@@ -1,13 +1,11 @@
-"""Tests for deprecation markers on POST /retrieve and POST /retrieve-filtered.
+"""Tests for deprecation markers on POST /retrieve (internal endpoint).
 
 Verifies that:
-1. Both endpoints emit Deprecation, Sunset, and Link response headers.
-2. The OpenAPI schema marks both endpoints with deprecated: true.
-3. Runtime behaviour (response body / status code) is unchanged.
+1. The OpenAPI schema marks the endpoint with deprecated: true.
+2. Runtime behaviour (response body / status code) is unchanged.
 """
 
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,8 +23,12 @@ class FakeRetriever:
     """Minimal retriever double that returns one above-threshold result."""
 
     def __init__(self) -> None:
-        self.collection = MagicMock()
-        self.collection.count.return_value = 1
+        self._count = 1
+
+    @property
+    def collection(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(count=lambda: self._count)
 
     def retrieve(self, query: str, enable_rerank: Optional[bool] = None) -> List[Dict[str, Any]]:
         return [
@@ -53,31 +55,11 @@ def deprecation_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 # ---------------------------------------------------------------------------
-# POST /retrieve — deprecation headers
+# POST /retrieve — response body and OpenAPI schema
 # ---------------------------------------------------------------------------
 
-def test_retrieve_returns_deprecation_header(deprecation_client: TestClient) -> None:
-    response = deprecation_client.post("/retrieve", json={"query": "test query"})
-    assert response.status_code == 200
-    assert response.headers.get("deprecation") == "true"
-
-
-def test_retrieve_returns_sunset_header(deprecation_client: TestClient) -> None:
-    response = deprecation_client.post("/retrieve", json={"query": "test query"})
-    assert response.status_code == 200
-    assert response.headers.get("sunset") == "Sat, 31 Oct 2026 23:59:59 GMT"
-
-
-def test_retrieve_returns_link_header(deprecation_client: TestClient) -> None:
-    response = deprecation_client.post("/retrieve", json={"query": "test query"})
-    assert response.status_code == 200
-    assert "link" in response.headers
-    assert "/ws/chat" in response.headers["link"]
-    assert "successor-version" in response.headers["link"]
-
-
-def test_retrieve_response_body_unchanged(deprecation_client: TestClient) -> None:
-    """Deprecation headers must not change the response body or schema."""
+def test_retrieve_response_body_shape(deprecation_client: TestClient) -> None:
+    """Response body must contain the expected top-level keys."""
     response = deprecation_client.post("/retrieve", json={"query": "test query"})
     assert response.status_code == 200
     body = response.json()
@@ -85,60 +67,8 @@ def test_retrieve_response_body_unchanged(deprecation_client: TestClient) -> Non
     assert "results" in body
     assert "total_results" in body
 
-
-# ---------------------------------------------------------------------------
-# POST /retrieve-filtered — deprecation headers
-# ---------------------------------------------------------------------------
-
-def test_retrieve_filtered_returns_deprecation_header(deprecation_client: TestClient) -> None:
-    response = deprecation_client.post(
-        "/retrieve-filtered?min_score=0.5", json={"query": "test query"}
-    )
-    assert response.status_code == 200
-    assert response.headers.get("deprecation") == "true"
-
-
-def test_retrieve_filtered_returns_sunset_header(deprecation_client: TestClient) -> None:
-    response = deprecation_client.post(
-        "/retrieve-filtered?min_score=0.5", json={"query": "test query"}
-    )
-    assert response.status_code == 200
-    assert response.headers.get("sunset") == "Sat, 31 Oct 2026 23:59:59 GMT"
-
-
-def test_retrieve_filtered_returns_link_header(deprecation_client: TestClient) -> None:
-    response = deprecation_client.post(
-        "/retrieve-filtered?min_score=0.5", json={"query": "test query"}
-    )
-    assert response.status_code == 200
-    assert "link" in response.headers
-    assert "/ws/chat" in response.headers["link"]
-    assert "successor-version" in response.headers["link"]
-
-
-def test_retrieve_filtered_response_body_unchanged(deprecation_client: TestClient) -> None:
-    """Deprecation headers must not change the response body or schema."""
-    response = deprecation_client.post(
-        "/retrieve-filtered?min_score=0.5", json={"query": "test query"}
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert "query" in body
-    assert "results" in body
-    assert "total_results" in body
-
-
-# ---------------------------------------------------------------------------
-# OpenAPI schema — deprecated: true
-# ---------------------------------------------------------------------------
 
 def test_openapi_marks_retrieve_as_deprecated(deprecation_client: TestClient) -> None:
     schema = deprecation_client.get("/openapi.json").json()
     retrieve_op = schema["paths"]["/retrieve"]["post"]
     assert retrieve_op.get("deprecated") is True
-
-
-def test_openapi_marks_retrieve_filtered_as_deprecated(deprecation_client: TestClient) -> None:
-    schema = deprecation_client.get("/openapi.json").json()
-    retrieve_filtered_op = schema["paths"]["/retrieve-filtered"]["post"]
-    assert retrieve_filtered_op.get("deprecated") is True

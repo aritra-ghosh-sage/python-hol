@@ -113,25 +113,14 @@ curl -X POST http://localhost:8000/retrieve \
   }'
 ```
 
-#### 3. Retrieve with Score Filtering (Legacy — Deprecated)
-
-> **⚠️ Deprecated:** Use the WebSocket endpoint `ws://localhost:8000/ws/chat` instead.
-> `POST /retrieve-filtered` will be removed in v2.0 (sunset: 2026-10-31).
-
-```bash
-curl -X POST 'http://localhost:8000/retrieve-filtered?min_score=0.8' \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Your search query"}'
-```
-
-#### 4. WebSocket Chat (Preferred)
+#### 3. WebSocket Chat (Preferred)
 
 ```bash
 # Install websocat: cargo install websocat
 echo '{"query": "How do I use offline maps?"}' | websocat ws://localhost:8000/ws/chat
 ```
 
-#### 5. Get Configuration
+#### 4. Get Configuration
 ```bash
 curl http://localhost:8000/config
 ```

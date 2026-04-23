@@ -153,48 +153,7 @@ curl -X POST http://localhost:8000/retrieve \
 
 ---
 
-### 3. Filtered Document Retrieval ⚠️ DEPRECATED
-
-> **⚠️ Deprecation Notice**
-> `POST /retrieve-filtered` is deprecated as of 2026-04-23 and will be removed in **v2.0** (planned sunset: **2026-10-31**).
-> All clients should migrate to the WebSocket endpoint `ws://host/ws/chat` before the sunset date.
-> See [WebSocket Endpoint](#websocket-endpoint) for the migration guide.
-
-**Endpoint:** `POST /retrieve-filtered?min_score=0.5`
-
-**Purpose:** Retrieve documents with custom minimum relevance score filtering. **Note:** The API enforces a floor of 0.85 for chat quality, so `min_score` is clamped to at least 0.85.
-
-**Query Parameters:**
-- `min_score` (optional, float): Minimum relevance score for filtering (0.0-1.0). Default: 0.5. Actual floor: 0.85.
-
-**Request Model:**
-```typescript
-{
-  query: string;                    // Search query (1-500 chars)
-  enable_rerank?: boolean;          // Override reranking (optional)
-}
-```
-
-**Response Model:** Same as `/retrieve`
-
-**Status Codes:**
-- `200 OK` - Retrieval successful
-- `400 Bad Request` - Invalid min_score (outside 0-1 range)
-- `500 Internal Server Error` - Retrieval failed
-- `503 Service Unavailable` - Retriever not initialized
-
-**Response Headers:** Same deprecation headers as `/retrieve` (`Deprecation`, `Sunset`, `Link`).
-
-**Example:**
-```bash
-curl -X POST "http://localhost:8000/retrieve-filtered?min_score=0.8" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is RAG?"}'
-```
-
----
-
-### 4. Get Configuration
+### 3. Get Configuration
 
 **Endpoint:** `GET /config`
 
@@ -810,7 +769,6 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8000
 
 ### Score Thresholds
 - **Default chat threshold:** 0.85 (floor applied to ensure high-quality results)
-- **Configurable threshold:** `min_score` in `/retrieve-filtered` is clamped to 0.85 minimum
 - Results below threshold are filtered out to maintain chat quality
 
 ### Configuration Updates
@@ -838,12 +796,11 @@ curl http://localhost:8000/health
 **Swagger UI:**
 Visit `http://localhost:8000/docs` in a browser to explore and test all endpoints interactively.
 
-**Retrieve documents (legacy — deprecated):**
+**Retrieve documents (internal — not for end-user use):**
 ```bash
 curl -X POST http://localhost:8000/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query": "test query"}'
-# Response will include: Deprecation: true, Sunset: Sat, 31 Oct 2026 23:59:59 GMT
 ```
 
 **WebSocket test (bash + websocat) — preferred:**
@@ -856,10 +813,9 @@ echo '{"query": "offline maps"}' | websocat ws://localhost:8000/ws/chat
 
 ## Deprecation Schedule
 
-| Endpoint | Deprecated | Planned Removal | Replacement |
-|----------|------------|-----------------|-------------|
-| `POST /retrieve` | 2026-04-23 | 2026-10-31 (v2.0) | `ws://host/ws/chat` |
-| `POST /retrieve-filtered` | 2026-04-23 | 2026-10-31 (v2.0) | `ws://host/ws/chat` |
+| Endpoint | Status | Replacement |
+|----------|--------|-------------|
+| `POST /retrieve` | Internal (deprecated) | `ws://host/ws/chat` |
 
 ### Migration Guide: REST → WebSocket
 
@@ -884,7 +840,7 @@ ws.onmessage = (event) => {
 };
 ```
 
-Clients can detect deprecated endpoints by checking for the `Deprecation: true` response header.
+The `POST /retrieve` endpoint is internal-only and tagged `deprecated: true` in the OpenAPI schema; end-user clients should use `ws://host/ws/chat` exclusively.
 
 ---
 

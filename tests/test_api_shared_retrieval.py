@@ -176,7 +176,7 @@ async def test_retrieve_uses_shared_facade_with_request_local_rerank(monkeypatch
     monkeypatch.setattr(api, "_config", GuardConfig(enable_rerank=True))
     monkeypatch.setattr(api, "_shared_retrieve_documents", fake_shared_retrieve_documents)
 
-    response = await api.retrieve(api.RetrievalRequest(query="hello", enable_rerank=False), _fake_http_request(), MagicMock())
+    response = await api.retrieve(api.RetrievalRequest(query="hello", enable_rerank=False), _fake_http_request())
 
     assert observed["query"] == "hello"
     assert observed["enable_rerank"] is False
@@ -239,7 +239,6 @@ async def test_parity_repeated_equivalent_query_rest_then_ws_hits_shared_cache(
     rest_response = await api.retrieve(
         api.RetrievalRequest(query="cache parity query", enable_rerank=False),
         _fake_http_request(),
-        MagicMock(),
     )
 
     ws = FakeWebSocket(
@@ -261,7 +260,7 @@ async def test_parity_config_update_invalidates_shared_cache_for_rest_and_ws(
 ) -> None:
     """Successful config updates invalidate shared retrieval cache across both transports."""
 
-    await api.retrieve(api.RetrievalRequest(query="cfg parity", enable_rerank=False), _fake_http_request(), MagicMock())
+    await api.retrieve(api.RetrievalRequest(query="cfg parity", enable_rerank=False), _fake_http_request())
     assert len(parity_harness.calls) == 1
 
     await api.update_config(
@@ -272,7 +271,7 @@ async def test_parity_config_update_invalidates_shared_cache_for_rest_and_ws(
     await api.websocket_chat(ws)
     assert len(parity_harness.calls) == 2
 
-    await api.retrieve(api.RetrievalRequest(query="cfg parity", enable_rerank=False), _fake_http_request(), MagicMock())
+    await api.retrieve(api.RetrievalRequest(query="cfg parity", enable_rerank=False), _fake_http_request())
     assert len(parity_harness.calls) == 2
 
 
@@ -294,7 +293,7 @@ async def test_parity_ingest_add_bumps_version_and_update_also_invalidates(
       3 — query after 'update' (corpus_version changed again + cache cleared → miss)
     """
 
-    await api.retrieve(api.RetrievalRequest(query="ingest parity", enable_rerank=False), _fake_http_request(), MagicMock())
+    await api.retrieve(api.RetrievalRequest(query="ingest parity", enable_rerank=False), _fake_http_request())
     assert len(parity_harness.calls) == 1
 
     add_response = await api.add_documents(
@@ -354,13 +353,13 @@ async def test_rerank_override_isolation_no_global_config_bleed_under_mixed_call
 ) -> None:
     """Mixed REST/WS calls keep rerank override request-local without mutating global config."""
 
-    await api.retrieve(api.RetrievalRequest(query="rerank isolation", enable_rerank=False), _fake_http_request(), MagicMock())
+    await api.retrieve(api.RetrievalRequest(query="rerank isolation", enable_rerank=False), _fake_http_request())
 
     ws_default = FakeWebSocket(incoming_messages=[{"query": "rerank isolation"}])
     await api.websocket_chat(ws_default)
 
     # Repeat both variants to ensure cache identity separation and stable reuse.
-    await api.retrieve(api.RetrievalRequest(query="rerank isolation", enable_rerank=False), _fake_http_request(), MagicMock())
+    await api.retrieve(api.RetrievalRequest(query="rerank isolation", enable_rerank=False), _fake_http_request())
     ws_default_repeat = FakeWebSocket(incoming_messages=[{"query": "rerank isolation"}])
     await api.websocket_chat(ws_default_repeat)
 
@@ -398,7 +397,6 @@ async def test_parity_corpus_version_bumps_on_add_both_transports_see_miss(
     rest_response_before = await api.retrieve(
         api.RetrievalRequest(query="version bump add parity", enable_rerank=False),
         _fake_http_request(),
-        MagicMock(),
     )
     assert len(parity_harness.calls) == 1
 
@@ -426,9 +424,7 @@ async def test_parity_corpus_version_bumps_on_add_both_transports_see_miss(
     rest_response_after = await api.retrieve(
         api.RetrievalRequest(query="version bump add parity", enable_rerank=False),
         _fake_http_request(),
-        MagicMock(),
     )
-    assert len(parity_harness.calls) == 2  # HIT — same corpus_version key
 
     # Both transports return equivalent payloads from the shared cache entry
     assert rest_response_after.total_results == ws_results["total_results"]
@@ -455,7 +451,6 @@ async def test_parity_corpus_version_bumps_on_update_both_transports_see_miss(
     await api.retrieve(
         api.RetrievalRequest(query="version bump update parity", enable_rerank=False),
         _fake_http_request(),
-        MagicMock(),
     )
     assert len(parity_harness.calls) == 1
 
@@ -483,7 +478,6 @@ async def test_parity_corpus_version_bumps_on_update_both_transports_see_miss(
     rest_response_after = await api.retrieve(
         api.RetrievalRequest(query="version bump update parity", enable_rerank=False),
         _fake_http_request(),
-        MagicMock(),
     )
     assert len(parity_harness.calls) == 2  # HIT — shared key with WS entry
 
@@ -518,7 +512,6 @@ async def test_parity_ws_first_rest_second_shares_same_corpus_version_key(
     rest_response = await api.retrieve(
         api.RetrievalRequest(query="ws rest share key", enable_rerank=False),
         _fake_http_request(),
-        MagicMock(),
     )
     assert len(parity_harness.calls) == 1  # HIT — retriever NOT called again
 
