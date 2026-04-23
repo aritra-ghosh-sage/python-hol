@@ -42,12 +42,15 @@ Hybrid RAG implements a **two-layer caching system with distinct ownership bound
 │  ┌─────────────────────────────────────────────────┐   │
 │  │  L1: QueryCacheMiddleware  (api_middleware.py)  │   │
 │  │                                                 │   │
-│  │  • Owner:   Middleware layer                    │   │
+│  │  • Owner:   HTTP middleware layer               │   │
 │  │  • Caches:  Full HTTP response bodies           │   │
 │  │  • Backends: InMemoryCache or RedisCache        │   │
-│  │  • Key:     {query, enable_rerank,              │   │
-│  │              config_fingerprint, corpus_version}│   │
-│  │  • Shared:  REST and WebSocket transports       │   │
+│  │  • Key:     Request JSON-derived cache key      │   │
+│  │              + enable_rerank                    │   │
+│  │  • Scope:   HTTP /retrieve only                 │   │
+│  │  • Note:    WebSocket bypasses this middleware; │   │
+│  │              shared retrieval caching happens   │   │
+│  │              via _shared_retrieve_documents     │   │
 │  └──────────────────┬──────────────────────────────┘   │
 │                     │ L1 MISS only                      │
 │  ┌──────────────────▼──────────────────────────────┐   │
