@@ -148,8 +148,6 @@ async def test_b2_ws_applies_min_score_filter(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(api, "_cache_generation", 0)
     monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
 
-    client = TestClient(api.app)
-
     # WS still applies the same 0.80 filter.
     ws = FakeWebSocket(incoming_messages=[{"query": "b2-filter", "enable_rerank": False}])
     await api.websocket_chat(ws)

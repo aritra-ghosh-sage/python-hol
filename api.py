@@ -34,14 +34,13 @@ import hashlib
 import json
 import logging
 import os
-import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from contextlib import asynccontextmanager
 
 import requests
-from fastapi import FastAPI, HTTPException, Request, WebSocketDisconnect, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocketDisconnect, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -91,38 +90,7 @@ _corpus_version: str = "0"
 # the log stream with repeated messages while the state is stable.
 _last_fallback_state: Optional[bool] = None
 
-# Allowlist for correlation ID values extracted from HTTP headers.
-# Prevents log injection if a caller supplies a header containing newlines
-# or other special characters (security review item #1).
-_SAFE_CORRELATION_ID_RE = re.compile(r"^[a-zA-Z0-9\-_.]{1,128}$")
-
-
-def _sanitize_correlation_id(raw: Optional[str]) -> Optional[str]:
-    """Return *raw* unchanged when safe to embed in a log line, else None.
-
-    Args:
-        raw: Header value to validate.
-
-    Returns:
-        The original string when it matches the allowlist, otherwise None.
-    """
-    if raw and _SAFE_CORRELATION_ID_RE.match(raw):
-        return raw
-    return None
-
-
 # Pydantic models for request/response validation
-class RetrievalRequest(BaseModel):
-    """Request model for document retrieval."""
-
-    query: str = Field(
-        ..., min_length=1, max_length=500, description="Search query"
-    )
-    enable_rerank: Optional[bool] = Field(
-        None, description="Override reranking setting"
-    )
-
-
 class DocumentResult(BaseModel):
     """Model representing a single retrieved document."""
 
@@ -130,16 +98,6 @@ class DocumentResult(BaseModel):
     text: str = Field(..., description="Document text content")
     source: str = Field(..., description="Document source URL")
     score: float = Field(..., description="Relevance score (may be negative due to fusion/reranking)")
-
-
-class RetrievalResponse(BaseModel):
-    """Response model for retrieval requests."""
-
-    query: str = Field(..., description="Original search query")
-    results: List[DocumentResult] = Field(
-        ..., description="List of retrieved documents"
-    )
-    total_results: int = Field(..., ge=0, description="Total number of results")
 
 
 class ConfigResponse(BaseModel):

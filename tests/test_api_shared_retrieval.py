@@ -1,8 +1,6 @@
 """Tests for shared retrieval facade usage across REST and WebSocket handlers."""
 
-from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
@@ -10,36 +8,6 @@ from fastapi import WebSocketDisconnect
 import api
 from hybrid_rag import HybridRetrieverConfig
 from hybrid_rag.cache import InMemoryCache
-
-
-def _fake_http_request(headers: Optional[Dict[str, str]] = None) -> Any:
-    """Return a minimal HTTP-request stub for tests that call api.retrieve() directly.
-
-    The retrieve handler now accepts an ``http_request: Request`` argument to
-    extract the X-Request-ID header for correlation-aware cache logging (OPTB-012).
-    Tests that call the handler as a plain coroutine need to supply a stub that
-    satisfies ``request.headers.get(...)`` and ``request.state``.
-
-    ``state`` is a ``SimpleNamespace`` (no pre-existing attributes) rather than
-    a MagicMock so that ``getattr(stub.state, "correlation_id", None)`` returns
-    ``None`` instead of a truthy MagicMock instance.  This ensures the handler
-    follows the correct fallback path (header → UUID) in unit tests.
-
-    Args:
-        headers: Optional dict of headers to expose on the stub.
-
-    Returns:
-        A stub whose ``.headers.get(...)`` returns values from *headers* and
-        whose ``.state`` starts as an empty ``SimpleNamespace``.
-    """
-    stub = MagicMock()
-    stub.headers = MagicMock()
-    stub.headers.get = (headers or {}).get
-    # Use SimpleNamespace so attribute access on .state behaves like a plain
-    # object: missing attributes raise AttributeError (caught by getattr default),
-    # and assignments persist within the stub for the duration of the test.
-    stub.state = SimpleNamespace()
-    return stub
 
 
 class GuardConfig:
@@ -148,32 +116,6 @@ def _assert_ws_results_message(ws: FakeWebSocket) -> Dict[str, Any]:
         if payload.get("type") == "results":
             return payload
     raise AssertionError("results message not sent")
-
-
-@pytest.mark.asyncio
-async def test_retrieve_endpoint_removed_after_t08(monkeypatch: pytest.MonkeyPatch) -> None:
-    """T08: POST /retrieve endpoint has been permanently removed from api.py.
-
-    The `retrieve` handler function and the /retrieve route no longer exist.
-    Calling POST /retrieve must return 404.
-    """
-    monkeypatch.setattr(api, "_retriever", object())
-    monkeypatch.setattr(api, "_config", GuardConfig(enable_rerank=True))
-    monkeypatch.setattr(api, "_cache", InMemoryCache(ttl_seconds=3600, max_size=100))
-    monkeypatch.setattr(api, "_cache_generation", 0)
-    monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-    from fastapi.testclient import TestClient
-    client = TestClient(api.app)
-    response = client.post("/retrieve", json={"query": "hello", "enable_rerank": False})
-    assert response.status_code == 404, (
-        f"Expected 404 (T08 retirement), got {response.status_code}"
-    )
-
-    # The `retrieve` function itself must no longer be exposed on the api module.
-    assert not hasattr(api, "retrieve"), (
-        "api.retrieve must not exist after T08 retirement"
-    )
 
 
 @pytest.mark.asyncio

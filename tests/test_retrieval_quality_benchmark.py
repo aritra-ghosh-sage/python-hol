@@ -137,14 +137,14 @@ class BenchmarkSample:
     Attributes:
         query: The query string used in this sample.
         latency_ms: Measured wall-clock latency for this request in milliseconds.
-        x_cache_header: Value of the X-Cache response header ('HIT', 'MISS', 'ERROR').
-        status_code: HTTP status code from the response.
+        cache_status: Cache status from the WS results message ('HIT', 'MISS', 'ERROR', 'UNKNOWN').
+        status_code: 200 on a successful results frame, 500 on an error frame or disconnect.
         result_count: Number of results returned.
     """
 
     query: str
     latency_ms: float
-    x_cache_header: str
+    cache_status: str
     status_code: int
     result_count: int
 
@@ -192,7 +192,6 @@ def _measure_request(
 ) -> BenchmarkSample:
     """Make one WS /ws/chat request and return timing + cache metadata.
 
-    T08: POST /retrieve is retired; benchmark now uses the WebSocket transport.
     Cache status is read from the ``cache_status`` field in the WS results message.
 
     Args:
@@ -209,25 +208,29 @@ def _measure_request(
 
     cache_status = "UNKNOWN"
     result_count = 0
+    status_code = 500
+    max_messages = 50
 
     start = time.monotonic()
     with client.websocket_connect("/ws/chat") as ws:
         ws.send_json(payload)
-        while True:
+        for _ in range(max_messages):
             msg = ws.receive_json()
             if msg.get("type") == "results":
                 cache_status = msg.get("cache_status", "UNKNOWN")
                 result_count = len(msg.get("results", []))
+                status_code = 200
                 break
             if msg.get("type") == "error":
+                status_code = 500
                 break
     latency_ms = (time.monotonic() - start) * 1000
 
     return BenchmarkSample(
         query=query,
         latency_ms=latency_ms,
-        x_cache_header=cache_status,
-        status_code=200,
+        cache_status=cache_status,
+        status_code=status_code,
         result_count=result_count,
     )
 
@@ -268,7 +271,7 @@ def _run_warm_cold_benchmark(
 
     # Aggregate metrics
     all_samples = report.samples
-    hits = sum(1 for s in all_samples if s.x_cache_header == "HIT")
+    hits = sum(1 for s in all_samples if s.cache_status == "HIT")
     report.hit_rate = hits / len(all_samples) if all_samples else 0.0
     report.cold_cache_latency_ms = cold_sample.latency_ms
     if warm_samples:
@@ -570,8 +573,8 @@ class TestAC3WarmAndColdCachePerformanceMeasurements:
         """
         # Fresh benchmark_client fixture guarantees empty cache
         sample = _measure_request(benchmark_client, "cold miss verification")
-        assert sample.x_cache_header == "MISS", (
-            f"First request for fresh query must be MISS, got {sample.x_cache_header!r}"
+        assert sample.cache_status == "MISS", (
+            f"First request for fresh query must be MISS, got {sample.cache_status!r}"
         )
 
     def test_warm_cache_subsequent_request_is_a_hit(
@@ -588,8 +591,8 @@ class TestAC3WarmAndColdCachePerformanceMeasurements:
         _measure_request(benchmark_client, query)
         # Second request should be a cache hit
         warm_sample = _measure_request(benchmark_client, query)
-        assert warm_sample.x_cache_header == "HIT", (
-            f"Second identical request must be HIT, got {warm_sample.x_cache_header!r}"
+        assert warm_sample.cache_status == "HIT", (
+            f"Second identical request must be HIT, got {warm_sample.cache_status!r}"
         )
 
     def test_warm_cache_is_faster_than_cold_cache(
@@ -649,11 +652,11 @@ class TestAC3WarmAndColdCachePerformanceMeasurements:
             cold_sample = _measure_request(benchmark_client, query)
             warm_sample = _measure_request(benchmark_client, query)
 
-            assert cold_sample.x_cache_header == "MISS", (
-                f"First request for '{query}' must be MISS, got {cold_sample.x_cache_header!r}"
+            assert cold_sample.cache_status == "MISS", (
+                f"First request for '{query}' must be MISS, got {cold_sample.cache_status!r}"
             )
-            assert warm_sample.x_cache_header == "HIT", (
-                f"Second request for '{query}' must be HIT, got {warm_sample.x_cache_header!r}"
+            assert warm_sample.cache_status == "HIT", (
+                f"Second request for '{query}' must be HIT, got {warm_sample.cache_status!r}"
             )
 
     def test_cache_miss_after_config_change_confirms_cold_semantics(
@@ -670,15 +673,15 @@ class TestAC3WarmAndColdCachePerformanceMeasurements:
         # Prime the cache
         _measure_request(benchmark_client, query)
         warm_sample = _measure_request(benchmark_client, query)
-        assert warm_sample.x_cache_header == "HIT", "Cache should be warm before config change"
+        assert warm_sample.cache_status == "HIT", "Cache should be warm before config change"
 
         # Config change: clears L1 cache (ADR-006)
         benchmark_client.put("/config", json={"semantic_weight": 0.8, "keyword_weight": 0.2})
 
         # Same query after config change must be cold again
         post_config_sample = _measure_request(benchmark_client, query)
-        assert post_config_sample.x_cache_header == "MISS", (
-            f"Query must be cold (MISS) after config change, got {post_config_sample.x_cache_header!r}"
+        assert post_config_sample.cache_status == "MISS", (
+            f"Query must be cold (MISS) after config change, got {post_config_sample.cache_status!r}"
         )
 
 
@@ -833,7 +836,7 @@ class TestAC4RegressionDetection:
             all_samples.append(_measure_request(benchmark_client, query))
 
         total = len(all_samples)
-        hits = sum(1 for s in all_samples if s.x_cache_header == "HIT")
+        hits = sum(1 for s in all_samples if s.cache_status == "HIT")
         observed_hit_rate = hits / total if total > 0 else 0.0
 
         # 3 unique queries × 2 calls = 6 total; 3 hits → hit_rate = 0.5
@@ -880,7 +883,7 @@ class TestAC4RegressionDetection:
             required_sample_fields = {
                 "query",
                 "latency_ms",
-                "x_cache_header",
+                "cache_status",
                 "status_code",
                 "result_count",
             }
