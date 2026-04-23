@@ -78,7 +78,7 @@ curl -X GET http://localhost:8000/health
 
 **Endpoint:** `POST /retrieve`
 
-**Purpose:** Retrieve relevant documents using hybrid search (semantic + keyword). Results are automatically filtered by relevance score threshold (≥ 0.85).
+**Purpose:** Retrieve relevant documents using hybrid search (semantic + keyword). Results are automatically filtered by relevance score threshold (≥ 0.80).
 
 **Request Model:**
 ```typescript
@@ -150,6 +150,8 @@ curl -X POST http://localhost:8000/retrieve \
 | `Deprecation` | `true` | Endpoint is deprecated |
 | `Sunset` | `Sat, 31 Oct 2026 23:59:59 GMT` | Planned removal date (RFC 8594) |
 | `Link` | `</ws/chat>; rel="successor-version"` | Recommended replacement endpoint |
+
+---
 
 ---
 

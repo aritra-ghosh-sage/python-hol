@@ -44,6 +44,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from hybrid_rag.cache import CacheBackend
+from hybrid_rag.constants import CACHE_TELEMETRY_LABELS
 
 __all__ = ["QueryCacheMiddleware"]
 
@@ -323,7 +324,8 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
                     # from the retrieval-layer `cache.retrieval_hit` event, so alerting
                     # rules can count each layer independently without double-counting.
                     logger.info(
-                        "cache.http_hit correlation_id=%s path=%s",
+                        "%s correlation_id=%s path=%s",
+                        CACHE_TELEMETRY_LABELS["http_hit"],
                         correlation_id,
                         request.url.path,
                     )
@@ -351,7 +353,8 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
                 # retrieval-layer `cache.retrieval_miss` event, preventing double-
                 # counting in alert rules that tally cache miss events per layer.
                 logger.info(
-                    "cache.http_miss correlation_id=%s path=%s",
+                    "%s correlation_id=%s path=%s",
+                    CACHE_TELEMETRY_LABELS["http_miss"],
                     correlation_id,
                     request.url.path,
                 )
