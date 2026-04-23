@@ -100,6 +100,10 @@ class _FakeRetriever:
 
     def __init__(self, score: float = 0.95) -> None:
         self._score = score
+        # call_count is exposed for tests that need to verify how many times
+        # the retriever was invoked (e.g. to confirm cache hit vs. miss
+        # behaviour). Observability tests do not currently assert on it, but
+        # it follows the same tracking pattern used in test_api_shared_retrieval.py.
         self.call_count: int = 0
         # Expose a collection so _build_corpus_version_token() can call count().
         self.collection = _FakeCollection()

@@ -697,6 +697,13 @@ def _log_fallback_transition(current_fallback_active: bool) -> None:
     while degraded).  Edge-triggered logs are far less noisy in production
     and make alert rules simpler to write.
 
+    Multi-process note: ``_last_fallback_state`` is process-local.  Under a
+    multi-worker uvicorn deployment each process tracks its own state
+    independently, so a backend status change will produce one transition log
+    per worker on the first health-check poll after the change.  This is
+    acceptable: operators will see N logs (N = worker count) per transition,
+    not one global log.  Single-worker deployments (the default) are unaffected.
+
     Args:
         current_fallback_active: The fallback_active value from the latest
             backend health check result.
