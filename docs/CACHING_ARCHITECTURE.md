@@ -116,7 +116,7 @@ The middleware only attempts to cache a request when all of the following are tr
 - HTTP method is `POST`
 - Path is exactly `/retrieve`
 - `Content-Type` is `application/json` or `application/*+json` (RFC 6839)
-- Path is **not** in `excluded_paths` (default: `/health`, `/config`, `/ingest`, `/documents`, `/documents/sources`, `/cache/stats`)
+- Path is **not** in `excluded_paths` (as currently configured: `/health`, `/config`, `/documents`, `/cache/stats`)
 
 All eligibility checks are header-only and occur before any request body I/O.
 
