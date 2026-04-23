@@ -463,7 +463,12 @@ tasks:
     prototype: false
     covers: ["decision gate", "rollback readiness"]
     priority: high
-    status: pending
+    status: complete
+    decision: GO
+    decision_date: "2026-04-23"
+    rollback_tag: pre-retrieve-removal-v1
+    rollback_commit: a8e3ec7
+    gate_record: docs/plan/20260423-ws-only-retrieval-deprecation/T07-gate-record.md
     flags:
       flaky: false
       retries_used: 0
