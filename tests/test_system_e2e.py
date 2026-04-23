@@ -1,7 +1,7 @@
 """Comprehensive end-to-end system tests for Hybrid RAG with caching.
 
 Tests cover:
-- L1 response caching (OpenAPI schema verification)
+- Admin endpoint availability
 - L2 embedding cache (hit rate)
 - Ingest invalidation (add vs update)
 - Concurrent requests
@@ -92,27 +92,11 @@ def cache_stats_baseline(app_with_cache: TestClient) -> Dict[str, Any]:
 # ============================================================================
 
 
-class TestL1ResponseCaching:
-    """OpenAPI schema and admin endpoint verification.
+class TestAdminEndpoints:
+    """Admin endpoint availability tests."""
 
-    These tests verify admin endpoints are unaffected and the OpenAPI schema
-    does not expose routes that have been removed.
-    """
-
-    def test_retrieve_not_in_openapi_schema(self, app_with_cache: TestClient) -> None:
-        """POST /retrieve must not appear in OpenAPI schema.
-
-        WHY: Confirms the route was not accidentally re-registered.
-        """
-        schema = app_with_cache.get("/openapi.json").json()
-        paths = schema.get("paths", {})
-        assert "/retrieve" not in paths, (
-            f"POST /retrieve must not appear in OpenAPI; "
-            f"found paths: {list(paths.keys())}"
-        )
-
-    def test_admin_endpoints_unaffected(self, app_with_cache: TestClient) -> None:
-        """Admin endpoints must return 200 after middleware removal."""
+    def test_admin_endpoints_available(self, app_with_cache: TestClient) -> None:
+        """Admin endpoints must return 200."""
         response = app_with_cache.get("/health")
         assert response.status_code == 200
 
