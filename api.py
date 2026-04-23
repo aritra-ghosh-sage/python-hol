@@ -1588,9 +1588,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 # T03 WS cache-status contract: include retrieval-layer cache
                 # outcome in the results payload so WS clients have the same
                 # cache visibility that REST clients get via X-Cache header.
-                # Empty list means _cache is None (caching disabled or not yet
-                # initialised), which is functionally equivalent to a MISS:
-                # the retriever was always invoked and nothing was stored.
+                # Treat a missing or unrecognised status as a defensive MISS
+                # fallback. An empty list does not imply any specific cache
+                # configuration; it only means no explicit status was emitted.
                 _raw_status = ws_cache_status_out[0] if ws_cache_status_out else "MISS"
                 ws_cache_status: Literal["HIT", "MISS", "ERROR"] = (
                     _raw_status if _raw_status in ("HIT", "MISS", "ERROR") else "MISS"
