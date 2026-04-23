@@ -65,6 +65,7 @@ __all__ = [
     "STOP_WORDS",
     "MIN_RELEVANCE_SCORE",
     "DEFAULT_PERSIST_DIRECTORY",
+    "CACHE_TELEMETRY_LABELS",
 ]
 
 # Public API imports
@@ -79,6 +80,7 @@ from .constants import (
     DEFAULT_PERSIST_DIRECTORY,
     MIN_RELEVANCE_SCORE,
     STOP_WORDS,
+    CACHE_TELEMETRY_LABELS,
 )
 from .exceptions import (
     HybridRAGException,

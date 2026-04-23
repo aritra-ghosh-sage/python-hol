@@ -53,6 +53,7 @@ from hybrid_rag import (
     initialize_vector_db,
     get_sample_documents,
     chunk_text,
+    CACHE_TELEMETRY_LABELS,
 )
 from hybrid_rag.cache import CacheBackend
 from hybrid_rag.config import CacheSettings, create_cache_backend
@@ -486,12 +487,27 @@ class WsStatusMessage(BaseModel):
 
 
 class WsResultsMessage(BaseModel):
-    """WebSocket results message sent by server."""
+    """WebSocket results message sent by server.
+
+    T03 WS cache-status contract: the ``cache_status`` field carries
+    the retrieval-layer cache outcome (HIT / MISS / ERROR) so that WS
+    clients have the same cache visibility that REST clients get via the
+    ``X-Cache`` response header.  The field uses the retrieval-layer
+    signal (``cache.retrieval_*``) rather than the HTTP-middleware signal
+    (``cache.http_*``) because WebSocket traffic bypasses the middleware.
+    """
 
     type: Literal["results"] = "results"
     query: str = Field(..., description="Original query")
     results: List[DocumentResult] = Field(..., description="Retrieved documents")
     total_results: int = Field(..., description="Total number of results")
+    cache_status: Literal["HIT", "MISS", "ERROR"] = Field(
+        "MISS",
+        description=(
+            "T03 WS cache-status contract: retrieval-layer cache outcome. "
+            "HIT = served from cache; MISS = cache bypassed; ERROR = cache fault."
+        ),
+    )
 
 
 class WsErrorMessage(BaseModel):
@@ -776,16 +792,18 @@ def _log_fallback_transition(current_fallback_active: bool) -> None:
         # WARNING level is appropriate because this signals a degraded mode that
         # operators should investigate, even if requests still succeed (fail-open).
         logger.warning(
-            "cache.fallback_activated: cache backend is unreachable;"
-            " serving requests without L1 cache"
+            "%s: cache backend is unreachable;"
+            " serving requests without L1 cache",
+            CACHE_TELEMETRY_LABELS["fallback_activated"],
         )
     else:
         # Transition True → False: backend recovered.
         # INFO level is appropriate for a recovery event — it is noteworthy
         # but not an actionable problem.
         logger.info(
-            "cache.fallback_deactivated: cache backend is reachable again;"
-            " L1 cache is active"
+            "%s: cache backend is reachable again;"
+            " L1 cache is active",
+            CACHE_TELEMETRY_LABELS["fallback_deactivated"],
         )
 
     # Persist the new state so the next poll can detect the NEXT transition.
@@ -796,6 +814,7 @@ def _shared_retrieve_documents(
     query: str,
     enable_rerank: Optional[bool] = None,
     correlation_id: Optional[str] = None,
+    _out_cache_status: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Execute retrieval through one shared path for REST and WebSocket handlers.
 
@@ -804,6 +823,13 @@ def _shared_retrieve_documents(
         enable_rerank: Override for reranking; None means use config default.
         correlation_id: Per-request tracing identifier used in cache hit/miss
             log records (OPTB-012).  Auto-generated as a UUID if None.
+        _out_cache_status: Optional mutable list.  When provided, the function
+            appends the retrieval-layer cache outcome as its first element:
+            ``"HIT"``, ``"MISS"``, or ``"ERROR"``.  Callers that need the
+            cache status (e.g. the WS handler implementing the T03 payload-field
+            contract) pass a ``[]`` here and read ``_out_cache_status[0]`` after
+            the call.  REST callers that do not need the status omit this
+            argument; their behaviour is unchanged.
     """
     if _retriever is None or _config is None:
         raise RetrieverNotInitializedError("Retriever not initialized")
@@ -865,10 +891,13 @@ def _shared_retrieve_documents(
                 # `cache.http_hit` emitted by the middleware, so each layer can be
                 # alerted and counted independently.
                 logger.info(
-                    "cache.retrieval_hit correlation_id=%s corpus_version=%s",
+                    "%s correlation_id=%s corpus_version=%s",
+                    CACHE_TELEMETRY_LABELS["retrieval_hit"],
                     effective_correlation_id,
                     _corpus_version,
                 )
+                if _out_cache_status is not None:
+                    _out_cache_status.append("HIT")
                 return cached_results
             if cached_results is None:
                 # OPTB-012: Structured miss telemetry — `cache.retrieval_miss` identifies the
@@ -877,17 +906,21 @@ def _shared_retrieve_documents(
                 # Guard: only emitted when the cache read succeeds and returns no value;
                 # cache read failures are tracked separately via `cache.retrieval_error`.
                 logger.info(
-                    "cache.retrieval_miss correlation_id=%s corpus_version=%s",
+                    "%s correlation_id=%s corpus_version=%s",
+                    CACHE_TELEMETRY_LABELS["retrieval_miss"],
                     effective_correlation_id,
                     _corpus_version,
                 )
         except Exception as e:
             logger.warning("Shared retrieval cache read failed: %s", e)
             logger.info(
-                "cache.retrieval_error correlation_id=%s corpus_version=%s",
+                "%s correlation_id=%s corpus_version=%s",
+                CACHE_TELEMETRY_LABELS["retrieval_error"],
                 effective_correlation_id,
                 _corpus_version,
             )
+            if _out_cache_status is not None:
+                _out_cache_status.append("ERROR")
     results = _retriever.retrieve(query, enable_rerank=effective_enable_rerank)
 
     if _cache is not None:
@@ -1539,16 +1572,30 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 # always auto-generate a UUID.  This links cache hit/miss logs
                 # to the specific WebSocket message.
                 ws_correlation_id = str(uuid.uuid4())
+                ws_cache_status_out: List[str] = []
                 results = _shared_retrieve_documents(
-                    query, enable_rerank=enable_rerank, correlation_id=ws_correlation_id
+                    query,
+                    enable_rerank=enable_rerank,
+                    correlation_id=ws_correlation_id,
+                    _out_cache_status=ws_cache_status_out,
                 )
                 doc_results = _to_filtered_document_results(
                     results, min_score_threshold=0.80
                 )
 
+                # T03 WS cache-status contract: include retrieval-layer cache
+                # outcome in the results payload so WS clients have the same
+                # cache visibility that REST clients get via X-Cache header.
+                ws_cache_status: Literal["HIT", "MISS", "ERROR"] = (
+                    ws_cache_status_out[0] if ws_cache_status_out else "MISS"  # type: ignore[assignment]
+                )
+
                 # Send results (total_results reflects post-filter count)
                 results_msg = WsResultsMessage(
-                    query=query, results=doc_results, total_results=len(doc_results)
+                    query=query,
+                    results=doc_results,
+                    total_results=len(doc_results),
+                    cache_status=ws_cache_status,
                 )
                 await websocket.send_json(results_msg.model_dump())
                 logger.info(f"WebSocket query succeeded: {query[:50]}... ({len(doc_results)} results after filtering)")
