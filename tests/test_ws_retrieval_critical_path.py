@@ -35,7 +35,7 @@ from fastapi import WebSocketDisconnect
 import api
 from hybrid_rag import HybridRetrieverConfig
 from hybrid_rag.cache import InMemoryCache
-from hybrid_rag.exceptions import RetrievalError, RetrieverNotInitializedError
+from hybrid_rag.exceptions import RetrievalError
 
 
 # ---------------------------------------------------------------------------
