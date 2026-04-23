@@ -33,6 +33,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
@@ -88,6 +89,25 @@ _corpus_version: str = "0"
 # (False → True = activation, True → False = deactivation) without flooding
 # the log stream with repeated messages while the state is stable.
 _last_fallback_state: Optional[bool] = None
+
+# Allowlist for correlation ID values extracted from HTTP headers.
+# Prevents log injection if a caller supplies a header containing newlines
+# or other special characters (security review item #1).
+_SAFE_CORRELATION_ID_RE = re.compile(r"^[a-zA-Z0-9\-_.]{1,128}$")
+
+
+def _sanitize_correlation_id(raw: Optional[str]) -> Optional[str]:
+    """Return *raw* unchanged when safe to embed in a log line, else None.
+
+    Args:
+        raw: Header value to validate.
+
+    Returns:
+        The original string when it matches the allowlist, otherwise None.
+    """
+    if raw and _SAFE_CORRELATION_ID_RE.match(raw):
+        return raw
+    return None
 
 
 # Pydantic models for request/response validation
@@ -809,11 +829,12 @@ def _shared_retrieve_documents(
         try:
             cached_results = lazy_cache.get(cache_key)
             if isinstance(cached_results, list):
-                # OPTB-012: Structured cache hit log — the hit originates from
-                # the shared retrieval layer (not middleware) so we log it here
-                # with corpus_version context.
+                # OPTB-012: Structured hit telemetry — `cache.retrieval_hit` identifies
+                # this as the retrieval-layer cache, distinct from the HTTP-layer
+                # `cache.http_hit` emitted by the middleware, so each layer can be
+                # alerted and counted independently.
                 logger.info(
-                    "cache.hit correlation_id=%s corpus_version=%s",
+                    "cache.retrieval_hit correlation_id=%s corpus_version=%s",
                     effective_correlation_id,
                     _corpus_version,
                 )
@@ -821,14 +842,16 @@ def _shared_retrieve_documents(
         except Exception as e:
             logger.warning("Shared retrieval cache read failed: %s", e)
 
-    # OPTB-012: Structured cache miss log — records the corpus_version so
-    # operators can distinguish expected post-invalidation misses from
-    # unexpected misses on a stable corpus.
-    logger.info(
-        "cache.miss correlation_id=%s corpus_version=%s",
-        effective_correlation_id,
-        _corpus_version,
-    )
+        # OPTB-012: Structured miss telemetry — `cache.retrieval_miss` identifies the
+        # retrieval layer and records corpus_version so operators can distinguish
+        # expected post-invalidation misses from unexpected misses on a stable corpus.
+        # Guard: only emitted when a cache backend is configured; a cacheless deployment
+        # has no L1 hit/miss semantics so logging a miss would be misleading.
+        logger.info(
+            "cache.retrieval_miss correlation_id=%s corpus_version=%s",
+            effective_correlation_id,
+            _corpus_version,
+        )
 
     results = _retriever.retrieve(query, enable_rerank=effective_enable_rerank)
 
@@ -945,9 +968,11 @@ async def retrieve(request: RetrievalRequest, http_request: Request) -> Retrieva
     # middleware logs and handler logs share exactly one ID per request.
     # Fall back to header extraction and finally to a fresh UUID only when
     # the middleware has not run (e.g. in direct-handler unit tests).
+    # Header values are validated against _SAFE_CORRELATION_ID_RE to prevent
+    # log injection via attacker-controlled header content.
     correlation_id: str = getattr(http_request.state, "correlation_id", None) or (
-        http_request.headers.get("X-Request-ID")
-        or http_request.headers.get("X-Correlation-ID")
+        _sanitize_correlation_id(http_request.headers.get("X-Request-ID"))
+        or _sanitize_correlation_id(http_request.headers.get("X-Correlation-ID"))
         or str(uuid.uuid4())
     )
     # Write back so any code path called after this point can find the ID on
@@ -995,7 +1020,7 @@ async def retrieve(request: RetrievalRequest, http_request: Request) -> Retrieva
     summary="Retrieve documents with score filtering",
 )
 async def retrieve_filtered(
-    request: RetrievalRequest, min_score: float = 0.5
+    request: RetrievalRequest, http_request: Request, min_score: float = 0.5
 ) -> RetrievalResponse:
     """Retrieve documents with optional minimum score filtering.
 
@@ -1003,6 +1028,8 @@ async def retrieve_filtered(
 
     Args:
         request: RetrievalRequest with query and optional reranking setting.
+        http_request: Raw HTTP request used to extract correlation headers
+            (X-Request-ID / X-Correlation-ID) for per-request log tracing.
         min_score: Minimum relevance score (0.0-1.0) for results. Defaults to 0.5.
 
     Returns:
@@ -1030,13 +1057,26 @@ async def retrieve_filtered(
             detail="Retriever service not initialized. Try again later.",
         )
 
+    # OPTB-012: Same correlation ID resolution as /retrieve — prefer the ID
+    # already placed on request.state by QueryCacheMiddleware, then fall back
+    # to validated header extraction, then auto-generate a UUID.
+    correlation_id: str = getattr(http_request.state, "correlation_id", None) or (
+        _sanitize_correlation_id(http_request.headers.get("X-Request-ID"))
+        or _sanitize_correlation_id(http_request.headers.get("X-Correlation-ID"))
+        or str(uuid.uuid4())
+    )
+    try:
+        http_request.state.correlation_id = correlation_id
+    except Exception:
+        pass
+
     try:
         logger.info(
             f"Filtered retrieval request: {request.query[:50]}... (min_score={min_score})"
         )
 
         results = _shared_retrieve_documents(
-            request.query, enable_rerank=request.enable_rerank
+            request.query, enable_rerank=request.enable_rerank, correlation_id=correlation_id
         )
 
         # Filter results by minimum score, enforcing floor of 0.80 for chat quality

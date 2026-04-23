@@ -429,15 +429,16 @@ class TestAC2CorrelationAwareTelemetry:
     def test_cache_miss_log_contains_correlation_id(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """First POST /retrieve must emit a cache.miss log with correlation_id.
+        """First POST /retrieve must emit a cache.http_miss log with correlation_id.
 
         WHY: The first request for a query is always a cache miss.  The log
         must carry a correlation_id so the operator can trace the full path
         (request → cache miss → retriever call → response).
 
         The log is emitted by the QueryCacheMiddleware which intercepts the
-        POST /retrieve path at the HTTP layer; the logger name is therefore
-        ``api_middleware``.
+        POST /retrieve path at the HTTP layer; the event name is therefore
+        ``cache.http_miss`` (as opposed to ``cache.retrieval_miss`` which is
+        emitted by the shared retrieval function).
         """
         client = _patch_standard_app(monkeypatch)
 
@@ -463,34 +464,35 @@ class TestAC2CorrelationAwareTelemetry:
         # Note 18: caplog.records is a list of logging.LogRecord objects.
         # LogRecord.message is the formatted message string (after % substitution).
         miss_logs = [
-            r.message for r in caplog.records if "cache.miss" in r.message
+            r.message for r in caplog.records if "cache.http_miss" in r.message
         ]
         assert miss_logs, (
-            "Expected a 'cache.miss' log for a cold-cache retrieval. "
+            "Expected a 'cache.http_miss' log for a cold-cache retrieval. "
             f"All logs: {[r.message for r in caplog.records]}"
         )
         assert any(corr_id in m for m in miss_logs), (
-            f"cache.miss log must include correlation_id='{corr_id}'.  "
+            f"cache.http_miss log must include correlation_id='{corr_id}'.  "
             f"Miss logs found: {miss_logs}"
         )
 
     def test_cache_hit_log_contains_correlation_id(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Second POST /retrieve for same query must emit cache.hit with corr ID.
+        """Second POST /retrieve for same query must emit cache.http_hit with corr ID.
 
         WHY: Cache hits are the steady-state case in production.  Operators
         must be able to confirm a request was served from cache for a specific
         correlation ID — essential for debugging latency anomalies.
 
         The hit is served by the QueryCacheMiddleware which short-circuits the
-        handler on repeated identical requests; the logger name is
-        ``api_middleware``.
+        handler on repeated identical requests; the event name is therefore
+        ``cache.http_hit`` (as opposed to ``cache.retrieval_hit`` which is
+        emitted by the shared retrieval function).
         """
         client = _patch_standard_app(monkeypatch)
         query_payload = {"query": "correlation hit test"}
 
-        # First call — populates the middleware cache (cache.miss)
+        # First call — populates the middleware cache (cache.http_miss)
         client.post("/retrieve", json=query_payload)
 
         # Second call — should hit the middleware cache
@@ -505,28 +507,29 @@ class TestAC2CorrelationAwareTelemetry:
         assert response.status_code == 200, response.text
 
         hit_logs = [
-            r.message for r in caplog.records if "cache.hit" in r.message
+            r.message for r in caplog.records if "cache.http_hit" in r.message
         ]
         assert hit_logs, (
-            "Expected a 'cache.hit' log on the second identical request. "
+            "Expected a 'cache.http_hit' log on the second identical request. "
             f"All logs: {[r.message for r in caplog.records]}"
         )
         assert any(corr_id in m for m in hit_logs), (
-            f"cache.hit log must include correlation_id='{corr_id}'.  "
+            f"cache.http_hit log must include correlation_id='{corr_id}'.  "
             f"Hit logs found: {hit_logs}"
         )
 
     def test_cache_miss_log_contains_corpus_version(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """cache.miss from _shared_retrieve_documents must include corpus_version.
+        """cache.retrieval_miss from _shared_retrieve_documents must include corpus_version.
 
         WHY: Knowing the corpus_version at the time of a miss tells operators
         whether the miss was expected (just after an invalidation event, version
         changed) or unexpected (version unchanged — potential stampede).
 
         This log is emitted by the shared retrieval function in ``api`` which
-        has access to the live corpus_version token.
+        has access to the live corpus_version token; the event name is therefore
+        ``cache.retrieval_miss``.
         """
         client = _patch_standard_app(monkeypatch, corpus_version="gen2.n10")
 
@@ -537,18 +540,18 @@ class TestAC2CorrelationAwareTelemetry:
             )
 
         miss_logs = [
-            r.message for r in caplog.records if "cache.miss" in r.message
+            r.message for r in caplog.records if "cache.retrieval_miss" in r.message
         ]
-        assert miss_logs, "Expected at least one cache.miss log."
+        assert miss_logs, "Expected at least one cache.retrieval_miss log."
         combined = " ".join(miss_logs)
         assert "corpus_version=" in combined, (
-            "cache.miss log must contain 'corpus_version='.  Got: " + combined
+            "cache.retrieval_miss log must contain 'corpus_version='.  Got: " + combined
         )
 
     def test_generated_correlation_id_used_when_header_absent(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """cache.miss log must carry a synthetic UUID when no header is sent.
+        """cache.http_miss log must carry a synthetic UUID when no header is sent.
 
         WHY: Not all callers set X-Request-ID.  The system must auto-generate
         a correlation ID so every log record is traceable, even without the
@@ -564,12 +567,12 @@ class TestAC2CorrelationAwareTelemetry:
             )
 
         miss_logs = [
-            r.message for r in caplog.records if "cache.miss" in r.message
+            r.message for r in caplog.records if "cache.http_miss" in r.message
         ]
-        assert miss_logs, "Expected cache.miss log even without X-Request-ID header."
+        assert miss_logs, "Expected cache.http_miss log even without X-Request-ID header."
         combined = " ".join(miss_logs)
         assert "correlation_id=" in combined, (
-            "cache.miss log must include a generated correlation_id even "
+            "cache.http_miss log must include a generated correlation_id even "
             "when no X-Request-ID header is present.  Got: " + combined
         )
 

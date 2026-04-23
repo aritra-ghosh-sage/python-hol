@@ -34,6 +34,7 @@ Example:
 import hashlib
 import json
 import logging
+import re
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
@@ -47,6 +48,25 @@ from hybrid_rag.cache import CacheBackend
 __all__ = ["QueryCacheMiddleware"]
 
 logger = logging.getLogger(__name__)
+
+# Allowlist for safe correlation ID characters (RFC 7230 token-safe subset).
+# Values that do not match are replaced with a fresh UUID to prevent log
+# injection via newline or special characters in user-supplied headers.
+_SAFE_CORRELATION_ID_RE = re.compile(r"^[a-zA-Z0-9\-_.]{1,128}$")
+
+
+def _sanitize_correlation_id(raw: Optional[str]) -> Optional[str]:
+    """Return *raw* unchanged if it is safe to embed in a log line, else None.
+
+    Args:
+        raw: Header value to validate.
+
+    Returns:
+        The original string when it matches the allowlist, otherwise None.
+    """
+    if raw and _SAFE_CORRELATION_ID_RE.match(raw):
+        return raw
+    return None
 
 
 class QueryCacheMiddleware(BaseHTTPMiddleware):
@@ -261,9 +281,12 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
         # Honour X-Request-ID first (most common), then X-Correlation-ID (AWS/GCP
         # style).  Generate a synthetic ID when neither header is present so the
         # log is always traceable even for callers that omit the header.
+        # Header values are validated against _SAFE_CORRELATION_ID_RE before use
+        # to prevent log injection via newlines or other special characters in
+        # attacker-controlled header values (see security review item #1).
         correlation_id: str = (
-            request.headers.get("X-Request-ID")
-            or request.headers.get("X-Correlation-ID")
+            _sanitize_correlation_id(request.headers.get("X-Request-ID"))
+            or _sanitize_correlation_id(request.headers.get("X-Correlation-ID"))
             or str(uuid.uuid4())
         )
         # Stash the ID on request.state so downstream handlers (e.g. the
@@ -295,10 +318,12 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
             try:
                 cached_response = self.cache_backend.get(cache_key)
                 if cached_response is not None:
-                    # OPTB-012: Structured hit telemetry — the correlation_id links
-                    # this event to the originating request in upstream log streams.
+                    # OPTB-012: Structured hit telemetry — the `cache.http_hit` event
+                    # name identifies this as the HTTP-layer (middleware) cache, distinct
+                    # from the retrieval-layer `cache.retrieval_hit` event, so alerting
+                    # rules can count each layer independently without double-counting.
                     logger.info(
-                        "cache.hit correlation_id=%s path=%s",
+                        "cache.http_hit correlation_id=%s path=%s",
                         correlation_id,
                         request.url.path,
                     )
@@ -321,10 +346,12 @@ class QueryCacheMiddleware(BaseHTTPMiddleware):
                 )
 
             if cache_key:
-                # OPTB-012: Structured miss telemetry — logged at the middleware layer
-                # so REST cache misses are visible without needing to grep the handler.
+                # OPTB-012: Structured miss telemetry — `cache.http_miss` identifies
+                # this as the HTTP-layer (middleware) cache miss, distinct from the
+                # retrieval-layer `cache.retrieval_miss` event, preventing double-
+                # counting in alert rules that tally cache miss events per layer.
                 logger.info(
-                    "cache.miss correlation_id=%s path=%s",
+                    "cache.http_miss correlation_id=%s path=%s",
                     correlation_id,
                     request.url.path,
                 )
