@@ -925,7 +925,7 @@ class TestTransitionScopeRules:
         requests do not corrupt entries or produce inconsistent X-Cache headers.
         """
         results = []
-        errors: List[Exception] = []
+        errors: list[Exception] = []
 
         def make_request() -> None:
             try:
