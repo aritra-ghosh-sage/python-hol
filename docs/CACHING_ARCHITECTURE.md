@@ -533,11 +533,11 @@ This decision **does not block rollout**.
 | Endpoint | Cache interaction |
 |----------|------------------|
 | `POST /retrieve` | L1 checked (middleware). On miss, L2 checked (retriever). `X-Cache` header set. |
-| `GET /ws/chat` (WebSocket) | Shares L1 cache entries with `POST /retrieve`. No `X-Cache` header on WS messages. |
+| `WS /ws/chat` | Shares L1 cache entries with `POST /retrieve`. No `X-Cache` header on WS messages. |
 | `GET /cache/stats` | Returns current L1 + L2 stats and backend health. Not cached. |
 | `PUT /config` | Triggers full L1 clear + `corpus_version` increment on success. |
-| `POST /documents?ingest_type=update` | Triggers full L1 clear + `corpus_version` increment. |
-| `POST /documents?ingest_type=add` | Preserves L1 cache (eventual consistency until TTL). |
+| `POST /documents` with JSON body `{"ingest_type":"update"}` | Triggers full L1 clear + `corpus_version` increment. |
+| `POST /documents` with JSON body `{"ingest_type":"add"}` | Preserves L1 cache (eventual consistency until TTL). |
 
 ### Key behavioural guarantees
 
