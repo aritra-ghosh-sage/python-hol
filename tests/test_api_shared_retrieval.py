@@ -160,6 +160,7 @@ async def test_retrieve_uses_shared_facade_with_request_local_rerank(monkeypatch
         query: str,
         enable_rerank: Optional[bool] = None,
         correlation_id: Optional[str] = None,
+        _out_cache_status: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         observed["query"] = query
         observed["enable_rerank"] = enable_rerank
@@ -194,6 +195,7 @@ async def test_websocket_uses_shared_facade_and_preserves_message_contract(monke
         query: str,
         enable_rerank: Optional[bool] = None,
         correlation_id: Optional[str] = None,
+        _out_cache_status: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         observed["query"] = query
         observed["enable_rerank"] = enable_rerank
