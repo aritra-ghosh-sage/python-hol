@@ -135,6 +135,14 @@ curl -X POST http://localhost:8000/retrieve \
 }
 ```
 
+#### Response Headers
+
+| Header | Value | Meaning |
+|--------|-------|---------|
+| `X-Cache` | `HIT` | Response served from L1 cache |
+| `X-Cache` | `MISS` | Response computed fresh and stored in cache |
+| `X-Cache` | `ERROR` | Non-200 response or cache access failure |
+
 ---
 
 ### 3. Filtered Document Retrieval
@@ -288,8 +296,18 @@ curl -X PUT http://localhost:8000/config \
   content: string;                        // Text content, URL, or base64-encoded file
   filename?: string;                      // Original filename (for file uploads)
   source_label?: string;                  // User-friendly label for source
+  ingest_type?: "add" | "update";         // Ingestion mode (default: "update")
 }
 ```
+
+**`ingest_type` and Cache Invalidation:**
+
+| Value | Default? | L1 Cache Behaviour | corpus_version |
+|-------|----------|--------------------|----------------|
+| `"add"` | No | Preserved; new documents become visible after TTL expiry | Unchanged |
+| `"update"` | ✅ Yes | Full L1 cache clear on ingest | Incremented |
+
+Use `"update"` (the default) when replacing or materially changing existing content and immediate cache freshness is required. Pass `"add"` explicitly for append-only ingestion to avoid unnecessary cache churn.
 
 **Response Model:**
 ```typescript
@@ -413,6 +431,82 @@ curl -X GET http://localhost:8000/sources
       "count": 8
     }
   ]
+}
+```
+
+---
+
+### 8. Cache Statistics
+
+**Endpoint:** `GET /cache/stats`
+
+**Purpose:** Inspect the health and performance metrics of the layered query cache. Always returns `200 OK` (fail-open) even when the backend is unreachable — check `backend_health.connected` to detect degraded state.
+
+**Response Model:**
+```typescript
+{
+  l1_query_cache: {
+    backend: "memory" | "redis"; // Active cache backend
+    hits: number;                // Cumulative cache hits since last restart
+    misses: number;              // Cumulative cache misses since last restart
+    hit_rate: number;            // Ratio of hits to total lookups (0.0 – 1.0)
+    size: number;                // Current number of cached entries
+    max_size: number;            // Maximum capacity before eviction
+    ttl_seconds: number;         // Time-to-live for each cache entry
+    corpus_version: string;      // Corpus generation tag, e.g. "gen2.n108"
+  };
+  l2_embedding_cache: {
+    hits: number;
+    misses: number;
+    hit_rate: number;            // 0.0 – 1.0
+    size: number;
+    capacity: number;
+  };
+  backend_health: {
+    connected: boolean;          // false when Redis is unreachable (memory fallback active)
+    latency_ms: number | null;   // Round-trip latency to backend; null if not connected
+    fallback_active: boolean;    // true when in-process memory cache is used instead of Redis
+    error: string | null;        // Last connection error message, or null
+  };
+  timestamp: string;             // ISO-8601 UTC snapshot time, e.g. "2025-07-15T10:23:45.123Z"
+}
+```
+
+**Status Codes:**
+- `200 OK` - Always returned (fail-open design)
+
+**Example:**
+```bash
+curl -X GET http://localhost:8000/cache/stats
+```
+
+**Response:**
+```json
+{
+  "l1_query_cache": {
+    "backend": "redis",
+    "hits": 4821,
+    "misses": 312,
+    "hit_rate": 0.94,
+    "size": 108,
+    "max_size": 500,
+    "ttl_seconds": 300,
+    "corpus_version": "gen2.n108"
+  },
+  "l2_embedding_cache": {
+    "hits": 9043,
+    "misses": 780,
+    "hit_rate": 0.92,
+    "size": 780,
+    "capacity": 2000
+  },
+  "backend_health": {
+    "connected": true,
+    "latency_ms": 1.4,
+    "fallback_active": false,
+    "error": null
+  },
+  "timestamp": "2025-07-15T10:23:45.123Z"
 }
 ```
 
@@ -691,10 +785,13 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8000
 ## Performance Considerations
 
 ### Caching & Rate Limiting
+- **L1 query cache** (in-process memory or Redis) and **L2 embedding cache** are implemented and active by default.
+  - L1 caches full retrieval responses keyed by query; served with the `X-Cache` response header (`HIT` / `MISS` / `ERROR`).
+  - L2 caches computed embeddings, reducing encoder overhead for repeated or similar queries.
+  - See [Caching Architecture](./CACHING_ARCHITECTURE.md) for backend configuration, TTL tuning, and Redis setup.
 - The API currently does **not implement rate limiting**. For production deployments, consider:
-  - Redis-based caching for frequently repeated queries
   - Rate limiting middleware (e.g., `slowapi` for FastAPI)
-  - Query result caching with TTL
+  - Upstream proxy-level throttling (nginx, API Gateway)
 
 ### Score Thresholds
 - **Default chat threshold:** 0.85 (floor applied to ensure high-quality results)
@@ -745,4 +842,5 @@ echo '{"query": "offline maps"}' | websocat ws://localhost:8000/ws/chat
 
 - [Library Design](./LIBRARY_DESIGN.md) - Core library architecture
 - [Quick Start](./QUICK_START.md) - Using the library programmatically
+- [Caching Architecture](./CACHING_ARCHITECTURE.md) - Layered cache architecture, schema reference, migration guide
 - [Workspace Instructions](./copilot-instructions.md) - Development conventions

@@ -234,6 +234,8 @@ curl -X POST http://localhost:8000/retrieve \
   -d '{"query": "How do I use offline maps?"}'
 ```
 
+> The API includes an L1 query cache (middleware) and L2 embedding cache (retriever-internal). See `docs/CACHING_ARCHITECTURE.md` for details.
+
 ## Testing Considerations
 
 The refactored code is designed for easier testing:
@@ -293,8 +295,8 @@ logging.config.dictConfig({
 ## Future Enhancements
 
 1. Add async retrieval support
-2. Implement caching layer for frequent queries
-3. Add metrics/monitoring endpoints
+2. Implemented in v0.1.0 — see [CACHING_ARCHITECTURE.md](./docs/CACHING_ARCHITECTURE.md)
+3. `GET /cache/stats` metrics endpoint implemented in v0.1.0
 4. Support for custom embedding models
 5. Batch retrieval operations
 6. Configuration file support (YAML/JSON)
