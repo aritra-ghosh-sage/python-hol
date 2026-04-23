@@ -234,7 +234,7 @@ curl -X POST http://localhost:8000/retrieve \
   -d '{"query": "How do I use offline maps?"}'
 ```
 
-> The API includes an L1 query cache (middleware) and L2 embedding cache (retriever-internal). See `docs/CACHING_ARCHITECTURE.md` for details.
+> The API includes an L1 query cache (middleware) and L2 embedding cache (retriever-internal). See [CACHING_ARCHITECTURE.md](./CACHING_ARCHITECTURE.md) for details.
 
 ## Testing Considerations
 
