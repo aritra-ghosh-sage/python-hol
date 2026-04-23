@@ -73,6 +73,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["app", "initialize_retriever"]
 
+# Deprecation header constants for the legacy HTTP retrieval endpoints.
+# Clients should migrate to ws://host/ws/chat (see docs/API_INTEGRATION.md).
+_DEPRECATION_SUNSET = "Sat, 31 Oct 2026 23:59:59 GMT"
+_DEPRECATION_LINK = '</ws/chat>; rel="successor-version"'
+
 # Global retriever and cache instances
 _retriever: Optional[HybridRetriever] = None
 _config: Optional[HybridRetrieverConfig] = None
@@ -1001,8 +1006,8 @@ async def retrieve(
         }
     """
     response.headers["Deprecation"] = "true"
-    response.headers["Sunset"] = "Sat, 31 Oct 2026 23:59:59 GMT"
-    response.headers["Link"] = '</ws/chat>; rel="successor-version"'
+    response.headers["Sunset"] = _DEPRECATION_SUNSET
+    response.headers["Link"] = _DEPRECATION_LINK
     if _retriever is None or _config is None:
         logger.error("Retriever not initialized")
         raise HTTPException(
@@ -1102,8 +1107,8 @@ async def retrieve_filtered(
         }
     """
     response.headers["Deprecation"] = "true"
-    response.headers["Sunset"] = "Sat, 31 Oct 2026 23:59:59 GMT"
-    response.headers["Link"] = '</ws/chat>; rel="successor-version"'
+    response.headers["Sunset"] = _DEPRECATION_SUNSET
+    response.headers["Link"] = _DEPRECATION_LINK
     if not 0.0 <= min_score <= 1.0:
         logger.warning(f"Invalid min_score: {min_score}")
         raise HTTPException(

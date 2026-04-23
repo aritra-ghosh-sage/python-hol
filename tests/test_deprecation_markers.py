@@ -65,8 +65,7 @@ def test_retrieve_returns_deprecation_header(deprecation_client: TestClient) -> 
 def test_retrieve_returns_sunset_header(deprecation_client: TestClient) -> None:
     response = deprecation_client.post("/retrieve", json={"query": "test query"})
     assert response.status_code == 200
-    assert "sunset" in response.headers
-    assert "2026" in response.headers["sunset"]
+    assert response.headers.get("sunset") == "Sat, 31 Oct 2026 23:59:59 GMT"
 
 
 def test_retrieve_returns_link_header(deprecation_client: TestClient) -> None:
@@ -104,8 +103,7 @@ def test_retrieve_filtered_returns_sunset_header(deprecation_client: TestClient)
         "/retrieve-filtered?min_score=0.5", json={"query": "test query"}
     )
     assert response.status_code == 200
-    assert "sunset" in response.headers
-    assert "2026" in response.headers["sunset"]
+    assert response.headers.get("sunset") == "Sat, 31 Oct 2026 23:59:59 GMT"
 
 
 def test_retrieve_filtered_returns_link_header(deprecation_client: TestClient) -> None:
