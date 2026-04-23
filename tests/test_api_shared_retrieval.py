@@ -1,6 +1,8 @@
 """Tests for shared retrieval facade usage across REST and WebSocket handlers."""
 
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
@@ -8,6 +10,36 @@ from fastapi import WebSocketDisconnect
 import api
 from hybrid_rag import HybridRetrieverConfig
 from hybrid_rag.cache import InMemoryCache
+
+
+def _fake_http_request(headers: Optional[Dict[str, str]] = None) -> Any:
+    """Return a minimal HTTP-request stub for tests that call api.retrieve() directly.
+
+    The retrieve handler now accepts an ``http_request: Request`` argument to
+    extract the X-Request-ID header for correlation-aware cache logging (OPTB-012).
+    Tests that call the handler as a plain coroutine need to supply a stub that
+    satisfies ``request.headers.get(...)`` and ``request.state``.
+
+    ``state`` is a ``SimpleNamespace`` (no pre-existing attributes) rather than
+    a MagicMock so that ``getattr(stub.state, "correlation_id", None)`` returns
+    ``None`` instead of a truthy MagicMock instance.  This ensures the handler
+    follows the correct fallback path (header → UUID) in unit tests.
+
+    Args:
+        headers: Optional dict of headers to expose on the stub.
+
+    Returns:
+        A stub whose ``.headers.get(...)`` returns values from *headers* and
+        whose ``.state`` starts as an empty ``SimpleNamespace``.
+    """
+    stub = MagicMock()
+    stub.headers = MagicMock()
+    stub.headers.get = (headers or {}).get
+    # Use SimpleNamespace so attribute access on .state behaves like a plain
+    # object: missing attributes raise AttributeError (caught by getattr default),
+    # and assignments persist within the stub for the duration of the test.
+    stub.state = SimpleNamespace()
+    return stub
 
 
 class GuardConfig:
@@ -124,7 +156,11 @@ async def test_retrieve_uses_shared_facade_with_request_local_rerank(monkeypatch
 
     observed: Dict[str, Any] = {}
 
-    def fake_shared_retrieve_documents(query: str, enable_rerank: Optional[bool] = None) -> List[Dict[str, Any]]:
+    def fake_shared_retrieve_documents(
+        query: str,
+        enable_rerank: Optional[bool] = None,
+        correlation_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         observed["query"] = query
         observed["enable_rerank"] = enable_rerank
         return [
@@ -140,7 +176,7 @@ async def test_retrieve_uses_shared_facade_with_request_local_rerank(monkeypatch
     monkeypatch.setattr(api, "_config", GuardConfig(enable_rerank=True))
     monkeypatch.setattr(api, "_shared_retrieve_documents", fake_shared_retrieve_documents)
 
-    response = await api.retrieve(api.RetrievalRequest(query="hello", enable_rerank=False))
+    response = await api.retrieve(api.RetrievalRequest(query="hello", enable_rerank=False), _fake_http_request())
 
     assert observed["query"] == "hello"
     assert observed["enable_rerank"] is False
@@ -154,7 +190,11 @@ async def test_websocket_uses_shared_facade_and_preserves_message_contract(monke
 
     observed: Dict[str, Any] = {}
 
-    def fake_shared_retrieve_documents(query: str, enable_rerank: Optional[bool] = None) -> List[Dict[str, Any]]:
+    def fake_shared_retrieve_documents(
+        query: str,
+        enable_rerank: Optional[bool] = None,
+        correlation_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         observed["query"] = query
         observed["enable_rerank"] = enable_rerank
         return [
@@ -197,7 +237,8 @@ async def test_parity_repeated_equivalent_query_rest_then_ws_hits_shared_cache(
     """Equivalent REST/WS queries share cache behavior under the approved policy."""
 
     rest_response = await api.retrieve(
-        api.RetrievalRequest(query="cache parity query", enable_rerank=False)
+        api.RetrievalRequest(query="cache parity query", enable_rerank=False),
+        _fake_http_request(),
     )
 
     ws = FakeWebSocket(
@@ -219,7 +260,7 @@ async def test_parity_config_update_invalidates_shared_cache_for_rest_and_ws(
 ) -> None:
     """Successful config updates invalidate shared retrieval cache across both transports."""
 
-    await api.retrieve(api.RetrievalRequest(query="cfg parity", enable_rerank=False))
+    await api.retrieve(api.RetrievalRequest(query="cfg parity", enable_rerank=False), _fake_http_request())
     assert len(parity_harness.calls) == 1
 
     await api.update_config(
@@ -230,7 +271,7 @@ async def test_parity_config_update_invalidates_shared_cache_for_rest_and_ws(
     await api.websocket_chat(ws)
     assert len(parity_harness.calls) == 2
 
-    await api.retrieve(api.RetrievalRequest(query="cfg parity", enable_rerank=False))
+    await api.retrieve(api.RetrievalRequest(query="cfg parity", enable_rerank=False), _fake_http_request())
     assert len(parity_harness.calls) == 2
 
 
@@ -252,7 +293,7 @@ async def test_parity_ingest_add_bumps_version_and_update_also_invalidates(
       3 — query after 'update' (corpus_version changed again + cache cleared → miss)
     """
 
-    await api.retrieve(api.RetrievalRequest(query="ingest parity", enable_rerank=False))
+    await api.retrieve(api.RetrievalRequest(query="ingest parity", enable_rerank=False), _fake_http_request())
     assert len(parity_harness.calls) == 1
 
     add_response = await api.add_documents(
@@ -312,13 +353,13 @@ async def test_rerank_override_isolation_no_global_config_bleed_under_mixed_call
 ) -> None:
     """Mixed REST/WS calls keep rerank override request-local without mutating global config."""
 
-    await api.retrieve(api.RetrievalRequest(query="rerank isolation", enable_rerank=False))
+    await api.retrieve(api.RetrievalRequest(query="rerank isolation", enable_rerank=False), _fake_http_request())
 
     ws_default = FakeWebSocket(incoming_messages=[{"query": "rerank isolation"}])
     await api.websocket_chat(ws_default)
 
     # Repeat both variants to ensure cache identity separation and stable reuse.
-    await api.retrieve(api.RetrievalRequest(query="rerank isolation", enable_rerank=False))
+    await api.retrieve(api.RetrievalRequest(query="rerank isolation", enable_rerank=False), _fake_http_request())
     ws_default_repeat = FakeWebSocket(incoming_messages=[{"query": "rerank isolation"}])
     await api.websocket_chat(ws_default_repeat)
 
@@ -354,7 +395,8 @@ async def test_parity_corpus_version_bumps_on_add_both_transports_see_miss(
     """
     # Step 1: initial REST query populates cache with corpus_version "gen0.n1"
     rest_response_before = await api.retrieve(
-        api.RetrievalRequest(query="version bump add parity", enable_rerank=False)
+        api.RetrievalRequest(query="version bump add parity", enable_rerank=False),
+        _fake_http_request(),
     )
     assert len(parity_harness.calls) == 1
 
@@ -380,7 +422,8 @@ async def test_parity_corpus_version_bumps_on_add_both_transports_see_miss(
 
     # Step 4: REST with same corpus_version → HIT from cache WS just populated
     rest_response_after = await api.retrieve(
-        api.RetrievalRequest(query="version bump add parity", enable_rerank=False)
+        api.RetrievalRequest(query="version bump add parity", enable_rerank=False),
+        _fake_http_request(),
     )
     assert len(parity_harness.calls) == 2  # HIT — same corpus_version key
 
@@ -407,7 +450,8 @@ async def test_parity_corpus_version_bumps_on_update_both_transports_see_miss(
     """
     # Step 1: warm the cache under the initial corpus_version
     await api.retrieve(
-        api.RetrievalRequest(query="version bump update parity", enable_rerank=False)
+        api.RetrievalRequest(query="version bump update parity", enable_rerank=False),
+        _fake_http_request(),
     )
     assert len(parity_harness.calls) == 1
 
@@ -433,7 +477,8 @@ async def test_parity_corpus_version_bumps_on_update_both_transports_see_miss(
 
     # Step 4: REST under the same new corpus_version → HIT from what WS just stored
     rest_response_after = await api.retrieve(
-        api.RetrievalRequest(query="version bump update parity", enable_rerank=False)
+        api.RetrievalRequest(query="version bump update parity", enable_rerank=False),
+        _fake_http_request(),
     )
     assert len(parity_harness.calls) == 2  # HIT — shared key with WS entry
 
@@ -466,7 +511,8 @@ async def test_parity_ws_first_rest_second_shares_same_corpus_version_key(
 
     # Step 2: REST identical query — must be a cache HIT (no additional retriever call)
     rest_response = await api.retrieve(
-        api.RetrievalRequest(query="ws rest share key", enable_rerank=False)
+        api.RetrievalRequest(query="ws rest share key", enable_rerank=False),
+        _fake_http_request(),
     )
     assert len(parity_harness.calls) == 1  # HIT — retriever NOT called again
 

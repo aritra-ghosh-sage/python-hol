@@ -33,12 +33,14 @@ import hashlib
 import json
 import logging
 import os
+import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from contextlib import asynccontextmanager
 
 import requests
-from fastapi import FastAPI, HTTPException, WebSocketDisconnect, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocketDisconnect, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -82,6 +84,30 @@ _cache_generation: int = 0
 # of using str(_cache_generation) directly, which was process-local and lost its
 # meaning after a restart.  See OPTB-007 for full rationale.
 _corpus_version: str = "0"
+
+# OPTB-012: Track the last known fallback state so we can log transitions
+# (False → True = activation, True → False = deactivation) without flooding
+# the log stream with repeated messages while the state is stable.
+_last_fallback_state: Optional[bool] = None
+
+# Allowlist for correlation ID values extracted from HTTP headers.
+# Prevents log injection if a caller supplies a header containing newlines
+# or other special characters (security review item #1).
+_SAFE_CORRELATION_ID_RE = re.compile(r"^[a-zA-Z0-9\-_.]{1,128}$")
+
+
+def _sanitize_correlation_id(raw: Optional[str]) -> Optional[str]:
+    """Return *raw* unchanged when safe to embed in a log line, else None.
+
+    Args:
+        raw: Header value to validate.
+
+    Returns:
+        The original string when it matches the allowlist, otherwise None.
+    """
+    if raw and _SAFE_CORRELATION_ID_RE.match(raw):
+        return raw
+    return None
 
 
 # Pydantic models for request/response validation
@@ -678,10 +704,76 @@ def _build_corpus_version_token() -> str:
     return f"gen{_cache_generation}.n0"
 
 
+def _log_fallback_transition(current_fallback_active: bool) -> None:
+    """Emit a structured log on fallback state transitions and update the tracker.
+
+    OPTB-012: The module-level ``_last_fallback_state`` is compared against
+    ``current_fallback_active`` on every health-check poll.  A log is emitted
+    only when the state flips, preventing alert fatigue from repeated events
+    while the backend remains degraded (or healthy).
+
+    The pattern implemented here is "edge-triggered logging" (log on state
+    change only) rather than "level-triggered logging" (log on every poll
+    while degraded).  Edge-triggered logs are far less noisy in production
+    and make alert rules simpler to write.
+
+    Multi-process note: ``_last_fallback_state`` is process-local.  Under a
+    multi-worker uvicorn deployment each process tracks its own state
+    independently, so a backend status change will produce one transition log
+    per worker on the first health-check poll after the change.  This is
+    acceptable: operators will see N logs (N = worker count) per transition,
+    not one global log.  Single-worker deployments (the default) are unaffected.
+
+    Args:
+        current_fallback_active: The fallback_active value from the latest
+            backend health check result.
+    """
+    # The `global` declaration is required to rebind the module-level name
+    # rather than creating a local variable with the same name.  Without it,
+    # the assignment `_last_fallback_state = ...` below would create a new
+    # local variable and the module-level value would remain unchanged.
+    global _last_fallback_state
+
+    if _last_fallback_state == current_fallback_active:
+        # State unchanged — no transition to log.
+        # On the very first call _last_fallback_state is None; None != True and
+        # None != False, so the first poll always produces a transition log.
+        return
+
+    if current_fallback_active:
+        # Transition False → True (or first poll, degraded): backend just failed.
+        # WARNING level is appropriate because this signals a degraded mode that
+        # operators should investigate, even if requests still succeed (fail-open).
+        logger.warning(
+            "cache.fallback_activated: cache backend is unreachable;"
+            " serving requests without L1 cache"
+        )
+    else:
+        # Transition True → False: backend recovered.
+        # INFO level is appropriate for a recovery event — it is noteworthy
+        # but not an actionable problem.
+        logger.info(
+            "cache.fallback_deactivated: cache backend is reachable again;"
+            " L1 cache is active"
+        )
+
+    # Persist the new state so the next poll can detect the NEXT transition.
+    _last_fallback_state = current_fallback_active
+
+
 def _shared_retrieve_documents(
-    query: str, enable_rerank: Optional[bool] = None
+    query: str,
+    enable_rerank: Optional[bool] = None,
+    correlation_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Execute retrieval through one shared path for REST and WebSocket handlers."""
+    """Execute retrieval through one shared path for REST and WebSocket handlers.
+
+    Args:
+        query: The search query string.
+        enable_rerank: Override for reranking; None means use config default.
+        correlation_id: Per-request tracing identifier used in cache hit/miss
+            log records (OPTB-012).  Auto-generated as a UUID if None.
+    """
     if _retriever is None or _config is None:
         raise RetrieverNotInitializedError("Retriever not initialized")
 
@@ -728,14 +820,43 @@ def _shared_retrieve_documents(
         ).encode("utf-8")
     ).hexdigest()
 
+    # OPTB-012: Resolve correlation ID — use the caller-supplied value or
+    # auto-generate a UUID so every log record is traceable even when the
+    # caller does not supply a correlation header.
+    effective_correlation_id = correlation_id or str(uuid.uuid4())
+
     if _cache is not None:
         try:
             cached_results = lazy_cache.get(cache_key)
             if isinstance(cached_results, list):
+                # OPTB-012: Structured hit telemetry — `cache.retrieval_hit` identifies
+                # this as the retrieval-layer cache, distinct from the HTTP-layer
+                # `cache.http_hit` emitted by the middleware, so each layer can be
+                # alerted and counted independently.
+                logger.info(
+                    "cache.retrieval_hit correlation_id=%s corpus_version=%s",
+                    effective_correlation_id,
+                    _corpus_version,
+                )
                 return cached_results
+            if cached_results is None:
+                # OPTB-012: Structured miss telemetry — `cache.retrieval_miss` identifies the
+                # retrieval layer and records corpus_version so operators can distinguish
+                # expected post-invalidation misses from unexpected misses on a stable corpus.
+                # Guard: only emitted when the cache read succeeds and returns no value;
+                # cache read failures are tracked separately via `cache.retrieval_error`.
+                logger.info(
+                    "cache.retrieval_miss correlation_id=%s corpus_version=%s",
+                    effective_correlation_id,
+                    _corpus_version,
+                )
         except Exception as e:
             logger.warning("Shared retrieval cache read failed: %s", e)
-
+            logger.info(
+                "cache.retrieval_error correlation_id=%s corpus_version=%s",
+                effective_correlation_id,
+                _corpus_version,
+            )
     results = _retriever.retrieve(query, enable_rerank=effective_enable_rerank)
 
     if _cache is not None:
@@ -815,14 +936,16 @@ async def health_check() -> HealthResponse:
     tags=["Retrieval"],
     summary="Retrieve relevant documents",
 )
-async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
+async def retrieve(retrieval_request: RetrievalRequest, http_request: Request) -> RetrievalResponse:
     """Retrieve documents relevant to the provided query.
 
     Performs hybrid retrieval combining semantic and keyword search,
     with optional cross-encoder reranking.
 
     Args:
-        request: RetrievalRequest with query and optional reranking setting.
+        retrieval_request: RetrievalRequest with query and optional reranking setting.
+        http_request: Raw HTTP request used to extract correlation headers
+            (X-Request-ID / X-Correlation-ID) for per-request log tracing.
 
     Returns:
         RetrievalResponse with relevant documents and scores.
@@ -844,11 +967,32 @@ async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
             detail="Retriever service not initialized. Try again later.",
         )
 
+    # OPTB-012: Prefer the request-scoped correlation ID established by the
+    # QueryCacheMiddleware (stored on request.state.correlation_id) so that
+    # middleware logs and handler logs share exactly one ID per request.
+    # Fall back to header extraction and finally to a fresh UUID only when
+    # the middleware has not run (e.g. in direct-handler unit tests).
+    # Header values are validated against _SAFE_CORRELATION_ID_RE to prevent
+    # log injection via attacker-controlled header content.
+    correlation_id: str = getattr(http_request.state, "correlation_id", None) or (
+        _sanitize_correlation_id(http_request.headers.get("X-Request-ID"))
+        or _sanitize_correlation_id(http_request.headers.get("X-Correlation-ID"))
+        or str(uuid.uuid4())
+    )
+    # Write back so any code path called after this point can find the ID on
+    # request.state without re-deriving it.
     try:
-        logger.info(f"Retrieval request: {request.query[:50]}...")
+        http_request.state.correlation_id = correlation_id
+    except Exception:
+        pass
+
+    try:
+        logger.info(f"Retrieval request: {retrieval_request.query[:50]}...")
 
         results = _shared_retrieve_documents(
-            request.query, enable_rerank=request.enable_rerank
+            retrieval_request.query,
+            enable_rerank=retrieval_request.enable_rerank,
+            correlation_id=correlation_id,
         )
         doc_results = _to_filtered_document_results(
             results, min_score_threshold=0.80
@@ -856,7 +1000,7 @@ async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
 
         logger.info(f"Retrieval complete: {len(doc_results)} results after filtering")
         return RetrievalResponse(
-            query=request.query, results=doc_results, total_results=len(doc_results)
+            query=retrieval_request.query, results=doc_results, total_results=len(doc_results)
         )
 
     except RetrievalError as e:
@@ -880,14 +1024,16 @@ async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     summary="Retrieve documents with score filtering",
 )
 async def retrieve_filtered(
-    request: RetrievalRequest, min_score: float = 0.5
+    retrieval_request: RetrievalRequest, http_request: Request, min_score: float = 0.5
 ) -> RetrievalResponse:
     """Retrieve documents with optional minimum score filtering.
 
     Similar to /retrieve but filters results by minimum relevance score.
 
     Args:
-        request: RetrievalRequest with query and optional reranking setting.
+        retrieval_request: RetrievalRequest with query and optional reranking setting.
+        http_request: Raw HTTP request used to extract correlation headers
+            (X-Request-ID / X-Correlation-ID) for per-request log tracing.
         min_score: Minimum relevance score (0.0-1.0) for results. Defaults to 0.5.
 
     Returns:
@@ -915,13 +1061,28 @@ async def retrieve_filtered(
             detail="Retriever service not initialized. Try again later.",
         )
 
+    # OPTB-012: Same correlation ID resolution as /retrieve — prefer the ID
+    # already placed on request.state by QueryCacheMiddleware, then fall back
+    # to validated header extraction, then auto-generate a UUID.
+    correlation_id: str = getattr(http_request.state, "correlation_id", None) or (
+        _sanitize_correlation_id(http_request.headers.get("X-Request-ID"))
+        or _sanitize_correlation_id(http_request.headers.get("X-Correlation-ID"))
+        or str(uuid.uuid4())
+    )
+    try:
+        http_request.state.correlation_id = correlation_id
+    except Exception:
+        pass
+
     try:
         logger.info(
-            f"Filtered retrieval request: {request.query[:50]}... (min_score={min_score})"
+            f"Filtered retrieval request: {retrieval_request.query[:50]}... (min_score={min_score})"
         )
 
         results = _shared_retrieve_documents(
-            request.query, enable_rerank=request.enable_rerank
+            retrieval_request.query,
+            enable_rerank=retrieval_request.enable_rerank,
+            correlation_id=correlation_id,
         )
 
         # Filter results by minimum score, enforcing floor of 0.80 for chat quality
@@ -932,7 +1093,7 @@ async def retrieve_filtered(
 
         logger.info(f"Filtered retrieval complete: {len(doc_results)} results after filtering")
         return RetrievalResponse(
-            query=request.query, results=doc_results, total_results=len(doc_results)
+            query=retrieval_request.query, results=doc_results, total_results=len(doc_results)
         )
 
     except RetrievalError as e:
@@ -1057,12 +1218,19 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
 
         # Clear cache to invalidate all L1 entries (ADR-006 - Fix for blocking issue #1)
         # This ensures the new configuration is used for subsequent queries
+        prev_version = _corpus_version
         _cache_generation += 1
         # Rebuild the authoritative corpus_version token now that the generation
         # counter has been bumped.  This propagates the config-change invalidation
         # into every future cache key without needing to clear the store.
         _corpus_version = _build_corpus_version_token()
-        logger.info("Corpus version updated after config change: %s", _corpus_version)
+        # OPTB-012: Structured invalidation log — records the version transition
+        # so operators can correlate config changes with cache miss spikes.
+        logger.info(
+            "cache.invalidation event=config_change prev_version=%s new_version=%s",
+            prev_version,
+            _corpus_version,
+        )
         if _cache is not None:
             try:
                 lazy_cache.clear()  # Use lazy_cache to defer to global _cache
@@ -1232,6 +1400,11 @@ async def get_cache_stats() -> LayeredCacheStatsResponse:
                 logger.warning("Failed to read backend health: %s", health_err)
                 backend_health = _degraded_health
 
+            # OPTB-012: Emit structured log on fallback state transitions.
+            # _log_fallback_transition() is idempotent for stable states so it
+            # is safe to call on every /cache/stats poll.
+            _log_fallback_transition(backend_health.fallback_active)
+
         # ------------------------------------------------------------------
         # L2 section — sourced from the retriever's public embedding cache
         # accessor.  Returns zeroes if the retriever is not yet initialised.
@@ -1323,8 +1496,13 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 status_msg = WsStatusMessage(message="Retrieving documents...")
                 await websocket.send_json(status_msg.model_dump())
 
+                # OPTB-012: Generate a per-message correlation ID for WebSocket
+                # requests.  WebSocket frames do not carry HTTP headers, so we
+                # always auto-generate a UUID.  This links cache hit/miss logs
+                # to the specific WebSocket message.
+                ws_correlation_id = str(uuid.uuid4())
                 results = _shared_retrieve_documents(
-                    query, enable_rerank=enable_rerank
+                    query, enable_rerank=enable_rerank, correlation_id=ws_correlation_id
                 )
                 doc_results = _to_filtered_document_results(
                     results, min_score_threshold=0.80
@@ -1508,11 +1686,18 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
             # - 'update': Clear cache to ensure new documents are retrieved
             # - 'add': Preserve cache for bulk additions
             if request.ingest_type == "update":
+                prev_version = _corpus_version
                 _cache_generation += 1
                 # Rebuild corpus_version token: generation bumped + collection count grew.
                 # Both dimensions change on 'update', guaranteeing a fully distinct token.
                 _corpus_version = _build_corpus_version_token()
-                logger.info("Corpus version updated after update ingest: %s", _corpus_version)
+                # OPTB-012: Structured invalidation log for ingest-update path.
+                # Records old and new tokens so operators can verify the transition.
+                logger.info(
+                    "cache.invalidation event=ingest_update prev_version=%s new_version=%s",
+                    prev_version,
+                    _corpus_version,
+                )
                 if _cache is not None:
                     try:
                         lazy_cache.clear()
@@ -1528,8 +1713,16 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                 # so we rebuild the token using the updated count dimension.  Queries
                 # issued after the add will see the new token → cache miss → retriever
                 # called with the full (now-larger) corpus.
+                prev_version = _corpus_version
                 _corpus_version = _build_corpus_version_token()
-                logger.info("Corpus version updated after add ingest: %s", _corpus_version)
+                # OPTB-012: Structured invalidation log for ingest-add path.
+                # Generation counter is NOT bumped for 'add', but the corpus grew
+                # so the token changes on the count dimension.
+                logger.info(
+                    "cache.invalidation event=ingest_add prev_version=%s new_version=%s",
+                    prev_version,
+                    _corpus_version,
+                )
                 logger.info(f"Ingest complete (type='add'); cache preserved")
 
             return DocumentIngestionResponse(
