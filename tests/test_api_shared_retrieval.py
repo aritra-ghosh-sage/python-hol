@@ -425,6 +425,7 @@ async def test_parity_corpus_version_bumps_on_add_both_transports_see_miss(
         api.RetrievalRequest(query="version bump add parity", enable_rerank=False),
         _fake_http_request(),
     )
+    assert len(parity_harness.calls) == 2  # HIT — same corpus_version key
 
     # Both transports return equivalent payloads from the shared cache entry
     assert rest_response_after.total_results == ws_results["total_results"]

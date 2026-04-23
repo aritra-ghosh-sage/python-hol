@@ -23,12 +23,8 @@ class FakeRetriever:
     """Minimal retriever double that returns one above-threshold result."""
 
     def __init__(self) -> None:
-        self._count = 1
-
-    @property
-    def collection(self):
         from types import SimpleNamespace
-        return SimpleNamespace(count=lambda: self._count)
+        self.collection = SimpleNamespace(count=lambda: 1)
 
     def retrieve(self, query: str, enable_rerank: Optional[bool] = None) -> List[Dict[str, Any]]:
         return [
