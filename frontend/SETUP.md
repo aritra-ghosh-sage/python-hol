@@ -79,7 +79,6 @@ pnpm start  # Runs optimized production build
 |----------|--------|---------|
 | `/ws/chat` | WebSocket | Real-time query/response with status updates |
 | `/retrieve` | POST | REST API for document retrieval |
-| `/retrieve-filtered` | POST | Retrieve with minimum score filtering |
 | `/documents` | POST | Add custom data (text/URL/files) |
 | `/documents/sources` | GET | List ingested document sources |
 | `/config` | GET/PUT | View/update retriever settings |

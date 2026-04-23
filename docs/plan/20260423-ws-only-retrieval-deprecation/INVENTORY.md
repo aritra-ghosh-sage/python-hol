@@ -236,10 +236,10 @@ the WebSocket path or be retired with documented rationale.
 
 | # | Blocker | Owner | Mitigation | Status |
 |---|---------|-------|-----------|--------|
-| B-RF-1 | `test_retrieval_filtering.py::TestRestApi::test_retrieve_filtered_enforces_threshold` calls live `http://localhost:8000/retrieve-filtered`. Must be retired or replaced before removal. | QA / test owner | Mark test as `@pytest.mark.skip(reason="Retired: /retrieve-filtered removed, see T04")` in T04 PR. | Open |
-| B-RF-2 | `docs/API_INTEGRATION.md` lines 150, 165, 175, 798 document `/retrieve-filtered` as a public API contract. Removing without updating docs breaks external consumers. | Docs / API team | Update `API_INTEGRATION.md` to mark `/retrieve-filtered` as removed.  Consumers should migrate to WebSocket (`/ws/chat`) as the preferred retrieval path.  Those that must use HTTP can use `POST /retrieve`, noting that the shared facade already applies a `min_score_threshold=0.80` floor automatically — callers need not specify filtering separately. Threshold values corrected from `0.85` → `0.80` in T01 (this PR). Remaining `/retrieve-filtered` removal to be done in T04 PR. | Open |
-| B-RF-3 | `docs/QUICK_START.md` line 114 has a curl example for `/retrieve-filtered`. | Docs team | Remove curl example in T04 PR. | Open |
-| B-RF-4 | `frontend/SETUP.md` lines 81-82 list `/retrieve-filtered` in the endpoint table. | Frontend team | Remove row from endpoint table in T04 PR. | Open |
+| B-RF-1 | `test_retrieval_filtering.py::TestRestApi::test_retrieve_filtered_enforces_threshold` calls live `http://localhost:8000/retrieve-filtered`. Must be retired or replaced before removal. | QA / test owner | Mark test as `@pytest.mark.skip(reason="Retired: /retrieve-filtered removed, see T04")` in T04 PR. | Cleared |
+| B-RF-2 | `docs/API_INTEGRATION.md` lines 150, 165, 175, 798 document `/retrieve-filtered` as a public API contract. Removing without updating docs breaks external consumers. | Docs / API team | Update `API_INTEGRATION.md` to mark `/retrieve-filtered` as removed.  Consumers should migrate to WebSocket (`/ws/chat`) as the preferred retrieval path.  Those that must use HTTP can use `POST /retrieve`, noting that the shared facade already applies a `min_score_threshold=0.80` floor automatically — callers need not specify filtering separately. Threshold values corrected from `0.85` → `0.80` in T01 (previous PR). | Cleared |
+| B-RF-3 | `docs/QUICK_START.md` line 114 has a curl example for `/retrieve-filtered`. | Docs team | Remove curl example in T04 PR. | Cleared |
+| B-RF-4 | `frontend/SETUP.md` lines 81-82 list `/retrieve-filtered` in the endpoint table. | Frontend team | Remove row from endpoint table in T04 PR. | Cleared |
 | B-RF-5 | `quality/AGENTS.md` and `quality/RUN_INTEGRATION_TESTS.md` do not reference `/retrieve-filtered` — no blocker here. | — | No action needed. | Cleared |
 
 ### 3.2 Blockers for `/retrieve` removal (T07)
