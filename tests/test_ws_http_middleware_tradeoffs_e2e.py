@@ -1,13 +1,12 @@
-"""End-to-end style tests proving WS vs HTTP cache/middleware trade-offs (B1-B4).
+"""End-to-end style tests for WS cache/middleware behaviour.
 
-These tests exercise the real FastAPI app routes for HTTP (/retrieve) and the real
-WebSocket handler coroutine (websocket_chat) with an in-process websocket double.
+These tests exercise the WebSocket handler coroutine (websocket_chat) with an
+in-process websocket double.
 
 Coverage:
-- B1: Observability split (HTTP emits cache.http_*; WS emits cache.retrieval_*)
-- B2: Score filtering parity between REST and WS paths
-- B3 (T03 updated): REST X-Cache header and WS cache_status payload field are both present
-- B4: REST MISS causes two cache writes (middleware key + shared-retrieve key)
+- B1: WS emits cache.retrieval_* events; no cache.http_* events are emitted
+- B2: WS applies the 0.80 min-score filter correctly
+- B3: WS cache_status payload field carries HIT/MISS/ERROR
 - C1 (T03 RSK-002): WS cache HIT — payload field and log event both signal HIT
 - C2 (T03 RSK-002): WS cache MISS — payload field and log event both signal MISS
 - C3 (T03 RSK-002): WS cache invalidation — post-invalidation WS query shows MISS
@@ -22,7 +21,7 @@ from fastapi.testclient import TestClient
 
 import api
 from hybrid_rag import HybridRetrieverConfig
-from hybrid_rag.cache import CacheBackend, InMemoryCache
+from hybrid_rag.cache import InMemoryCache
 
 
 class DeterministicRetriever:
@@ -65,43 +64,6 @@ class FakeWebSocket:
         self.sent_messages.append(payload)
 
 
-class CountingCache(CacheBackend):
-    """Simple in-memory cache backend that records get/set keys."""
-
-    def __init__(self) -> None:
-        self._store: Dict[str, Any] = {}
-        self.get_keys: List[str] = []
-        self.set_keys: List[str] = []
-        self._hits = 0
-        self._misses = 0
-
-    def get(self, key: str) -> Optional[Any]:
-        self.get_keys.append(key)
-        if key in self._store:
-            self._hits += 1
-            return self._store[key]
-        self._misses += 1
-        return None
-
-    def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> None:
-        self.set_keys.append(key)
-        self._store[key] = value
-
-    def delete(self, key: str) -> None:
-        self._store.pop(key, None)
-
-    def clear(self) -> None:
-        self._store.clear()
-
-    def stats(self) -> Dict[str, Any]:
-        return {
-            "backend": "counting",
-            "size": len(self._store),
-            "hits": self._hits,
-            "misses": self._misses,
-        }
-
-
 def _extract_ws_results_message(ws: FakeWebSocket) -> Dict[str, Any]:
     for payload in ws.sent_messages:
         if payload.get("type") == "results":
@@ -132,26 +94,15 @@ def ws_http_harness(monkeypatch: pytest.MonkeyPatch) -> DeterministicRetriever:
 
 
 @pytest.mark.asyncio
-async def test_b1_observability_split_http_vs_ws_events(
+async def test_b1_ws_emits_retrieval_cache_events(
     ws_http_harness: DeterministicRetriever,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """B1: HTTP and WS emit different cache event namespaces by design."""
+    """B1: WS emits cache.retrieval_* events; no cache.http_* events are emitted.
 
-    client = TestClient(api.app)
-    query = "b1-observability-split"
-
-    # Warm once so second HTTP call is a middleware HIT.
-    client.post("/retrieve", json={"query": query, "enable_rerank": False})
-
-    caplog.clear()
-    with caplog.at_level("INFO", logger="api"):
-        client.post("/retrieve", json={"query": query, "enable_rerank": False})
-
-    http_messages = [r.message for r in caplog.records]
-    assert any("cache.http_hit" in msg for msg in http_messages)
-
-    caplog.clear()
+    The WS path emits cache.retrieval_* events; cache.http_* events are never
+    emitted because there is no HTTP middleware on the WS path.
+    """
     ws = FakeWebSocket(
         incoming_messages=[{"query": "b1-ws-path", "enable_rerank": False}]
     )
@@ -164,8 +115,8 @@ async def test_b1_observability_split_http_vs_ws_events(
 
 
 @pytest.mark.asyncio
-async def test_b2_rest_and_ws_apply_same_min_score_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """B2: Prove current flow applies the same 0.80 filter in both REST and WS."""
+async def test_b2_ws_applies_min_score_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """B2: WS applies the 0.80 min-score filter correctly."""
 
     retriever = DeterministicRetriever(
         results=[
@@ -197,99 +148,40 @@ async def test_b2_rest_and_ws_apply_same_min_score_filter(monkeypatch: pytest.Mo
     monkeypatch.setattr(api, "_cache_generation", 0)
     monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
 
-    client = TestClient(api.app)
-
-    rest_response = client.post(
-        "/retrieve",
-        json={"query": "b2-filter", "enable_rerank": False},
-    )
-    assert rest_response.status_code == 200, rest_response.text
-    rest_body = rest_response.json()
-    rest_ids = [item["id"] for item in rest_body["results"]]
-
+    # WS still applies the same 0.80 filter.
     ws = FakeWebSocket(incoming_messages=[{"query": "b2-filter", "enable_rerank": False}])
     await api.websocket_chat(ws)
     ws_results = _extract_ws_results_message(ws)
     ws_ids = [item["id"] for item in ws_results["results"]]
 
-    assert rest_ids == ["above-threshold"]
     assert ws_ids == ["above-threshold"]
 
 
 @pytest.mark.asyncio
-async def test_b3_http_and_ws_both_expose_cache_status_in_their_respective_contracts(
+async def test_b3_ws_exposes_cache_status_field(
     ws_http_harness: DeterministicRetriever,
 ) -> None:
-    """B3 (updated for T03): REST exposes X-Cache header; WS payload now carries cache_status field.
+    """B3: WS payload carries cache_status field (HIT/MISS/ERROR)."""
 
-    T03 decision: payload-field contract.  WS clients receive ``cache_status``
-    (HIT / MISS / ERROR) in the results message so they have the same cache
-    visibility that REST clients get via the ``X-Cache`` response header.
-    """
-
-    client = TestClient(api.app)
-
-    response = client.post(
-        "/retrieve",
-        json={"query": "b3-header-vs-ws", "enable_rerank": False},
+    # WS path: warm the shared cache with a first query.
+    ws_warm = FakeWebSocket(
+        incoming_messages=[{"query": "b3-ws-cache-status", "enable_rerank": False}]
     )
-    assert response.status_code == 200
-    # The fixture uses a fresh InMemoryCache so the first REST call must be a
-    # MISS at both the middleware layer (X-Cache: MISS) and the retrieval layer.
-    # If the middleware served a HIT, the retriever was never called and the
-    # shared-retrieve:* key was never populated, so the subsequent WS call
-    # would also be a MISS rather than a HIT.  Assert MISS to verify the cache
-    # was actually populated before expecting a WS HIT below.
-    assert response.headers.get("X-Cache") == "MISS"
+    await api.websocket_chat(ws_warm)
+    warm_results = _extract_ws_results_message(ws_warm)
+    assert warm_results["cache_status"] == "MISS"
 
+    # Second identical WS query hits the shared retrieval cache.
     ws = FakeWebSocket(
-        incoming_messages=[{"query": "b3-header-vs-ws", "enable_rerank": False}]
+        incoming_messages=[{"query": "b3-ws-cache-status", "enable_rerank": False}]
     )
     await api.websocket_chat(ws)
     ws_results = _extract_ws_results_message(ws)
 
-    # T03 contract: WS results message MUST carry cache_status
+    # T03 contract still holds: WS results message MUST carry cache_status
     assert "cache_status" in ws_results
     assert ws_results["cache_status"] in {"HIT", "MISS", "ERROR"}
-    # Second call (same query, shared cache warm from REST MISS above) → HIT
     assert ws_results["cache_status"] == "HIT"
-
-
-def test_b4_rest_miss_causes_two_cache_writes_middleware_plus_shared_facade(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """B4: First REST /retrieve miss writes two cache keys at different layers."""
-
-    retriever = DeterministicRetriever()
-    counting_cache = CountingCache()
-
-    monkeypatch.setattr(api, "_retriever", retriever)
-    monkeypatch.setattr(
-        api,
-        "_config",
-        HybridRetrieverConfig(
-            semantic_weight=0.7,
-            keyword_weight=0.3,
-            enable_rerank=True,
-        ),
-    )
-    monkeypatch.setattr(api, "_cache", counting_cache)
-    monkeypatch.setattr(api, "_cache_generation", 0)
-    monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-    client = TestClient(api.app)
-
-    response = client.post(
-        "/retrieve",
-        json={"query": "b4-double-write", "enable_rerank": False},
-    )
-    assert response.status_code == 200, response.text
-
-    # One write from _shared_retrieve_documents (shared-retrieve:*),
-    # one write from QueryCacheMiddleware (cache:*).
-    assert len(counting_cache.set_keys) >= 2, counting_cache.set_keys
-    assert any(key.startswith("shared-retrieve:") for key in counting_cache.set_keys)
-    assert any(key.startswith("cache:") for key in counting_cache.set_keys)
 
 
 # ---------------------------------------------------------------------------

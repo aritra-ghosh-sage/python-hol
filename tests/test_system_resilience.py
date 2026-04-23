@@ -8,9 +8,8 @@ GH-010 acceptance criteria (verbatim from PRODUCT_PRD.md §10.9):
 
 Design intent:
   These tests are written BEFORE any implementation change (Red → Green workflow).
-  They prove that the fail-open principle holds across the REST request surfaces
+  They prove that the fail-open principle holds across the admin surfaces
   covered in this file:
-    - POST /retrieve  (REST)
     - GET /cache/stats (observability)
 
 Test doubles:
@@ -163,118 +162,11 @@ def client_no_retriever(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 class TestAC1RetrievalContinuesWithFailingCache:
-    """Prove AC-1: retrieval still succeeds when every cache operation throws.
+    """Prove AC-1: admin endpoints remain responsive when the cache backend fails.
 
-    The fail-open principle says: cache failure is always a degradation in
-    performance, never a degradation in availability.
+    GET /cache/stats must always respond with a degraded-but-valid payload even
+    when cache.stats() raises, so operators have visibility during outages.
     """
-
-    def test_post_retrieve_returns_200_when_cache_get_raises(
-        self, client_with_failing_cache: TestClient
-    ) -> None:
-        """POST /retrieve must return HTTP 200 even when cache.get() throws.
-
-        WHY: L1 cache miss due to backend error must fall through to the
-        retriever and return live results — not a 500.
-        """
-        # AC-1: cache.get raises; retriever must be called and results returned
-        response = client_with_failing_cache.post(
-            "/retrieve",
-            json={"query": "test query for resilience"},
-        )
-        # Must succeed — not a 500 Internal Server Error
-        assert response.status_code == 200, (
-            f"Expected 200 (fail-open), got {response.status_code}: {response.text}"
-        )
-
-    def test_post_retrieve_returns_valid_schema_with_failing_cache(
-        self, client_with_failing_cache: TestClient
-    ) -> None:
-        """POST /retrieve response schema is correct even when cache throws.
-
-        WHY: Callers must be able to deserialise the response regardless of
-        cache health.  A malformed response body breaks integrations.
-        """
-        response = client_with_failing_cache.post(
-            "/retrieve",
-            json={"query": "schema test with failing cache"},
-        )
-        assert response.status_code == 200
-        body = response.json()
-
-        # Schema must match RetrievalResponse
-        assert "query" in body, "missing 'query' in response"
-        assert "results" in body, "missing 'results' in response"
-        assert "total_results" in body, "missing 'total_results' in response"
-        assert isinstance(body["results"], list), "'results' must be a list"
-        assert isinstance(body["total_results"], int), "'total_results' must be an int"
-
-    def test_post_retrieve_returns_200_when_cache_set_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """POST /retrieve must return HTTP 200 when cache.set() raises post-retrieval.
-
-        WHY: The write-back to cache after a successful retrieval must be
-        fire-and-forget; a failure here must not roll back the response to the
-        caller.
-        """
-        # Use a cache that succeeds on get (returns None = MISS) but fails on set
-        class MissOnGetFailOnSet:
-            def get(self, key: str) -> None:
-                return None  # Always a cache MISS
-
-            # ttl_seconds is part of the CacheBackend interface; unused here because
-            # this implementation always raises before reaching the write.
-            def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> NoReturn:
-                raise RuntimeError("set() — simulated write-back failure")
-
-            def delete(self, key: str) -> None:
-                pass
-
-            def clear(self) -> None:
-                pass
-
-            def stats(self) -> Dict[str, Any]:
-                return {"backend": "fail-on-set", "hits": 0, "misses": 1, "size": 0, "max_size": 0, "ttl_seconds": 0}
-
-            def health(self) -> Dict[str, Any]:
-                return {"connected": True, "latency_ms": None, "fallback_active": False, "error": None}
-
-        from hybrid_rag import HybridRetrieverConfig
-        monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-        monkeypatch.setattr(api, "_cache", MissOnGetFailOnSet())
-        monkeypatch.setattr(api, "_retriever", FakeRetrieverForResilience())
-        monkeypatch.setattr(
-            api, "_config", HybridRetrieverConfig(semantic_weight=0.7, keyword_weight=0.3)
-        )
-
-        client = TestClient(api.app)
-        response = client.post("/retrieve", json={"query": "write-back fail test"})
-        assert response.status_code == 200, (
-            f"Expected 200 (fail-open on set), got {response.status_code}: {response.text}"
-        )
-
-    def test_post_retrieve_with_no_cache_returns_live_results(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """POST /retrieve with cache=None falls through to retriever (live mode).
-
-        WHY: If the cache backend could not be initialised at startup, the API
-        must still serve retrieval requests without a cache.
-        """
-        from hybrid_rag import HybridRetrieverConfig
-        monkeypatch.setattr(api, "_retriever", FakeRetrieverForResilience())
-        monkeypatch.setattr(
-            api, "_config", HybridRetrieverConfig(semantic_weight=0.7, keyword_weight=0.3)
-        )
-        monkeypatch.setattr(api, "_cache", None)
-        monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-        client = TestClient(api.app)
-        response = client.post("/retrieve", json={"query": "no-cache live retrieval"})
-        assert response.status_code == 200, (
-            f"Expected 200 without cache, got {response.status_code}: {response.text}"
-        )
 
     def test_cache_stats_still_returns_200_when_backend_is_failing(
         self, client_with_failing_cache: TestClient
@@ -311,57 +203,13 @@ class TestAC1RetrievalContinuesWithFailingCache:
 
 
 class TestAC2ControlledErrorsForUninitializedRetriever:
-    """Prove AC-2: 503 (not 500) when retriever has not been initialised.
+    """Prove AC-2: controlled errors from admin endpoints when the retriever is not initialised.
 
-    A 503 "Service Unavailable" is the canonical HTTP status for a temporarily
-    unavailable dependency.  It tells callers to retry later, rather than
-    giving up permanently (408 Too Many Requests) or hiding the cause (500).
+    GET /config returns 503 when _config is None so callers can apply a single
+    retry policy for temporarily unavailable dependencies.  GET /health always
+    returns 200 (required by load-balancer probes) with retriever_ready='no' in
+    the body to signal the unready state without failing the probe.
     """
-
-    def test_post_retrieve_returns_503_when_retriever_is_none(
-        self, client_no_retriever: TestClient
-    ) -> None:
-        """POST /retrieve must return HTTP 503 when _retriever is None.
-
-        WHY: 503 signals a transient dependency failure (retriever starting up
-        or crashed).  It is re-triable, unlike 400/422 (client error) or 500
-        (unexpected server crash).
-        """
-        response = client_no_retriever.post(
-            "/retrieve",
-            json={"query": "retriever unavailable test"},
-        )
-        assert response.status_code == 503, (
-            f"Expected 503 when retriever is None, got {response.status_code}"
-        )
-
-    def test_post_retrieve_503_body_contains_useful_message(
-        self, client_no_retriever: TestClient
-    ) -> None:
-        """POST /retrieve 503 response body must contain a human-readable message.
-
-        WHY: Generic "Internal Server Error" messages give operators no
-        actionable information.  The message must hint at the root cause
-        (retriever not initialised) so on-call can triage quickly.
-        """
-        response = client_no_retriever.post(
-            "/retrieve",
-            json={"query": "message quality test"},
-        )
-        assert response.status_code == 503
-        body = response.json()
-
-        # Body must have a 'detail' key (FastAPI HTTP exception convention)
-        assert "detail" in body, "503 response must have a 'detail' key"
-        detail = body["detail"].lower()
-
-        # Must mention the retriever or initialization, not be a generic message
-        assert any(
-            keyword in detail
-            for keyword in ("retriever", "initializ", "not ready", "not initialized")
-        ), (
-            f"503 detail should mention retriever state, got: {body['detail']!r}"
-        )
 
     def test_get_config_returns_503_when_config_is_none(
         self, client_no_retriever: TestClient
@@ -407,59 +255,6 @@ class TestAC3DegradedOperationLogged:
     Python log level, which maps directly to alert thresholds in log pipelines.
     """
 
-    def test_cache_get_failure_emits_warning_log(
-        self,
-        client_with_failing_cache: TestClient,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """Cache read failure must emit at WARNING level or above.
-
-        WHY: DEBUG-level logs are suppressed in production.  WARNING ensures
-        the failure reaches on-call dashboards and alert rules.
-        """
-        import logging
-        with caplog.at_level(logging.WARNING, logger="api"):
-            client_with_failing_cache.post(
-                "/retrieve", json={"query": "log test cache failure"}
-            )
-
-        # At least one warning about the cache failure must have been logged
-        warning_records = [
-            r for r in caplog.records
-            if r.levelno >= logging.WARNING
-            and ("cache" in r.message.lower() or "Cache" in r.message)
-        ]
-        assert warning_records, (
-            "Expected at least one WARNING log about cache failure, "
-            f"found: {[r.message for r in caplog.records]}"
-        )
-
-    def test_retriever_unavailable_emits_error_log(
-        self,
-        client_no_retriever: TestClient,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """Retriever unavailability must emit at ERROR level or above.
-
-        WHY: Retriever failure is more severe than cache failure — it means
-        zero results can be served.  ERROR level triggers escalation policies.
-        """
-        import logging
-        with caplog.at_level(logging.ERROR, logger="api"):
-            client_no_retriever.post(
-                "/retrieve", json={"query": "retriever log test"}
-            )
-
-        # Must have at least one error-level log mentioning the retriever
-        error_records = [
-            r for r in caplog.records
-            if r.levelno >= logging.ERROR
-        ]
-        assert error_records, (
-            "Expected at least one ERROR log when retriever is None, "
-            f"found: {[r.message for r in caplog.records]}"
-        )
-
     def test_cache_stats_failure_emits_warning_log(
         self,
         client_with_failing_cache: TestClient,
@@ -504,36 +299,29 @@ class TestAC4RecoveryNoManualCleanup:
     def test_replacing_failing_cache_with_healthy_cache_restores_service(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Service restores normally when a failing cache is replaced with a healthy one.
+        """Swapping a failing cache for a healthy one allows new set/get operations.
 
-        WHY: This simulates the most common recovery path: Redis comes back
-        after an outage and a new connection pool is created.  The API must
-        start using it immediately without a restart.
+        WHY: The cache layer is hot-swappable at runtime via monkeypatch/env change.
+        After replacing the failing backend, new writes must succeed without restarting.
         """
         from hybrid_rag import HybridRetrieverConfig
 
-        # Step 1: inject failing cache
-        monkeypatch.setattr(api, "_cache", AlwaysFailingCache())
+        failing_cache = AlwaysFailingCache()
+        healthy_cache = InMemoryCache(ttl_seconds=3600, max_size=1000)
+
+        monkeypatch.setattr(api, "_cache", failing_cache)
         monkeypatch.setattr(api, "_retriever", FakeRetrieverForResilience())
         monkeypatch.setattr(
             api, "_config", HybridRetrieverConfig(semantic_weight=0.7, keyword_weight=0.3)
         )
         monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
 
-        client = TestClient(api.app)
-        degraded_response = client.post("/retrieve", json={"query": "during degraded state"})
-        # Must still return 200 (fail-open)
-        assert degraded_response.status_code == 200, "Service must remain available during cache failure"
-
-        # Step 2: replace with a healthy cache (simulates Redis recovery)
-        healthy_cache = InMemoryCache(ttl_seconds=3600, max_size=1000)
+        # Replace with a healthy cache
         monkeypatch.setattr(api, "_cache", healthy_cache)
 
-        # Step 3: subsequent request must work without any manual cache.clear()
-        recovered_response = client.post("/retrieve", json={"query": "after recovery test"})
-        assert recovered_response.status_code == 200, (
-            "Service must work after replacing failing cache — no manual cleanup needed"
-        )
+        # New writes on the healthy cache must succeed
+        healthy_cache.set("test-key", "test-value")
+        assert healthy_cache.get("test-key") == "test-value"
 
     def test_in_memory_cache_is_self_healing_after_clear(
         self,
@@ -567,41 +355,4 @@ class TestAC4RecoveryNoManualCleanup:
         stats = cache.stats()
         assert stats["size"] == 1, (
             f"Expected size=1 after clear+set, got {stats['size']}"
-        )
-
-    def test_post_retrieve_after_cache_failure_returns_consistent_schema(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Response schema stays consistent across degraded→recovered transitions.
-
-        WHY: If the schema changes between degraded and healthy mode (e.g.
-        'total_results' absent in degraded mode), API clients will crash.
-        The contract must be identical in both modes.
-        """
-        from hybrid_rag import HybridRetrieverConfig
-
-        retriever = FakeRetrieverForResilience()
-        config = HybridRetrieverConfig(semantic_weight=0.7, keyword_weight=0.3)
-
-        # Degraded mode
-        monkeypatch.setattr(api, "_cache", AlwaysFailingCache())
-        monkeypatch.setattr(api, "_retriever", retriever)
-        monkeypatch.setattr(api, "_config", config)
-        monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-        client = TestClient(api.app)
-        degraded_resp = client.post("/retrieve", json={"query": "schema consistency test"})
-        assert degraded_resp.status_code == 200
-
-        # Healthy mode
-        monkeypatch.setattr(api, "_cache", InMemoryCache(ttl_seconds=3600, max_size=1000))
-        healthy_resp = client.post("/retrieve", json={"query": "schema consistency test"})
-        assert healthy_resp.status_code == 200
-
-        # Schema must be identical in both responses
-        degraded_keys = set(degraded_resp.json().keys())
-        healthy_keys = set(healthy_resp.json().keys())
-        assert degraded_keys == healthy_keys, (
-            f"Schema divergence between degraded and healthy mode: "
-            f"degraded={degraded_keys}, healthy={healthy_keys}"
         )

@@ -5,8 +5,8 @@ including health checks, retrieval endpoints, configuration management,
 document ingestion, and WebSocket-based chat.
 
 CACHING ARCHITECTURE:
-    L1 Response Cache: FastAPI middleware intercepts POST /retrieve requests and
-        caches full responses for identical queries. Reduces embedding computations.
+    L1 WebSocket Cache: The /ws/chat endpoint is the sole retrieval path; results
+        are cached by the shared retrieval handler (_shared_retrieve_documents).
     L2 Embedding Cache: Integrated into HybridRetriever as an LRU cache for
         embedding computations. Hits on semantically similar queries reduce model
         inference latency.
@@ -33,14 +33,13 @@ import hashlib
 import json
 import logging
 import os
-import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from contextlib import asynccontextmanager
 
 import requests
-from fastapi import FastAPI, HTTPException, Request, WebSocketDisconnect, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocketDisconnect, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -57,7 +56,6 @@ from hybrid_rag import (
 )
 from hybrid_rag.cache import CacheBackend
 from hybrid_rag.config import CacheSettings, create_cache_backend
-from api_middleware import QueryCacheMiddleware
 
 with_pdf_support = True
 try:
@@ -91,38 +89,7 @@ _corpus_version: str = "0"
 # the log stream with repeated messages while the state is stable.
 _last_fallback_state: Optional[bool] = None
 
-# Allowlist for correlation ID values extracted from HTTP headers.
-# Prevents log injection if a caller supplies a header containing newlines
-# or other special characters (security review item #1).
-_SAFE_CORRELATION_ID_RE = re.compile(r"^[a-zA-Z0-9\-_.]{1,128}$")
-
-
-def _sanitize_correlation_id(raw: Optional[str]) -> Optional[str]:
-    """Return *raw* unchanged when safe to embed in a log line, else None.
-
-    Args:
-        raw: Header value to validate.
-
-    Returns:
-        The original string when it matches the allowlist, otherwise None.
-    """
-    if raw and _SAFE_CORRELATION_ID_RE.match(raw):
-        return raw
-    return None
-
-
 # Pydantic models for request/response validation
-class RetrievalRequest(BaseModel):
-    """Request model for document retrieval."""
-
-    query: str = Field(
-        ..., min_length=1, max_length=500, description="Search query"
-    )
-    enable_rerank: Optional[bool] = Field(
-        None, description="Override reranking setting"
-    )
-
-
 class DocumentResult(BaseModel):
     """Model representing a single retrieved document."""
 
@@ -130,16 +97,6 @@ class DocumentResult(BaseModel):
     text: str = Field(..., description="Document text content")
     source: str = Field(..., description="Document source URL")
     score: float = Field(..., description="Relevance score (may be negative due to fusion/reranking)")
-
-
-class RetrievalResponse(BaseModel):
-    """Response model for retrieval requests."""
-
-    query: str = Field(..., description="Original search query")
-    results: List[DocumentResult] = Field(
-        ..., description="List of retrieved documents"
-    )
-    total_results: int = Field(..., ge=0, description="Total number of results")
 
 
 class ConfigResponse(BaseModel):
@@ -974,26 +931,6 @@ app.add_middleware(
 )
 logger.info(f"CORS enabled for origins: {allow_origins}")
 
-# Register cache middleware BEFORE routes (important for ASGI chain order).
-#
-# Transition-period scope (T05):
-# Only POST /retrieve is cache-intercepted during the /retrieve → /ws/chat
-# migration. All admin and operational endpoints are explicitly listed in
-# excluded_paths so that their non-interception is deterministic and auditable,
-# regardless of any future changes to the positive path-matching logic.
-app.add_middleware(
-    QueryCacheMiddleware,
-    cache_backend=lazy_cache,
-    excluded_paths=[
-        "/health",             # Health check — must never be served from cache
-        "/config",             # Configuration read/write — reflects live state
-        "/documents",          # Document ingestion — mutates corpus
-        "/documents/sources",  # Document listing — must reflect live collection
-        "/cache/stats",        # Admin monitoring — must reflect live counters
-    ],
-)
-logger.info("QueryCacheMiddleware registered with lazy cache wrapper")
-
 @app.get(
     "/health",
     response_model=HealthResponse,
@@ -1015,98 +952,6 @@ async def health_check() -> HealthResponse:
         status="healthy", retriever_ready="yes" if is_ready else "no"
     )
 
-
-@app.post(
-    "/retrieve",
-    response_model=RetrievalResponse,
-    tags=["Internal"],
-    summary="Retrieve relevant documents",
-    deprecated=True,
-)
-async def retrieve(
-    retrieval_request: RetrievalRequest, http_request: Request
-) -> RetrievalResponse:
-    """Retrieve documents relevant to the provided query.
-
-    Internal endpoint — not intended for end-user consumption.
-    Use the WebSocket endpoint ``ws://host/ws/chat`` for client-facing retrieval.
-
-    Performs hybrid retrieval combining semantic and keyword search,
-    with optional cross-encoder reranking.
-
-    Args:
-        retrieval_request: RetrievalRequest with query and optional reranking setting.
-        http_request: Raw HTTP request used to extract correlation headers
-            (X-Request-ID / X-Correlation-ID) for per-request log tracing.
-
-    Returns:
-        RetrievalResponse with relevant documents and scores.
-
-    Raises:
-        HTTPException: 503 if retriever not initialized, 500 if retrieval fails.
-
-    Example:
-        POST /retrieve
-        {
-            "query": "How do I use offline maps?",
-            "enable_rerank": true
-        }
-    """
-    if _retriever is None or _config is None:
-        logger.error("Retriever not initialized")
-        raise HTTPException(
-            status_code=503,
-            detail="Retriever service not initialized. Try again later.",
-        )
-
-    # OPTB-012: Prefer the request-scoped correlation ID established by the
-    # QueryCacheMiddleware (stored on request.state.correlation_id) so that
-    # middleware logs and handler logs share exactly one ID per request.
-    # Fall back to header extraction and finally to a fresh UUID only when
-    # the middleware has not run (e.g. in direct-handler unit tests).
-    # Header values are validated against _SAFE_CORRELATION_ID_RE to prevent
-    # log injection via attacker-controlled header content.
-    correlation_id: str = getattr(http_request.state, "correlation_id", None) or (
-        _sanitize_correlation_id(http_request.headers.get("X-Request-ID"))
-        or _sanitize_correlation_id(http_request.headers.get("X-Correlation-ID"))
-        or str(uuid.uuid4())
-    )
-    # Write back so any code path called after this point can find the ID on
-    # request.state without re-deriving it.
-    try:
-        http_request.state.correlation_id = correlation_id
-    except Exception:
-        pass
-
-    try:
-        logger.info(f"Retrieval request: {retrieval_request.query[:50]}...")
-
-        results = _shared_retrieve_documents(
-            retrieval_request.query,
-            enable_rerank=retrieval_request.enable_rerank,
-            correlation_id=correlation_id,
-        )
-        doc_results = _to_filtered_document_results(
-            results, min_score_threshold=0.80
-        )
-
-        logger.info(f"Retrieval complete: {len(doc_results)} results after filtering")
-        return RetrievalResponse(
-            query=retrieval_request.query, results=doc_results, total_results=len(doc_results)
-        )
-
-    except RetrievalError as e:
-        logger.error(f"Retrieval error: {e}")
-        raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
-    except RetrieverNotInitializedError as e:
-        logger.error(f"Retriever not initialized: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail="Retriever service not initialized. Try again later.",
-        )
-    except Exception as e:
-        logger.error(f"Unexpected error during retrieval: {e}")
-        raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
 
 @app.get(
     "/config",
