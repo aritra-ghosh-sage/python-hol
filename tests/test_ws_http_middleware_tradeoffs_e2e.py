@@ -393,8 +393,6 @@ async def test_c3_ws_cache_invalidation_shows_miss_after_config_update(
 
     # Step 2: invalidate by changing config (this bumps _cache_generation and
     # rebuilds _corpus_version, so existing shared-retrieve keys are stale).
-    from fastapi.testclient import TestClient
-
     client = TestClient(api.app)
     config_response = client.put(
         "/config",
