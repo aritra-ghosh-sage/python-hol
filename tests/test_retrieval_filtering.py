@@ -7,6 +7,23 @@ These tests verify that:
 3. Results remain sorted by score (descending)
 4. Filtering is consistent across REST and WebSocket endpoints
 
+T06 migration note
+------------------
+The three TestRestApi tests below (test_retrieve_filters_below_threshold,
+test_retrieve_result_count_reflects_filter, test_retrieve_results_sorted_descending)
+are live-backend integration tests that validate the HTTP /retrieve endpoint.
+
+They have been **superseded** by the WS-first equivalents in
+``tests/test_ws_retrieval_critical_path.py`` as part of T06:
+
+  test_retrieve_filters_below_threshold       → test_ws_filters_results_below_threshold
+  test_retrieve_result_count_reflects_filter  → test_ws_total_results_reflects_post_filter_count
+  test_retrieve_results_sorted_descending     → test_ws_results_sorted_descending
+
+The HTTP tests are retained here so the /retrieve endpoint continues to be
+validated against a live backend during manual QA. They will be retired together
+with the /retrieve endpoint removal in T07.
+
 NOTE: Tests that make HTTP requests require the backend to be running:
   python api.py
 
@@ -58,10 +75,19 @@ def skip_if_no_backend(backend_available):
 
 
 class TestRestApi:
-    """Tests for REST API /retrieve endpoint (requires running backend)."""
+    """Tests for REST API /retrieve endpoint (requires running backend).
+
+    T06 supersession notice: the three critical-path assertions below are now
+    covered by WS-first equivalents in tests/test_ws_retrieval_critical_path.py.
+    These HTTP tests remain for live-backend validation and will be retired with
+    the /retrieve endpoint in T07.
+    """
 
     def test_retrieve_filters_below_threshold(self, skip_if_no_backend):
-        """Verify /retrieve endpoint filters results below 0.80 score."""
+        """Verify /retrieve endpoint filters results below 0.80 score.
+
+        T06 superseded by: test_ws_retrieval_critical_path::test_ws_filters_results_below_threshold
+        """
         import requests
 
         try:
@@ -90,7 +116,10 @@ class TestRestApi:
                 )
 
     def test_retrieve_result_count_reflects_filter(self, skip_if_no_backend):
-        """Verify total_results matches length of results (post-filter)."""
+        """Verify total_results matches length of results (post-filter).
+
+        T06 superseded by: test_ws_retrieval_critical_path::test_ws_total_results_reflects_post_filter_count
+        """
         import requests
 
         try:
@@ -115,7 +144,10 @@ class TestRestApi:
         )
 
     def test_retrieve_results_sorted_descending(self, skip_if_no_backend):
-        """Verify results remain sorted by score in descending order."""
+        """Verify results remain sorted by score in descending order.
+
+        T06 superseded by: test_ws_retrieval_critical_path::test_ws_results_sorted_descending
+        """
         import requests
 
         try:
