@@ -141,7 +141,7 @@ curl -X POST http://localhost:8000/retrieve \
 |--------|-------|---------|
 | `X-Cache` | `HIT` | Response served from L1 cache |
 | `X-Cache` | `MISS` | Response computed fresh and stored in cache |
-| `X-Cache` | `ERROR` | Non-200 response or cache access failure |
+| `X-Cache` | `ERROR` | Non-200 response |
 
 ---
 
