@@ -23,6 +23,81 @@ path or a recorded rationale for deferral.
 
 ---
 
+## 0 — Reproduction
+
+These are the exact commands used to generate this inventory.  Re-run them
+against the codebase at any time to verify that the counts and file lists
+haven't drifted (adjust paths if the repo root changes).
+
+```bash
+REPO=/home/runner/work/python-hol/python-hol   # set to your local repo root
+
+# ── Production / runtime ──────────────────────────────────────────────────────
+
+# Route definitions and middleware hard-codes (§1.1)
+grep -rn '"/retrieve"\|"/retrieve-filtered"' "$REPO/api.py" "$REPO/api_middleware.py"
+# Expected: api.py:965 (/retrieve route), api.py:1052 (/retrieve-filtered route),
+#           api_middleware.py:29 (docstring), api_middleware.py:160 (guard condition)
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+# All "/retrieve" string literals in Python test files (§1.2)
+grep -rn '"/retrieve"' "$REPO/tests/" --include="*.py"
+# Expected total: 131 matches across 8 files (TestClient calls only)
+
+# Per-file counts:
+grep -c '"/retrieve"' "$REPO/tests/test_system_e2e.py"                     # 35
+grep -c '"/retrieve"' "$REPO/tests/test_query_cache_middleware.py"          # 47
+grep -c '"/retrieve"' "$REPO/tests/test_system_resilience.py"               # 12
+grep -c '"/retrieve"' "$REPO/tests/test_caching_functional.py"              # 12
+grep -c '"/retrieve"' "$REPO/tests/test_retrieval_quality_benchmark.py"     #  6
+grep -c '"/retrieve"' "$REPO/tests/test_observability_logs.py"              #  8
+grep -c '"/retrieve"' "$REPO/tests/test_optb013_docs_closeout.py"           #  6
+grep -c '"/retrieve"' "$REPO/tests/test_ws_http_middleware_tradeoffs_e2e.py"#  5
+
+# Live-backend integration test calls (§1.2 / §1.3)
+grep -rn 'localhost:8000/retrieve' "$REPO/tests/"
+# Expected: 4 matches in test_retrieval_filtering.py
+#   (3 × /retrieve, 1 × /retrieve-filtered?min_score=0.5)
+
+# All "/retrieve-filtered" string literals in Python files (§1.3)
+grep -rn '"/retrieve-filtered"' "$REPO" --include="*.py"
+# Expected: 1 match — api.py:1052 (route definition only)
+
+# ── Documentation ─────────────────────────────────────────────────────────────
+
+# Docs and README references (§1.4)
+grep -rn '/retrieve' "$REPO/docs/" --include="*.md" | grep -v plan.yaml
+grep -rn '/retrieve' "$REPO/README.md"
+grep -rn '/retrieve' "$REPO/frontend/SETUP.md"
+# Expected: 131 matches in docs/ (excluding plan.yaml), 2 in README.md,
+#           3 in frontend/SETUP.md
+
+# ── Quality / runbooks ────────────────────────────────────────────────────────
+
+# Quality directory (§1.5)
+grep -rn '/retrieve' "$REPO/quality/"
+# Expected: 18 matches across AGENTS.md, QUALITY.md, RUN_INTEGRATION_TESTS.md
+
+# ── AI-agent / prompt files ───────────────────────────────────────────────────
+
+# .github agent and prompt files (§1.6)
+grep -rn '/retrieve' "$REPO/.github/" | grep -v copilot-instructions
+# Expected: 2 matches (.github/AGENTS.md and .github/prompts/backend-python.prompt.md)
+
+# ── CI / automation ───────────────────────────────────────────────────────────
+
+# GitHub Actions workflow files (§1.7)
+find "$REPO/.github/workflows/" -name "*.yml" -o -name "*.yaml" 2>/dev/null
+# Expected: no output (no workflows directory)
+
+# Shell scripts (§1.7)
+find "$REPO" -name "*.sh" ! -path "*/.git/*"
+# Expected: no output (zero shell scripts)
+```
+
+---
+
 ## 1 — Grep Evidence (structured)
 
 ### 1.1 Production / runtime references
