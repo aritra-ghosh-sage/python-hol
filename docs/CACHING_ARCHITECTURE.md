@@ -334,8 +334,9 @@ Distributing embedding vectors would require serialising and deserialising numpy
 |-------|---------|
 | `HIT` | Response was served directly from L1 cache. Retriever was not called. |
 | `MISS` | Response was computed fresh (retriever was called) and has been stored in L1 cache. |
-| `ERROR` | Response status is non-200 (not cached), or a cache access error occurred during the request. |
+| `ERROR` | Response status is non-200 (response not cached). |
 
+**Current implementation note:** Cache backend exceptions during L1 get/set are logged and reflected in cache health/stat counters, but they do **not** currently change the response header to `X-Cache: ERROR`; successful fallback responses still return `X-Cache: MISS`.
 **Paths where `X-Cache` is NOT set:** `GET` requests and all excluded paths (`/health`, `/config`, `/ingest`, `/documents`, `/documents/sources`, `/cache/stats`).
 
 **WebSocket (`/ws/chat`):** Cache activity is reflected in `GET /cache/stats` counters (both transports share the same cache backend), but the WebSocket message schema does not include a cache-status field. `X-Cache` is an HTTP-only header.
