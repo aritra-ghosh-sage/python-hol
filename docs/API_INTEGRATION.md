@@ -73,7 +73,7 @@ curl -X GET http://localhost:8000/health
 
 **Endpoint:** `POST /retrieve`
 
-**Purpose:** Retrieve relevant documents using hybrid search (semantic + keyword). Results are automatically filtered by relevance score threshold (≥ 0.85).
+**Purpose:** Retrieve relevant documents using hybrid search (semantic + keyword). Results are automatically filtered by relevance score threshold (≥ 0.80).
 
 **Request Model:**
 ```typescript
@@ -149,10 +149,10 @@ curl -X POST http://localhost:8000/retrieve \
 
 **Endpoint:** `POST /retrieve-filtered?min_score=0.5`
 
-**Purpose:** Retrieve documents with custom minimum relevance score filtering. **Note:** The API enforces a floor of 0.85 for chat quality, so `min_score` is clamped to at least 0.85.
+**Purpose:** Retrieve documents with custom minimum relevance score filtering. **Note:** The API enforces a floor of 0.80 for chat quality, so `min_score` is clamped to at least 0.80.
 
 **Query Parameters:**
-- `min_score` (optional, float): Minimum relevance score for filtering (0.0-1.0). Default: 0.5. Actual floor: 0.85.
+- `min_score` (optional, float): Minimum relevance score for filtering (0.0-1.0). Default: 0.5. Actual floor: 0.80.
 
 **Request Model:**
 ```typescript
@@ -794,8 +794,8 @@ NEXT_PUBLIC_WS_URL=ws://localhost:8000
   - Upstream proxy-level throttling (nginx, API Gateway)
 
 ### Score Thresholds
-- **Default chat threshold:** 0.85 (floor applied to ensure high-quality results)
-- **Configurable threshold:** `min_score` in `/retrieve-filtered` is clamped to 0.85 minimum
+- **Default chat threshold:** 0.80 (floor applied to ensure high-quality results)
+- **Configurable threshold:** `min_score` in `/retrieve-filtered` is clamped to 0.80 minimum
 - Results below threshold are filtered out to maintain chat quality
 
 ### Configuration Updates
