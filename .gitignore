@@ -5,6 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
+.coverage
 
 # Virtual environments
 .venv
@@ -19,4 +20,5 @@ implementation_docs/*.md
 # ChromaDB persistent storage (development artefact — too large for git)
 ai_support_kb/
 support_kb/
-.coverage
+
+
