@@ -519,58 +519,11 @@ class TestCorpusVersionFormatContract:
 
 
 class TestXCacheHeaderContract:
-    """Contract tests for X-Cache header after T08 retirement of POST /retrieve.
+    """Contract test for X-Cache header absence on admin endpoints after T08.
 
-    After T08, POST /retrieve is permanently removed. These tests verify:
-    1. POST /retrieve returns 404 (no X-Cache header is set by a gone endpoint).
-    2. GET /cache/stats still works correctly and has no X-Cache header.
+    POST /retrieve was retired in T08. The only remaining assertion is that
+    GET /cache/stats does not carry an X-Cache header.
     """
-
-    def test_retrieve_returns_404_after_t08_retirement(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """POST /retrieve must return 404 after T08 retirement.
-
-        WHAT: Issues a retrieve request and confirms 404 is returned.
-        WHY: The endpoint has been permanently removed. Any other status
-        (200, 503, 500) indicates accidental re-registration.
-        """
-        fake_retriever = _FakeRetrievingRetriever()
-        monkeypatch.setattr(api, "_retriever", fake_retriever)
-        monkeypatch.setattr(api, "_config", _fake_config())
-        monkeypatch.setattr(api, "_cache", FakeCacheForStats())
-        monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-        client = TestClient(api.app)
-        response = client.post("/retrieve", json={"query": "test query"})
-
-        assert response.status_code == 404, (
-            f"POST /retrieve must return 404 after T08 retirement; "
-            f"got {response.status_code}"
-        )
-
-    def test_x_cache_header_absent_on_retrieve_after_t08(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """POST /retrieve must NOT carry an X-Cache header after T08.
-
-        WHAT: Confirms no X-Cache header is emitted for the retired endpoint.
-        WHY: Since the endpoint is gone, no middleware processes the request,
-        so no X-Cache header should be injected.
-        """
-        fake_retriever = _FakeRetrievingRetriever()
-        monkeypatch.setattr(api, "_retriever", fake_retriever)
-        monkeypatch.setattr(api, "_config", _fake_config())
-        monkeypatch.setattr(api, "_cache", FakeCacheForStats())
-        monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-        client = TestClient(api.app)
-        response = client.post("/retrieve", json={"query": "test query"})
-
-        assert response.status_code == 404
-        assert "x-cache" not in {h.lower() for h in response.headers}, (
-            "X-Cache header must NOT be present on 404 responses for the retired endpoint"
-        )
 
     def test_x_cache_header_absent_on_stats_endpoint(
         self, stats_client: TestClient
@@ -578,8 +531,8 @@ class TestXCacheHeaderContract:
         """GET /cache/stats must NOT carry an X-Cache header.
 
         WHAT: Confirms that the /cache/stats path has no X-Cache header.
-        WHY: /cache/stats was in the middleware's excluded_paths list; after T08
-        middleware removal, it should still not carry X-Cache headers.
+        WHY: After T08 middleware removal, no path should receive X-Cache headers
+        from the retired QueryCacheMiddleware.
         """
         response = stats_client.get("/cache/stats")
         assert response.status_code == 200
@@ -587,51 +540,6 @@ class TestXCacheHeaderContract:
         header_names_lower = {h.lower() for h in response.headers}
         assert "x-cache" not in header_names_lower, (
             "X-Cache header must NOT be present on GET /cache/stats"
-        )
-
-    def test_x_cache_not_named_x_cache_status(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """POST /retrieve returns 404 with no X-Cache-Status header either (T08).
-
-        WHAT: Confirms neither 'X-Cache' nor 'X-Cache-Status' is present on
-        the 404 response for the retired endpoint.
-        WHY: Ensures no middleware artefacts bleed through.
-        """
-        fake_retriever = _FakeRetrievingRetriever()
-        monkeypatch.setattr(api, "_retriever", fake_retriever)
-        monkeypatch.setattr(api, "_config", _fake_config())
-        monkeypatch.setattr(api, "_cache", FakeCacheForStats())
-        monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-        client = TestClient(api.app)
-        response = client.post("/retrieve", json={"query": "header name test"})
-
-        assert response.status_code == 404
-        header_names_lower = {h.lower() for h in response.headers}
-        assert "x-cache" not in header_names_lower
-        assert "x-cache-status" not in header_names_lower
-
-    def test_retrieve_returns_404_when_cache_faulting(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """POST /retrieve must return 404 even when cache backend raises (T08).
-
-        WHAT: Confirms the endpoint is gone regardless of cache health.
-        WHY: Even if the cache is broken, the route does not exist, so 404.
-        """
-        fake_retriever = _FakeRetrievingRetriever()
-        monkeypatch.setattr(api, "_retriever", fake_retriever)
-        monkeypatch.setattr(api, "_config", _fake_config())
-        monkeypatch.setattr(api, "_cache", _AlwaysErrorCache())
-        monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-        client = TestClient(api.app)
-        response = client.post("/retrieve", json={"query": "fail-open test"})
-
-        assert response.status_code == 404, (
-            f"POST /retrieve must return 404 after T08 retirement; "
-            f"got {response.status_code}"
         )
 
 
@@ -1089,41 +997,6 @@ class TestCrossIssueDecisionContract:
     named test, which requires a deliberate code review conversation.
     """
 
-    def test_cache_header_name_is_x_cache_not_x_cache_status(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """T08: POST /retrieve returns 404 — no X-Cache or X-Cache-Status header emitted.
-
-        WHAT: After T08 retirement the /retrieve route is gone, so neither
-        'X-Cache' nor the rejected 'X-Cache-Status' alternative should appear
-        on the 404 response.
-        WHY: Confirms no middleware artefacts bleed through for the retired endpoint.
-        """
-        fake_retriever = _FakeRetrievingRetriever()
-        monkeypatch.setattr(api, "_retriever", fake_retriever)
-        monkeypatch.setattr(api, "_config", _fake_config())
-        monkeypatch.setattr(api, "_cache", FakeCacheForStats())
-        monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-        client = TestClient(api.app)
-        response = client.post("/retrieve", json={"query": "cross-issue header test"})
-
-        assert response.status_code == 404, (
-            f"T08: POST /retrieve must return 404; got {response.status_code}"
-        )
-        header_keys_lower = {k.lower() for k in response.headers}
-
-        # Neither the confirmed name nor the rejected alternative should appear on a 404.
-        assert "x-cache" not in header_keys_lower, (
-            "X-Cache must NOT be present on the 404 response for the retired endpoint"
-        )
-        assert "x-cache-status" not in header_keys_lower, (
-            "Cross-issue decision: 'X-Cache-Status' was REJECTED as a header name"
-        )
-        assert "cache-status" not in header_keys_lower, (
-            "Cross-issue decision: 'Cache-Status' was REJECTED as a header name"
-        )
-
     def test_flat_stat_fields_absent_prevents_external_monitor_regression(
         self, stats_client: TestClient
     ) -> None:
@@ -1151,29 +1024,6 @@ class TestCrossIssueDecisionContract:
                 f"Found: {field!r} in top-level keys {list(body.keys())!r}"
             )
 
-    def test_retrieve_200_on_cache_fault_fail_open_decision(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """T08 decision: POST /retrieve returns 404 — endpoint permanently retired.
-
-        WHAT: Confirms /retrieve is gone, returning 404 regardless of cache state.
-        WHY: The fail-open decision no longer applies because the endpoint is retired
-        in T08.  A future attempt to restore this route must change this test —
-        triggering a review.
-        """
-        fake_retriever = _FakeRetrievingRetriever()
-        monkeypatch.setattr(api, "_retriever", fake_retriever)
-        monkeypatch.setattr(api, "_config", _fake_config())
-        monkeypatch.setattr(api, "_cache", _AlwaysErrorCache())
-        monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
-
-        client = TestClient(api.app)
-        response = client.post("/retrieve", json={"query": "fail-open cross-issue test"})
-
-        assert response.status_code == 404, (
-            f"T08: POST /retrieve must be retired (404) — endpoint removed; "
-            f"got {response.status_code}"
-        )
 
 
 # ---------------------------------------------------------------------------
