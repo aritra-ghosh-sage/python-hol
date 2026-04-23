@@ -978,10 +978,11 @@ async def retrieve(
 ) -> RetrievalResponse:
     """Retrieve documents relevant to the provided query.
 
-    .. deprecated::
-        This endpoint is deprecated and will be removed in v2.0 (planned sunset: 2026-10-31).
-        Migrate to the WebSocket endpoint ``ws://host/ws/chat`` for real-time retrieval.
-        See docs/API_INTEGRATION.md for the migration guide.
+    Deprecated:
+        This endpoint is deprecated and will be removed in v2.0
+        (planned sunset: 2026-10-31). Migrate to the WebSocket endpoint
+        ``ws://host/ws/chat`` for real-time retrieval. See
+        docs/API_INTEGRATION.md for the migration guide.
 
     Performs hybrid retrieval combining semantic and keyword search,
     with optional cross-encoder reranking.
@@ -1080,10 +1081,10 @@ async def retrieve_filtered(
 ) -> RetrievalResponse:
     """Retrieve documents with optional minimum score filtering.
 
-    .. deprecated::
-        This endpoint is deprecated and will be removed in v2.0 (planned sunset: 2026-10-31).
-        Migrate to the WebSocket endpoint ``ws://host/ws/chat`` for real-time retrieval.
-        See docs/API_INTEGRATION.md for the migration guide.
+    Deprecated: This endpoint is deprecated and will be removed in v2.0
+    (planned sunset: 2026-10-31). Migrate to the WebSocket endpoint
+    ``ws://host/ws/chat`` for real-time retrieval. See
+    docs/API_INTEGRATION.md for the migration guide.
 
     Similar to /retrieve but filters results by minimum relevance score.
 
