@@ -259,15 +259,15 @@ gen{N}.n{count}
 
 ### When the token changes
 
-| Event | N | count | Effect on L1 cache |
-|-------|---|-------|-------------------|
-| `PUT /config` succeeds | **Incremented** | Rebuilt | All previous L1 entries are orphaned (stale key suffix) |
-| `POST /documents` with `ingest_type=update` | **Incremented** | Rebuilt | Full L1 clear + orphaned by new token |
-| `POST /documents` with `ingest_type=add` | Stable | Rebuilt on next request | L1 cache preserved; previously cached results remain valid until TTL |
-| TTL expiry | No change | No change | Individual entries evicted by backend |
-| Process restart | Reset to `0` | Rebuilt at startup | In-process `_cache_generation` is reset; new token built from ChromaDB |
+| Event | N | count | Effect on cache keys |
+|-------|---|-------|----------------------|
+| `PUT /config` succeeds | **Incremented** | Rebuilt | L1 query-cache entries are orphaned by the new `corpus_version` suffix; L2 embedding cache is unaffected |
+| `POST /documents` with `ingest_type=update` | **Incremented** | Rebuilt | L1 query-cache entries are orphaned by the new `corpus_version` suffix after the explicit invalidation; L2 embedding cache is unaffected |
+| `POST /documents` with `ingest_type=add` | Stable | Rebuilt immediately after successful add | L1 query-cache entries are orphaned immediately by the new `corpus_version` suffix; L2 embedding cache is unaffected |
+| TTL expiry | No change | No change | Individual L1 entries are evicted by the backend; no `corpus_version` change and no L2 impact |
+| Process restart | Reset to `0` | Rebuilt at startup | In-process `_cache_generation` is reset; a new L1 key suffix is built from ChromaDB; L2 embedding cache is unaffected |
 
-> **Eventual consistency on `ingest_type=add`.** After an incremental document addition, queries that were cached before the addition may return pre-add results until their TTL expires. This is intentional and documented in the approved cache-consistency policy (`docs/plan/20260420/CACHE-CONSISTENCY-POLICY.md`).
+> **`ingest_type=add` behavior.** The current `/documents` handler rebuilds `_corpus_version` immediately after a successful add, so subsequent requests use a new L1 query-cache key suffix right away. This changes L1 visibility by orphaning older query-cache entries, but it does **not** invalidate or flush the L2 embedding cache.
 
 ### Fallback: ChromaDB count unavailable
 
