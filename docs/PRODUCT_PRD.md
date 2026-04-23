@@ -159,7 +159,7 @@ This PRD defines the product-level requirements for the overall platform, includ
 - Real-time chat-style updates over WebSocket for a more immediate retrieval experience.
 - Visible service and connection status indicators.
 - Fast feedback through loaders, toasts, and immediate validation.
-- PWA-ready frontend architecture for installability and resilience.
+- Frontend architecture focused on responsive, reliable browser delivery.
 
 ## 6. Narrative
 

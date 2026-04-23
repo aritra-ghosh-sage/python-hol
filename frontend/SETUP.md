@@ -14,7 +14,7 @@ python-hol/
 ├─ hybrid_rag/                       # Core RAG library
 ├─ pyproject.toml                    # Python dependencies (added pypdf)
 └─ frontend/                         # Next.js frontend
-   ├─ public/                        # Static assets + service worker
+   ├─ public/                        # Static assets
    ├─ src/
    │  ├─ app/                        # Next.js app router
    │  ├─ components/                 # React components (15 total)
@@ -231,14 +231,6 @@ sentence-transformers>=5.3.0  # Embeddings & reranking
 
 ---
 
-> **Migration note**: A previous version of this app included a service worker and
-> `public/manifest.json` for PWA support. Those have been removed. On your first page
-> load after this release, `ServiceWorkerDecommissioner` automatically unregisters any
-> leftover service workers and clears the `hybrid-rag-*` caches from your browser.
-> No manual action is required.
-
----
-
 ## 🧪 Testing Workflows
 
 ### 1. Query Flow
@@ -415,7 +407,7 @@ wscat -c ws://localhost:8000/ws/chat
 - **Backend**: Async with uvicorn workers (8 by default)
 - **Vector DB**: Local ChromaDB with SentenceTransformer embeddings (CPU-based)
 - **Reranking**: Optional; use `enable_rerank: false`config for speed
-- **Caching**: API calls always fresh; no service-worker caching
+- **Caching**: API calls always fresh
 
 ---
 

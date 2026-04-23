@@ -403,10 +403,23 @@ class LayeredCacheStatsResponse(BaseModel):
     'L2 hit rate < 40%') without knowing which keys belong to which layer.
     The layered schema gives consumers an unambiguous contract.
 
+    Compatibility note:
+        Legacy tests and clients still read flat top-level L1 fields
+        (backend/hits/misses/hit_rate/size/max_size/ttl_seconds). These are
+        mirrored from l1_query_cache to preserve backward compatibility while
+        keeping the layered schema authoritative.
+
     Attributes:
         l1_query_cache: L1 query-response cache metrics + corpus_version.
         l2_embedding_cache: L2 embedding LRU cache metrics from HybridRetriever.
         backend_health: Redis/memory backend connectivity and latency.
+        backend: Legacy flat mirror of l1_query_cache.backend.
+        hits: Legacy flat mirror of l1_query_cache.hits.
+        misses: Legacy flat mirror of l1_query_cache.misses.
+        hit_rate: Legacy flat mirror of l1_query_cache.hit_rate.
+        size: Legacy flat mirror of l1_query_cache.size.
+        max_size: Legacy flat mirror of l1_query_cache.max_size.
+        ttl_seconds: Legacy flat mirror of l1_query_cache.ttl_seconds.
         timestamp: When these statistics were captured (UTC).
 
     Example:
@@ -414,6 +427,13 @@ class LayeredCacheStatsResponse(BaseModel):
         ...     l1_query_cache=L1QueryCacheStats(...),
         ...     l2_embedding_cache=L2EmbeddingCacheStats(...),
         ...     backend_health=BackendHealthStats(...),
+        ...     backend="memory",
+        ...     hits=10,
+        ...     misses=2,
+        ...     hit_rate=10 / 12,
+        ...     size=3,
+        ...     max_size=100,
+        ...     ttl_seconds=3600,
         ...     timestamp=datetime.now(timezone.utc),
         ... )
     """
@@ -426,6 +446,17 @@ class LayeredCacheStatsResponse(BaseModel):
     )
     backend_health: BackendHealthStats = Field(
         ..., description="Cache backend connectivity and health"
+    )
+    backend: str = Field(..., description="Legacy flat mirror of L1 backend")
+    hits: int = Field(..., ge=0, description="Legacy flat mirror of L1 hits")
+    misses: int = Field(..., ge=0, description="Legacy flat mirror of L1 misses")
+    hit_rate: float = Field(
+        ..., ge=0.0, le=1.0, description="Legacy flat mirror of L1 hit rate"
+    )
+    size: int = Field(..., ge=0, description="Legacy flat mirror of L1 size")
+    max_size: int = Field(..., ge=0, description="Legacy flat mirror of L1 max size")
+    ttl_seconds: int = Field(
+        ..., ge=0, description="Legacy flat mirror of L1 ttl_seconds"
     )
     timestamp: datetime = Field(..., description="When stats were captured (UTC)")
 
@@ -1441,6 +1472,13 @@ async def get_cache_stats() -> LayeredCacheStatsResponse:
             l1_query_cache=l1,
             l2_embedding_cache=l2,
             backend_health=backend_health,
+            backend=l1.backend,
+            hits=l1.hits,
+            misses=l1.misses,
+            hit_rate=l1.hit_rate,
+            size=l1.size,
+            max_size=l1.max_size,
+            ttl_seconds=l1.ttl_seconds,
             timestamp=datetime.now(timezone.utc),
         )
 

@@ -4,6 +4,10 @@ import type { ChatMessage } from "../lib/types";
 
 const STORAGE_KEY = "chat-history-v1";
 
+function getBrowserStorage(): Storage {
+  return window.localStorage;
+}
+
 function makeMessage(i: number): ChatMessage {
   return {
     id: `user-${i}`,
@@ -25,14 +29,14 @@ function makeLoadingMessage(i: number): ChatMessage {
 }
 
 function readPersistedState(): { messages: ChatMessage[]; messageCounter: number } {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = getBrowserStorage().getItem(STORAGE_KEY);
   if (!raw) return { messages: [], messageCounter: 0 };
   const parsed = JSON.parse(raw);
   return parsed?.state ?? { messages: [], messageCounter: 0 };
 }
 
 function writePersistedState(messages: ChatMessage[], messageCounter: number): void {
-  localStorage.setItem(
+  getBrowserStorage().setItem(
     STORAGE_KEY,
     JSON.stringify({ state: { messages, messageCounter }, version: 0 })
   );

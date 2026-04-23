@@ -1,0 +1,653 @@
+plan_id: 20260423-ws-only-retrieval-deprecation
+objective: >-
+  Implement WS-only retrieval architecture by deprecating/removing HTTP retrieval
+  endpoints in stages while preserving admin HTTP endpoints and keeping changes
+  safe, observable, and reversible.
+created_at: 2026-04-23T00:00:00Z
+created_by: gem-planner
+status: pending
+research_confidence: high
+plan_metrics:
+  wave_1_task_count: 3
+  total_dependencies: 11
+  risk_score: high
+tldr: |
+  Stage retrieval endpoint retirement with explicit gates:
+  1) Immediately mark /retrieve and /retrieve-filtered deprecated/internal-only.
+  2) Remove /retrieve-filtered first after dependency migration.
+  3) Remove /retrieve only after tests/tooling/runbooks are WS-migrated.
+  4) Keep admin HTTP endpoints only: /config, /documents, /cache/stats, /health.
+
+  Key risk controls:
+  - Observability split risk is handled by unifying WS and HTTP retrieval telemetry labels before endpoint removal.
+  - WS cache-status visibility risk is handled by adding a WS-visible cache-state signal (payload field and/or status event contract).
+  - Cache write-path duplication risk is handled by ensuring only shared retrieval cache writes remain once HTTP middleware path is removed.
+
+  Rollback strategy:
+  - Stage A rollback (after deprecation or /retrieve-filtered removal): re-enable removed route from tagged commit and restore docs/tests from prior gate tag.
+  - Stage B rollback (after /retrieve removal): restore /retrieve route and middleware gate from pre-removal release tag; keep shared facade unchanged.
+  - Operational rollback trigger: any regression in WS retrieval correctness, cache hit behavior, or admin endpoint health checks.
+
+  Source basis:
+  - api.py (HTTP routes + shared retrieval facade + WS handler)
+  - api_middleware.py (POST /retrieve middleware and X-Cache behavior)
+  - tests/test_api_shared_retrieval.py (REST/WS facade parity)
+  - tests/test_ws_http_middleware_tradeoffs_e2e.py (observability split, WS cache visibility gap, duplicate write-path)
+  - docs/API_INTEGRATION.md and docs/QUICK_START.md (HTTP retrieval docs)
+open_questions:
+  - question: Should WS response payload include explicit cache-status field, or should observability remain log-only?
+    context: >-
+      Existing tests call out that REST has X-Cache while WS has no cache-status field;
+      adding payload status changes client contract.
+    type: decision_blocker
+    affects: [T03, T06, T08]
+  - question: Is /documents/sources considered an admin endpoint to keep, or should it be retired with non-admin HTTP retrieval endpoints?
+    context: >-
+      Middleware exclusion defaults include /documents/sources, but target admin list explicitly names
+      only /config, /documents, /cache/stats, /health.
+    type: decision_blocker
+    affects: [T09, T10]
+  - question: Which internal tooling (if any) still calls POST /retrieve directly in CI/runbooks/scripts?
+    context: >-
+      Endpoint retirement order depends on eliminating hidden internal dependencies.
+    type: decision_blocker
+    affects: [T04, T06, T07, T08]
+gaps:
+  - description: Unknown inventory of non-test internal HTTP retrieval consumers.
+    refinement_requests:
+      - query: "Search scripts/docs/automation for '/retrieve' and '/retrieve-filtered' usage."
+        source_hint: "tests/, docs/, implementation_docs/, quality/, shell scripts"
+  - description: WS cache-status contract decision is unresolved.
+    refinement_requests:
+      - query: "Select WS cache visibility approach (payload field vs status event vs logs-only)."
+        source_hint: "WS client consumers and API contract expectations"
+pre_mortem:
+  overall_risk_level: high
+  critical_failure_modes:
+    - scenario: Observability split causes false-negative alerting after HTTP endpoint removal.
+      likelihood: medium
+      impact: high
+      mitigation: >-
+        Add unified retrieval telemetry taxonomy before removals; validate dashboards/alerts against WS-only traffic in pre-removal gate.
+    - scenario: WS clients lose cache transparency when HTTP X-Cache disappears.
+      likelihood: high
+      impact: medium
+      mitigation: >-
+        Introduce WS cache-status signal and verify via contract tests before removing /retrieve.
+    - scenario: Duplicate cache writes (middleware + shared facade) collapse incorrectly and regress hit rate or consistency.
+      likelihood: medium
+      impact: critical
+      mitigation: >-
+        Remove duplicate write-path in controlled step; assert single write-path via e2e tests and cache stats checks.
+  assumptions:
+    - Shared retrieval facade remains the single retrieval engine for WS and any temporary HTTP path.
+    - User-facing retrieval flow is WS chat only.
+    - Endpoint removals can ship behind reversible release tags.
+implementation_specification:
+  code_structure: >-
+    Use staged endpoint lifecycle: deprecate -> remove /retrieve-filtered -> migrate tests/tooling -> remove /retrieve ->
+    narrow HTTP surface to admin endpoints only. Keep shared retrieval facade stable to reduce blast radius.
+  affected_areas:
+    - api.py
+    - api_middleware.py
+    - tests/
+    - docs/
+    - implementation_docs/ and runbooks referencing retrieval endpoints
+  component_details:
+    - component: HTTP retrieval endpoints
+      responsibility: Temporary compatibility surface during migration only
+      interfaces:
+        - POST /retrieve (deprecated, then removed)
+        - POST /retrieve-filtered (deprecated, then removed first)
+      dependencies:
+        - component: shared retrieval facade
+          relationship: delegates retrieval operations
+      integration_points:
+        - OpenAPI docs
+        - internal scripts/tests
+    - component: WS retrieval chat flow
+      responsibility: Primary retrieval path and long-term contract
+      interfaces:
+        - WS /ws/chat messages (status/results/error)
+      dependencies:
+        - component: shared retrieval facade
+          relationship: retrieval execution + caching
+      integration_points:
+        - frontend chat
+        - WS tests
+    - component: QueryCacheMiddleware
+      responsibility: HTTP-layer response caching for POST /retrieve
+      interfaces:
+        - X-Cache response metadata
+      dependencies:
+        - component: cache backend
+          relationship: read/write L1 cache keys
+      integration_points:
+        - POST /retrieve only (to be removed with endpoint)
+contracts:
+  - from_task: T01
+    to_task: T04
+    interface: "Dependency inventory report for /retrieve-filtered consumers"
+    format: "markdown checklist + grep evidence paths"
+  - from_task: T03
+    to_task: T06
+    interface: "WS cache visibility contract"
+    format: "API message schema and test assertions"
+  - from_task: T04
+    to_task: T06
+    interface: "Route removal delta"
+    format: "endpoint diff + expected behavior matrix"
+  - from_task: T06
+    to_task: T07
+    interface: "Migration readiness evidence"
+    format: "test pass list + tooling/runbook migration checklist"
+  - from_task: T07
+    to_task: T08
+    interface: "Decision gate approval to remove /retrieve"
+    format: "gate record with go/no-go and rollback tag"
+  - from_task: T08
+    to_task: T09
+    interface: "Final HTTP surface list"
+    format: "route inventory table"
+  - from_task: T09
+    to_task: T10
+    interface: "Final behavior and ops deltas"
+    format: "release notes inputs + runbook updates"
+tasks:
+  - id: T01
+    title: Baseline Dependency and Route Inventory
+    description: |
+      Build a precise inventory of all uses of /retrieve and /retrieve-filtered across tests,
+      docs, runbooks, scripts, and internal tooling. Freeze a baseline route list and current
+      telemetry expectations before any endpoint changes.
+    wave: 1
+    agent: gem-researcher
+    prototype: false
+    covers: ["staging safety", "dependency mapping"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: api.py
+        description: Defines both retrieval endpoints and WS handler.
+      - path: tests/test_api_shared_retrieval.py
+        description: REST/WS shared facade parity tests.
+      - path: docs/API_INTEGRATION.md
+        description: Public endpoint contract references.
+    diagnosis:
+      root_cause: "Unknown internal HTTP consumer set may block safe removal."
+      fix_recommendations: "Produce explicit consumer inventory and mark blockers."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 120
+    focus_area: "discovery"
+    verification:
+      - "Inventory includes every repo reference to /retrieve and /retrieve-filtered."
+      - "Baseline route table produced with current endpoint status."
+    acceptance_criteria:
+      - "Consumer list is complete and categorized (tests, docs, runbooks, tooling)."
+      - "Blockers for /retrieve-filtered removal are explicitly identified."
+    failure_modes:
+      - scenario: "Hidden CI script dependency missed"
+        likelihood: medium
+        impact: high
+        mitigation: "Search all executable scripts and pipeline configs; peer review inventory."
+
+  - id: T02
+    title: Immediate Deprecation Markers for HTTP Retrieval Endpoints
+    description: |
+      Mark POST /retrieve and POST /retrieve-filtered as deprecated/internal-only in API schema,
+      docs, and response metadata without changing runtime behavior.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: ["deprecation stage 1"]
+    priority: medium
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: api.py
+        description: Endpoint decorators and HTTP responses.
+      - path: docs/API_INTEGRATION.md
+        description: Endpoint lifecycle messaging.
+      - path: docs/QUICK_START.md
+        description: Quickstart examples to label as deprecated.
+    diagnosis:
+      root_cause: "No explicit internal-only/deprecated signal currently enforced."
+      fix_recommendations: "Add non-breaking deprecation annotations and messaging."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 140
+    focus_area: "api-contract"
+    verification:
+      - "OpenAPI marks both endpoints deprecated."
+      - "Docs clearly state internal-only temporary status."
+    acceptance_criteria:
+      - "No behavior regression for existing tests in this step."
+      - "Deprecation date and removal sequencing are documented."
+    failure_modes:
+      - scenario: "Deprecation not visible to internal users"
+        likelihood: medium
+        impact: medium
+        mitigation: "Add schema + docs + response-level deprecation notice."
+
+  - id: T03
+    title: Unify WS-Only Observability and Cache Visibility Contract
+    description: |
+      Define and implement WS-compatible retrieval observability so operators and tests can see
+      cache behavior after HTTP endpoints disappear. Resolve how WS exposes cache-status to clients
+      (message field or status event) and align telemetry names across transport types.
+    wave: 1
+    agent: gem-reviewer
+    prototype: false
+    covers: ["observability split", "WS cache-status visibility"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: tests/test_ws_http_middleware_tradeoffs_e2e.py
+        description: Explicitly documents split and missing WS cache-status field.
+      - path: api.py
+        description: WS message contract and retrieval telemetry.
+      - path: api_middleware.py
+        description: HTTP X-Cache and cache.http_* semantics.
+    diagnosis:
+      root_cause: "HTTP and WS expose different cache visibility semantics today."
+      fix_recommendations: "Establish WS-first contract before endpoint retirement."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 220
+    focus_area: "observability"
+    verification:
+      - "WS retrieval flow emits testable cache visibility signal."
+      - "Telemetry labels support dashboard continuity post-HTTP removal."
+    acceptance_criteria:
+      - "Decision recorded for WS cache-status contract (payload vs status event)."
+      - "Observability split risk has explicit pass/fail checks."
+    failure_modes:
+      - scenario: "WS cache status not exposed consistently"
+        likelihood: high
+        impact: medium
+        mitigation: "Contract tests lock schema and semantics before removals."
+      - scenario: "Alert rules break after HTTP metrics disappear"
+        likelihood: medium
+        impact: high
+        mitigation: "Dual-run telemetry validation during transition window."
+
+  - id: T04
+    title: Remove /retrieve-filtered Endpoint (First Removal Stage)
+    description: |
+      Remove POST /retrieve-filtered and migrate dependent tests/tooling to supported paths
+      (WS-first, with temporary /retrieve only where still required). Keep rollback tag for this stage.
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers: ["stage 3 removal order", "safe reversible change"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [T01, T02]
+    conflicts_with: []
+    context_files:
+      - path: api.py
+        description: /retrieve-filtered route and filtering helper usage.
+      - path: tests/test_retrieval_filtering.py
+        description: Endpoint-specific test references.
+      - path: docs/API_INTEGRATION.md
+        description: Filtered endpoint documentation.
+    diagnosis:
+      root_cause: "/retrieve-filtered is redundant and targeted for first removal."
+      fix_recommendations: "Delete endpoint and reroute checks to WS or shared behavior tests."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 180
+    focus_area: "endpoint-removal"
+    verification:
+      - "No runtime route exists for POST /retrieve-filtered."
+      - "All prior /retrieve-filtered tests are migrated or intentionally retired with rationale."
+    acceptance_criteria:
+      - "System continues to pass WS retrieval e2e checks."
+      - "Rollback tag captured for filtered-endpoint-only removal."
+    failure_modes:
+      - scenario: "Residual tooling still calls /retrieve-filtered"
+        likelihood: medium
+        impact: high
+        mitigation: "Use T01 inventory to migrate all references before merge."
+
+  - id: T05
+    title: Align HTTP Middleware Scope with Staged Endpoint Surface
+    description: |
+      Reconcile QueryCacheMiddleware behavior after /retrieve-filtered removal and ensure
+      endpoint eligibility/exclusions are still correct for temporary /retrieve support.
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers: ["middleware safety", "staged compatibility"]
+    priority: medium
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [T04]
+    conflicts_with: []
+    context_files:
+      - path: api_middleware.py
+        description: Caches POST /retrieve only; exclusion list semantics.
+      - path: tests/test_ws_http_middleware_tradeoffs_e2e.py
+        description: Middleware/WS tradeoff assertions.
+      - path: api.py
+        description: Active HTTP retrieval routes post-stage.
+    diagnosis:
+      root_cause: "Middleware assumptions can drift as endpoint set shrinks."
+      fix_recommendations: "Lock middleware scope and validate no unintended cache interception."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: small
+    estimated_files: 2
+    estimated_lines: 120
+    focus_area: "cache-middleware"
+    verification:
+      - "Middleware only intercepts intended temporary routes."
+      - "No admin endpoint is accidentally cached."
+    acceptance_criteria:
+      - "Middleware behavior remains fail-open and deterministic under tests."
+      - "No regression in existing cache stats endpoint behavior."
+    failure_modes:
+      - scenario: "Middleware intercepts unintended endpoint"
+        likelihood: low
+        impact: medium
+        mitigation: "Add route eligibility assertions in tests."
+
+  - id: T06
+    title: Migrate Tests/Tooling to WS Retrieval Checks
+    description: |
+      Replace remaining HTTP retrieval assertions with WS-based retrieval checks,
+      including parity, cache visibility, and error handling. Keep only temporary /retrieve
+      checks needed for transitional guardrails until gate approval.
+    wave: 2
+    agent: gem-browser-tester
+    prototype: false
+    covers: ["stage 4 prerequisite", "WS validation"]
+    priority: high
+    status: pending
+    flags:
+      flaky: true
+      retries_used: 0
+    dependencies: [T03, T04]
+    conflicts_with: []
+    context_files:
+      - path: tests/test_api_shared_retrieval.py
+        description: Existing REST/WS parity harness.
+      - path: tests/test_ws_http_middleware_tradeoffs_e2e.py
+        description: Risk-focused coverage seeds.
+      - path: tests/test_retrieval_filtering.py
+        description: HTTP endpoint tests needing migration.
+    diagnosis:
+      root_cause: "Test suite still encodes HTTP retrieval endpoint assumptions."
+      fix_recommendations: "Move acceptance checks to WS contracts and shared facade behavior."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 260
+    focus_area: "test-migration"
+    verification:
+      - "WS retrieval checks cover success, cache semantics, and failure paths."
+      - "HTTP retrieval tests are reduced to transitional-only scope."
+    acceptance_criteria:
+      - "All critical retrieval correctness checks pass without relying on /retrieve-filtered."
+      - "WS cache-status visibility assertions exist per T03 decision."
+    failure_modes:
+      - scenario: "Flaky WS tests block gate"
+        likelihood: medium
+        impact: medium
+        mitigation: "Stabilize fixtures and isolate deterministic retriever doubles."
+      - scenario: "Parity gaps appear between WS and shared facade"
+        likelihood: medium
+        impact: high
+        mitigation: "Add direct shared facade assertions and contract diffs."
+
+  - id: T07
+    title: Decision Gate A - Approve /retrieve Removal
+    description: |
+      Run a formal go/no-go gate using evidence from migrated tests, runbooks, and tooling.
+      Confirm no required internal consumers remain on /retrieve and capture rollback tag.
+    wave: 2
+    agent: gem-reviewer
+    prototype: false
+    covers: ["decision gate", "rollback readiness"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [T05, T06]
+    conflicts_with: []
+    context_files:
+      - path: tests/test_ws_http_middleware_tradeoffs_e2e.py
+        description: Validates key tradeoff risks before remove.
+      - path: docs/API_INTEGRATION.md
+        description: Endpoint support declarations.
+      - path: implementation_docs
+        description: Runbook/tooling dependency references.
+    diagnosis:
+      root_cause: "Removing /retrieve without gate risks hidden breakages."
+      fix_recommendations: "Enforce evidence-backed go/no-go checkpoint."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 100
+    focus_area: "release-gating"
+    verification:
+      - "Go/no-go document exists with objective criteria and sign-off."
+      - "Rollback tag/commit hash recorded."
+    acceptance_criteria:
+      - "No unresolved blockers for /retrieve removal remain."
+      - "Operational monitoring coverage is confirmed for WS-only retrieval."
+    failure_modes:
+      - scenario: "Gate passed with incomplete evidence"
+        likelihood: low
+        impact: critical
+        mitigation: "Require explicit checklist completion and reviewer approval."
+
+  - id: T08
+    title: Remove /retrieve and Eliminate HTTP Retrieval-Specific Cache Path
+    description: |
+      Remove POST /retrieve endpoint and associated HTTP retrieval middleware behavior.
+      Ensure retrieval caching occurs through shared facade path only, eliminating duplicate
+      cache write-path behavior tied to HTTP middleware.
+    wave: 3
+    agent: gem-implementer
+    prototype: false
+    covers: ["stage 4 removal", "cache write-path duplication"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [T07]
+    conflicts_with: []
+    context_files:
+      - path: api.py
+        description: /retrieve route and shared facade.
+      - path: api_middleware.py
+        description: POST /retrieve interception and X-Cache behavior.
+      - path: tests/test_ws_http_middleware_tradeoffs_e2e.py
+        description: Duplicate write-path risk baseline.
+    diagnosis:
+      root_cause: "HTTP retrieval route and middleware create redundant path no longer needed."
+      fix_recommendations: "Retain shared cache path only and retire HTTP-specific path."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 260
+    focus_area: "endpoint-removal"
+    verification:
+      - "POST /retrieve no longer exists."
+      - "No HTTP retrieval middleware cache write occurs in request path."
+      - "WS retrieval correctness and cache behavior remain stable."
+    acceptance_criteria:
+      - "Single cache write-path confirmed (shared retrieval only)."
+      - "No regression in /config, /documents, /cache/stats, /health."
+    failure_modes:
+      - scenario: "Cache hit rate drops due to incorrect path consolidation"
+        likelihood: medium
+        impact: high
+        mitigation: "Compare cache stats before/after; rollback via gate tag if regression threshold breached."
+      - scenario: "WS retrieval unintentionally coupled to removed HTTP path"
+        likelihood: low
+        impact: critical
+        mitigation: "Run WS-only smoke/e2e before release promotion."
+
+  - id: T09
+    title: Enforce Final HTTP Surface (Admin Endpoints Only)
+    description: |
+      Enforce and verify that only admin HTTP endpoints remain:
+      /config, /documents, /cache/stats, /health.
+      Remove or retire any remaining non-admin retrieval HTTP references and validate route inventory.
+    wave: 4
+    agent: gem-reviewer
+    prototype: false
+    covers: ["final endpoint policy"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [T08]
+    conflicts_with: []
+    context_files:
+      - path: api.py
+        description: Final route definitions.
+      - path: api_middleware.py
+        description: Ensure no retrieval-only middleware coupling remains.
+      - path: docs/API_INTEGRATION.md
+        description: Public contract must match final route set.
+    diagnosis:
+      root_cause: "Route drift can leave unsupported endpoints exposed."
+      fix_recommendations: "Generate and verify explicit final route allowlist."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 140
+    focus_area: "api-governance"
+    verification:
+      - "Route inventory matches allowlist exactly."
+      - "No retrieval HTTP endpoints appear in OpenAPI."
+    acceptance_criteria:
+      - "Admin endpoints are healthy and documented."
+      - "Any ambiguity on /documents/sources is resolved by decision log."
+    failure_modes:
+      - scenario: "Non-admin endpoint unintentionally remains exposed"
+        likelihood: medium
+        impact: high
+        mitigation: "Automated route allowlist assertion in CI."
+
+  - id: T10
+    title: Documentation, Runbook, and Rollback Playbook Finalization
+    description: |
+      Finalize migration docs, internal runbooks, and rollback playbook for WS-only retrieval.
+      Document decision gates, deprecation timeline, and operational monitoring checks.
+    wave: 5
+    agent: gem-documentation-writer
+    prototype: false
+    covers: ["documentation", "operational readiness", "rollback strategy"]
+    priority: medium
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [T09]
+    conflicts_with: []
+    context_files:
+      - path: docs/API_INTEGRATION.md
+        description: Endpoint contract updates.
+      - path: docs/QUICK_START.md
+        description: WS-first usage guidance.
+      - path: implementation_docs
+        description: Internal operational/runbook updates.
+    diagnosis:
+      root_cause: "Operational teams need clear WS-only procedures and rollback steps."
+      fix_recommendations: "Consolidate migration and rollback instructions in one release-ready set."
+      injected_at: 2026-04-23T00:00:00Z
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: "Initial DAG creation"
+        timestamp: 2026-04-23T00:00:00Z
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 180
+    focus_area: "docs-and-ops"
+    verification:
+      - "Runbooks contain WS-only retrieval verification steps."
+      - "Rollback procedure includes stage-specific triggers and commands."
+    acceptance_criteria:
+      - "All public/internal docs remove deprecated retrieval endpoint usage."
+      - "Decision gates and final endpoint policy are documented for auditability."
+    failure_modes:
+      - scenario: "Operators follow outdated HTTP retrieval runbook"
+        likelihood: medium
+        impact: medium
+        mitigation: "Publish versioned runbook update and archive deprecated procedures."

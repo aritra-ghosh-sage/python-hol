@@ -5,7 +5,7 @@ applyTo: ["**/*.py", "**/*.ts", "**/*.tsx"]
 
 # Python HOL - Hybrid RAG Full-Stack Project
 
-A production-ready full-stack application combining a **Python-based Hybrid RAG library** with a **Next.js 16 frontend**. This document guides AI assistants on project structure, conventions, and development practices.
+A full-stack workspace combining a **Python-based Hybrid RAG library** with a **Next.js 16 frontend**. This document guides AI assistants on project structure, conventions, and development practices.
 
 ## 🏗️ Project Architecture
 
@@ -18,6 +18,7 @@ python-hol/                          # Monorepo root
 │   └── skills/                      # Reusable skill modules
 ├── hybrid_rag/                      # Core production library (Python)
 │   ├── __init__.py                  # Public API exports
+│   ├── cache.py                     # Cache backends and interfaces
 │   ├── config.py                    # Configuration with validation
 │   ├── constants.py                 # Centralized constants
 │   ├── exceptions.py                # Custom exception hierarchy
@@ -30,23 +31,31 @@ python-hol/                          # Monorepo root
 │   ├── src/components/              # Feature-based components
 │   ├── src/hooks/                   # Custom React hooks
 │   ├── src/lib/                     # Utilities & API integrations
-│   ├── public/                      # Static assets & PWA service worker
+│   ├── src/stores/                  # Zustand stores
+│   ├── public/                      # Static assets
 │   ├── AGENTS.md                    # Next.js 16 breaking changes guide
 │   ├── CLAUDE.md                    # Claude-specific guidance
 │   ├── SETUP.md                     # Frontend setup guide
 │   └── [config files]               # TypeScript, Tailwind, ESLint
 ├── docs/                            # Documentation
 │   ├── API_INTEGRATION.md           # API integration guide
+│   ├── CACHE_DEPLOYMENT.md          # Cache deployment guidance
+│   ├── CACHE_PERF_REPORT.md         # Cache performance report
 │   ├── LIBRARY_DESIGN.md            # Hybrid RAG architecture docs
 │   └── QUICK_START.md               # Getting started guide
 ├── implementation_docs/             # Implementation details
+├── quality/                         # Quality playbook and integration guides
 ├── ai_support_kb/                   # Chroma vector database (dev)
+├── support_kb/                      # Additional support knowledge base data
 ├── tests/                           # Python test suite
 ├── api.py                           # FastAPI REST wrapper
+├── api_middleware.py                # Query cache middleware
+├── main.py                          # Minimal entry script
 ├── main_example.py                  # Standalone library example
 ├── hybrid_rag_flow.py               # Simplified usage demo
 ├── jupyter-playground.ipynb         # Interactive Jupyter notebook
 ├── pyproject.toml                   # Python project configuration
+├── uv.lock                          # uv lock file
 └── README.md                        # Project overview
 ```
 
@@ -59,7 +68,7 @@ python-hol/                          # Monorepo root
 - Public API exported through `__init__.py` with `__all__`
 - Separation of core logic from API layer
 
-**Type Safety (100% coverage - emphasis)**
+**Type Safety (Strong Emphasis)**
 - Comprehensive type hints on all functions and variables
 - Generic types and Union types properly annotated
 - Pydantic models for request/response validation
@@ -137,7 +146,7 @@ class HybridRetrieverConfig:
 ### Frontend (Next.js 16 - `frontend/`)
 
 **⚠️ CRITICAL: Next.js 16.2.3 Has Breaking Changes**
-- This is NOT standard Next.js—many APIs and conventions differ
+- This codebase explicitly treats this version as having breaking changes
 - **Before writing any code, check the Next.js 16 documentation**
 - Read relevant guides in `node_modules/next/dist/docs/`
 - Look for deprecation notices: patterns may have changed
@@ -184,12 +193,9 @@ const response = await api.post<APIResponse>("/retrieve", query);
 - Use TypeScript generics for API responses
 - Validate responses at API boundary
 
-**PWA & Offline Support**
-- Serwist-based service worker for PWA capabilities
-- Offline-first architecture with background sync
+**Realtime Support**
 - Real-time WebSocket connections available for chat
 - See `src/lib/ws.ts` for WebSocket utilities
-- Static assets cached with Serwist for offline access
 
 ## ⚙️ Build & Development Commands
 
@@ -199,16 +205,18 @@ const response = await api.post<APIResponse>("/retrieve", query);
 # Activate virtual environment
 source .venv/bin/activate
 
-# Install dependencies (recommended: use uv)
-uv pip install -r requirements.txt
-# or
-pip install -e ".[dev]"
+# Install dependencies (recommended: use uv lockfile)
+uv sync
+# Alternative editable install
+pip install -e .
 
 # Run tests
 pytest tests/ -v
 
 # Run the FastAPI server
 uvicorn api:app --reload
+# or
+python api.py
 
 # Run library example
 python main_example.py
@@ -219,13 +227,15 @@ python main_example.py
 - `sentence-transformers>=5.3.0` (local embeddings)
 - `fastapi>=0.135.3`, `uvicorn>=0.44.0` (REST API)
 - `pydantic>=2.12.5` (data validation)
-- `langchain>=1.2.15` (text splitting & utilities)
-- `langchain-chroma>=1.1.0`, `langchain-community>=0.4.1`, `langchain-huggingface>=1.2.1` (LangChain integrations)
+- `langchain>=1.2.15`, `langchain-core>=1.2.28`, `langchain-text-splitters>=1.1.1` (text processing and orchestration)
+- `langchain-chroma>=1.1.0`, `langchain-community>=0.4.1`, `langchain-huggingface>=1.2.1`, `langchain-openai>=1.1.12` (LangChain integrations)
 - `langgraph>=1.1.6` (agentic orchestration)
 - `deepagents>=0.5.1` (deep agent framework)
 - `boto3>=1.42.86` (AWS integration)
 - `pypdf>=4.0.0` (PDF processing)
 - `python-dotenv>=1.0.0` (environment management)
+- `cachetools>=5.3.0`, `redis>=5.0.0` (caching support)
+- `requests>=2.33.1` (URL ingestion support)
 
 ### Frontend (Next.js)
 
@@ -247,35 +257,24 @@ pnpm tsc --noEmit
 
 # Linting
 pnpm lint
+
+# Unit tests
+pnpm test:unit
 ```
 
 **Key Dependencies:**
 - `next@16.2.3` (with breaking changes)
 - `react@19.2.4`, `react-dom@19.2.4`
 - `typescript@5.9.3`
-- `tailwindcss@4.2.2` (with @tailwindcss/postcss@4.2.2)
+- `tailwindcss@4.2.3` (with `@tailwindcss/postcss@4.2.3`)
 - `@tailwindcss/typography@0.5.19` (typography plugin)
 - `zustand@5.0.12` (state management)
 - `zod@4.3.6` (schema validation)
 - `lucide-react@1.8.0` (icons)
-- `@serwist/*@9.5.7` (PWA & service worker support)
 
 ## ⚠️ Known Issues & Workarounds
 
-### 1. ChromaDB HuggingFace Embeddings Error
-**Issue:** `ValueError: could not convert string to float: 'error'` from `HuggingFaceEmbeddingFunction`
-
-**Cause:** Intermittent API errors returned as JSON instead of embeddings
-
-**Solution:** Use local sentence-transformer embeddings (already configured in codebase)
-```python
-from chromadb.utils import embedding_functions
-ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"  # Local inference, no API calls
-)
-```
-
-### 2. Next.js 16 Breaking Changes
+### 1. Next.js 16 Breaking Changes
 **Issue:** Code patterns from Next.js 13/14 may not work
 
 **Solution:** 
@@ -283,13 +282,15 @@ ef = embedding_functions.SentenceTransformerEmbeddingFunction(
 - Check `node_modules/next/dist/docs/` for current API patterns
 - Heed all deprecation notices before writing code
 
-### 3. Serwist PWA Service Worker
-**Note:** Frontend uses Serwist for PWA support. Be mindful of cache invalidation when updating APIs.
-- Configuration in `next.config.ts`
-- Service worker code in `public/sw.ts`
-- See [@serwist/next documentation](https://serwist.sleep.sh/) for PWA patterns
+### 2. Cache Backend Selection
+**Issue:** Cache behavior differs between local and distributed setups
 
-### 4. AI Agent Infrastructure
+**Solution:**
+- Default backend is in-memory cache for local development
+- For distributed environments, set `CACHE_BACKEND=redis` and `REDIS_URL`
+- Use `/cache/stats` for runtime cache observability
+
+### 3. AI Agent Infrastructure
 **Note:** Project includes custom AI agents in `.github/agents/` for development assistance. See `.github/agents/` for available agents and `.github/skills/` for reusable skill modules.
 
 ## 📚 Documentation Links
@@ -298,7 +299,8 @@ ef = embedding_functions.SentenceTransformerEmbeddingFunction(
 - [LIBRARY_DESIGN.md](./docs/LIBRARY_DESIGN.md) - Architecture and module descriptions
 - [API_INTEGRATION.md](./docs/API_INTEGRATION.md) - REST API integration guide
 - [QUICK_START.md](./docs/QUICK_START.md) - Fast-track usage examples
-- [README.md](./README.md) - Project overview and refactoring summary
+- [CACHE_DEPLOYMENT.md](./docs/CACHE_DEPLOYMENT.md) - Cache deployment details
+- [README.md](./README.md) - Project overview
 
 **Frontend**
 - [frontend/AGENTS.md](./frontend/AGENTS.md) - Next.js 16 breaking changes guide
@@ -308,8 +310,8 @@ ef = embedding_functions.SentenceTransformerEmbeddingFunction(
 
 **Implementation & Reference**
 - [implementation_docs/](./implementation_docs/) - Detailed implementation guides
-- [.github/agents/](./github/agents/) - Custom AI agents for development
-- [.github/instructions/](./github/instructions/) - Development guidelines and standards
+- [.github/agents/](./.github/agents/) - Custom AI agents for development
+- [.github/instructions/](./.github/instructions/) - Development guidelines and standards
 
 ## 🎯 Common Tasks
 
@@ -339,23 +341,18 @@ ef = embedding_functions.SentenceTransformerEmbeddingFunction(
 
 ### Using Custom AI Agents
 The project includes custom AI agents in `.github/agents/` for development assistance:
-- **explore-hybrid-rag.agent.md** - Understand library architecture and design patterns
-- **gem-planner.agent.md** - DAG-based task planning and decomposition
-- **gem-implementer.agent.md** - TDD-focused code implementation
-- **gem-critic.agent.md** - Challenge assumptions and find edge cases
-- **gem-reviewer.agent.md** - Security auditing and OWASP compliance
-- **principal-software-engineer.agent.md** - Principal-level guidance
-- **qa-subagent.agent.md** - Meticulous QA and edge-case analysis
-- **adr-generator.agent.md** - Create Architecture Decision Records
-- **se-system-architecture-reviewer.agent.md** - Architecture review & design validation
+- **planning and orchestration**: `gem-planner.agent.md`, `gem-orchestrator.agent.md`
+- **implementation and debugging**: `gem-implementer.agent.md`, `gem-debugger.agent.md`
+- **review and quality**: `gem-reviewer.agent.md`, `qa-subagent.agent.md`
+- **documentation and architecture**: `gem-documentation-writer.agent.md`, `adr-generator.agent.md`, `arch.agent.md`
+- **discovery and research**: `explore-hybrid-rag.agent.md`, `gem-researcher.agent.md`
 
-See `.github/agents/` for full agent specifications.
+See `.github/agents/` for the current full list.
 
 ### Debugging
 - **Python:** Enable DEBUG logging: `logging.basicConfig(level=logging.DEBUG)`
 - **Frontend:** Check browser console and Network tab for API calls; use `frontend/AGENTS.md` for Next.js 16 debugging
 - **API Connection:** Verify FastAPI running and CORS configured in `api.py`
-- **PWA:** Clear browser cache and service workers if encountering stale content; check IndexedDB in DevTools
 
 ## 🔐 Code Review Checklist
 
@@ -371,18 +368,17 @@ See `.github/agents/` for full agent specifications.
 - [ ] No implicit `any` types
 - [ ] API responses validated with Zod
 - [ ] Component logic extracted to hooks
-- [ ] Taiga tasks linked in comments
 - [ ] Accessibility attributes present (alt, aria-labels)
 
 ## 📝 Notes for Contributors
 
 - **Python version:** 3.13+ required
-- **Node version:** 18+ recommended (for Next.js 16)
+- **Node version:** 20.9+ required by installed Next.js 16.2.3
 - **Package manager preference:** uv (Python), pnpm (Node)
-- **Type checking:** `mypy` for Python, TypeScript for frontend
-- **Testing:** pytest for Python backend, Playwright for e2e tests
+- **Type checking:** Type hints for Python modules, TypeScript for frontend
+- **Testing:** pytest/pytest-asyncio for Python backend, Vitest and Playwright in frontend tooling
 - **Documentation:** Always include examples in docstrings
 - **Version:** Project v0.1.0 (see `pyproject.toml` and `frontend/package.json`)
-- **Environment:** Copy `.env.local.example` to `.env.local` and configure (frontend)
+- **Environment:** Use `.env.local.example` as the reference template and configure required variables for your environment
 - **Jupyter Support:** Interactive notebook available at `jupyter-playground.ipynb`
 - **Custom Agents:** Use agents in `.github/agents/` for AI-assisted development
