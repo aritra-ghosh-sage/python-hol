@@ -1,90 +1,10 @@
 # Hybrid RAG Caching System - Sequence Diagram
 
-**Document Version:** 1.1
-**Last Updated:** 2026-04-24
-
----
-
-## 0. Unified Cache Sequence Flow
-
-> Mirrors [`cache-sequence-flow.svg`](./cache-sequence-flow.svg) exactly — both HIT and MISS branches in a single diagram. Actor colours match the SVG palette.
-
-```mermaid
-%%{init: {
-  "theme": "base",
-  "themeVariables": {
-    "background":        "#ffffff",
-    "primaryColor":      "#f0fdf4",
-    "primaryBorderColor":"#4ade80",
-    "primaryTextColor":  "#1e293b",
-    "secondaryColor":    "#f5f3ff",
-    "secondaryBorderColor":"#a78bfa",
-    "tertiaryColor":     "#fef2f2",
-    "tertiaryBorderColor":"#f87171",
-    "noteBkgColor":      "#fffde7",
-    "noteBorderColor":   "#f9a825",
-    "noteTextColor":     "#b45309",
-    "sequenceNumberColor":"#ffffff",
-    "actorBkg":          "#ffffff",
-    "actorBorder":       "#94a3b8",
-    "actorTextColor":    "#1e293b",
-    "actorLineColor":    "#999999",
-    "signalColor":       "#334155",
-    "signalTextColor":   "#334155",
-    "loopTextColor":     "#475569",
-    "labelBoxBkgColor":  "#fffde7",
-    "labelBoxBorderColor":"#f9a825",
-    "labelTextColor":    "#b45309",
-    "activationBorderColor":"#64748b",
-    "activationBkgColor":"#f1f5f9"
-  }
-}}%%
-sequenceDiagram
-    %% Actor colour hints via classDef are not supported in sequenceDiagram;
-    %% colours above match the SVG palette as closely as Mermaid allows.
-    %%
-    %% SVG actor → colour
-    %%  User/Browser             stroke rgb(232,121,249)  fill rgb(253,244,255)
-    %%  WS /ws/chat              stroke rgb(45,212,191)   fill rgb(240,253,250)
-    %%  _shared_retrieve_docs    stroke rgb(74,222,128)   fill rgb(240,253,244)
-    %%  LazyCache/CacheBackend   stroke rgb(167,139,250)  fill rgb(245,243,255)
-    %%  HybridRetriever          stroke rgb(248,113,113)  fill rgb(254,242,242)
-    %%  L2 Embedding LRU         stroke rgb(250,204,21)   fill rgb(254,252,232)
-    %%  ChromaDB (persistent)    stroke rgb(129,140,248)  fill rgb(238,242,255)
-
-    actor  U   as User/Browser
-    participant WS  as WS /ws/chat
-    participant SR  as _shared_retrieve_documents
-    participant CB  as LazyCache / CacheBackend
-    participant R   as HybridRetriever
-    participant L2  as L2 Embedding LRU
-    participant V   as ChromaDB (persistent)
-
-    U->>WS: send_json {query, enable_rerank}
-    WS->>WS: validate, generate correlation_id
-    WS-->>U: {type: "status"}
-    WS->>SR: _shared_retrieve_documents(query, ...)
-    SR->>SR: normalize, build cache_key (SHA-256)
-    SR->>CB: lazy_cache.get(cache_key)
-
-    Note over SR,CB: Cache HIT path
-    CB-->>SR: cached results (HIT)
-    SR->>SR: _out_cache_status → "HIT"
-    SR-->>WS: return results
-    WS-->>U: {type:"results", cache_status:"HIT"}
-
-    Note over SR,CB: Cache MISS path
-    CB-->>SR: None (MISS)
-    SR->>SR: _out_cache_status → "MISS"
-    SR->>R: retrieve(query, enable_rerank)
-    R->>L2: _get_or_encode_embedding(query)
-    L2->>L2: SHA-256 key lookup
-    L2->>V: s11 encode via SentenceTransformer
-    V-->>L2: embedding vector
-    L2-->>R: embedding (cached in L2)
-    R->>V: ChromaDB.query(embedding, top_k)
-    V-->>R: semantic results
-    R->>R: BM25 keyword search + score fusion
+> Canonical Mermaid source: [`cache-sequence-flow.mmd`](./cache-sequence-flow.mmd)
+>
+> Rendered counterpart: [`cache-sequence-flow.svg`](./cache-sequence-flow.svg)
+>
+> This section intentionally references the standalone Mermaid source rather than duplicating it here, so the unified HIT/MISS flow has a single editable source of truth.
     R->>R: s12 cross-encoder rerank
     R->>R: source deduplication
     R-->>SR: return results

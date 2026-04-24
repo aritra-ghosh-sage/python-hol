@@ -54,7 +54,7 @@ Five-stage retrieval in `retriever.py`:
 
 Public API (17 exports) is defined in `__init__.py` with `__all__`. Configuration uses validated dataclasses (`config.py` with `__post_init__` validation, defaults from `constants.py`). See `main_example.py` and `hybrid_rag_flow.py` for library usage patterns.
 
-### Caching (`cache.py`, `api_middleware.py`)
+### Caching (`cache.py`)
 
 Three-layer design:
 - **L1** — Full query response cache (shared retrieval layer in `api.py`); backend switchable via `CACHE_BACKEND=memory|redis`
