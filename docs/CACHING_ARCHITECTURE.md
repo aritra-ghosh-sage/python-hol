@@ -1,7 +1,7 @@
 # Hybrid RAG — Caching Architecture Reference
 
-**Document Version:** 1.0  
-**Last Updated:** 2026-05-01  
+**Document Version:** 1.1
+**Last Updated:** 2026-04-24  
 **Task:** OPTB-013 Wave 7 documentation closeout  
 **Audience:** Operators, backend developers  
 **Applicable to:** Hybrid RAG v0.1.0+ (post-OPTB-008 layered stats schema)
@@ -12,8 +12,8 @@
 
 ## Table of Contents
 
-1. [Architecture Overview — Two-Layer, Two-Owner Model](#1-architecture-overview--two-layer-two-owner-model)
-2. [L1 Query Cache (Middleware Layer)](#2-l1-query-cache-middleware-layer)
+1. [Architecture Overview — Two-Layer Model](#1-architecture-overview--two-layer-model)
+2. [L1 Query Cache (Application Layer)](#2-l1-query-cache-application-layer)
 3. [L2 Embedding Cache (Retriever Layer)](#3-l2-embedding-cache-retriever-layer)
 4. [Cache Stats Schema — `GET /cache/stats`](#4-cache-stats-schema--get-cachestats)
    - 4.1 [`l1_query_cache`](#41-l1_query_cache-section)
@@ -31,26 +31,23 @@
 
 ---
 
-## 1. Architecture Overview — Two-Layer, Two-Owner Model
+## 1. Architecture Overview — Two-Layer Model
 
-Hybrid RAG implements a **two-layer caching system with distinct ownership boundaries**. Each layer is owned and operated by a different component, and neither layer has shared cache entries with the other.
+Hybrid RAG implements a **two-layer caching system with distinct ownership boundaries**. Each layer is owned and operated by a different component:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  HTTP Request  POST /retrieve                           │
+│  WebSocket Request: WS /ws/chat                         │
 │                                                         │
 │  ┌─────────────────────────────────────────────────┐   │
-│  │  L1: QueryCacheMiddleware  (api_middleware.py)  │   │
+│  │  L1: _shared_retrieve_documents  (api.py)       │   │
 │  │                                                 │   │
-│  │  • Owner:   HTTP middleware layer               │   │
-│  │  • Caches:  Full HTTP response bodies           │   │
+│  │  • Owner:   Application layer (retrieval facade)│   │
+│  │  • Caches:  Full query response results         │   │
 │  │  • Backends: InMemoryCache or RedisCache        │   │
-│  │  • Key:     Request JSON-derived cache key      │   │
-│  │              + enable_rerank                    │   │
-│  │  • Scope:   HTTP /retrieve only                 │   │
-│  │  • Note:    WebSocket bypasses this middleware; │   │
-│  │              shared retrieval caching happens   │   │
-│  │              via _shared_retrieve_documents     │   │
+│  │  • Key:     SHA-256 of (query + enable_rerank   │   │
+│  │              + config_fingerprint + corpus_ver) │   │
+│  │  • Scope:   WebSocket /ws/chat (primary path)   │   │
 │  └──────────────────┬──────────────────────────────┘   │
 │                     │ L1 MISS only                      │
 │  ┌──────────────────▼──────────────────────────────┐   │
@@ -73,30 +70,32 @@ Hybrid RAG implements a **two-layer caching system with distinct ownership bound
 
 | Layer | Name | Owner | Configurable Backend | Distributed? |
 |-------|------|-------|---------------------|--------------|
-| L1 | Query Cache | `QueryCacheMiddleware` in `api_middleware.py` | Yes (`memory` or `redis`) | Yes (via Redis) |
+| L1 | Query Cache | `_shared_retrieve_documents` in `api.py` | Yes (`memory` or `redis`) | Yes (via Redis) |
 | L2 | Embedding Cache | `HybridRetriever` in `hybrid_rag/retriever.py` | No | **Never** |
 | L3 | Vector Store | ChromaDB | N/A | Out of scope |
 
-> **Ownership note.** L1 and L2 are fully decoupled. A cache miss at L1 triggers retrieval at the application layer; L2 is consulted by the retriever regardless of L1 status. L2 is **not** a fallback for L1 — the two layers cache different things (responses vs. embeddings).
+> **Ownership note.** L1 and L2 are fully decoupled. A cache miss at L1 triggers retrieval; L2 is consulted by the retriever regardless of L1 status. L2 is **not** a fallback for L1 — the two layers cache different things (responses vs. embeddings).
 
 ---
 
-## 2. L1 Query Cache (Middleware Layer)
+## 2. L1 Query Cache (Application Layer)
 
-**Owner:** `QueryCacheMiddleware` (`api_middleware.py`)
+**Owner:** `_shared_retrieve_documents` (`api.py`)
 
-L1 caches **complete HTTP response bodies** for `POST /retrieve` requests. A cache hit short-circuits the entire retrieval pipeline — the retriever, reranker, and ChromaDB are never touched.
+L1 caches **complete query response results** for WebSocket `/ws/chat` requests. A cache hit short-circuits the entire retrieval pipeline — the retriever, reranker, and ChromaDB are never touched.
 
 ### Cache key identity
 
-The HTTP middleware (`QueryCacheMiddleware`) derives the L1 cache key from the request body:
+The `_shared_retrieve_documents` function derives the L1 cache key from four components:
 
-| Input | Source | Notes |
-|-------|--------|-------|
-| `query` (via body) | Request body, canonically serialised JSON | Equivalent queries (same normalised form) share a key |
-| `enable_rerank` | Extracted from request body | Requests with different rerank values are cached separately (ADR-002) |
+| Component | Source | Notes |
+|-----------|--------|-------|
+| `query` | Normalized query text | Equivalent queries (same normalized form) share a key |
+| `enable_rerank` | Per-request parameter | Requests with different rerank values are cached separately (ADR-002) |
+| `config_fingerprint` | SHA-256 of current `HybridRetrieverConfig` | Config changes invalidate all entries |
+| `corpus_version` | Module variable `_corpus_version` | Set at startup and updated on document ingest/config change |
 
-> **Shared retrieval facade key.** `_shared_retrieve_documents` in `api.py` — which handles application-layer caching for both HTTP and WebSocket paths — uses a richer key that also includes `config_fingerprint` (SHA-256 of `_config` retrieval fields) and `corpus_version` (`_corpus_version` module variable). REST `POST /retrieve` and WebSocket `/ws/chat` calls share the same application-layer cache entries via `_shared_retrieve_documents` (WebSocket bypasses the HTTP middleware entirely and goes through this facade). See `CACHE_DEPLOYMENT.md` §Cross-Channel Cache Architecture for details.
+The final L1 cache key is `SHA-256(JSON(shared_identity))` where `shared_identity` contains all four components above.
 
 ### Configurable backends
 
@@ -106,17 +105,6 @@ The HTTP middleware (`QueryCacheMiddleware`) derives the L1 cache key from the r
 | `RedisCache` | `hybrid_rag.cache.RedisCache` | Multi-instance production |
 
 Backend is selected at startup via `CACHE_BACKEND` environment variable. For deployment procedures and env-var reference see `CACHE_DEPLOYMENT.md`.
-
-### Eligibility gate
-
-The middleware only attempts to cache a request when all of the following are true:
-
-- HTTP method is `POST`
-- Path is exactly `/retrieve`
-- `Content-Type` is `application/json` or `application/*+json` (RFC 6839)
-- Path is **not** in `excluded_paths` (as currently configured: `/health`, `/config`, `/documents`, `/cache/stats`)
-
-All eligibility checks are header-only and occur before any request body I/O.
 
 ---
 
@@ -184,7 +172,7 @@ L2 always uses `cachetools.LRUCache` — an in-process, node-local LRU store. Th
 
 ### 4.1 `l1_query_cache` section
 
-Reports the state of the middleware-owned L1 query cache.
+Reports the state of the application-layer L1 query cache.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -322,39 +310,56 @@ Distributing embedding vectors would require serialising and deserialising numpy
 
 ---
 
-## 7. X-Cache Response Header Contract
+## 7. Cache Status Observability — WebSocket and Stats
 
-**Header name:** `X-Cache`  
-**Set by:** `QueryCacheMiddleware`  
-**Applicable to:** `POST /retrieve` responses only  
+### WebSocket `cache_status` field
+
+**Sent by:** `WS /ws/chat` endpoint via `_shared_retrieve_documents`  
+**Included in:** Final results message
 
 | Value | Meaning |
 |-------|---------|
 | `HIT` | Response was served directly from L1 cache. Retriever was not called. |
 | `MISS` | Response was computed fresh (retriever was called) and has been stored in L1 cache. |
-| `ERROR` | Response status is non-200 (response not cached). |
+| `ERROR` | Cache backend operation failed; retrieval proceeded without cache benefit. |
 
-**Current implementation note:** Cache backend exceptions during L1 get/set are logged and reflected in cache health/stat counters, but they do **not** currently change the response header to `X-Cache: ERROR`; successful fallback responses still return `X-Cache: MISS`.
-**Paths where `X-Cache` is NOT set:** `GET` requests and all excluded paths (`/health`, `/config`, `/documents`, `/cache/stats`).
+**Implementation note:** Cache backend exceptions during L1 get/set are logged and reflected in cache health/stat counters. Retrieval continues normally (fail-open), and `cache_status: "ERROR"` is reported to the client.
 
-**WebSocket (`/ws/chat`):** Cache activity is reflected in `GET /cache/stats` counters (both transports share the same cache backend), but the WebSocket message schema does not include a cache-status field. `X-Cache` is an HTTP-only header.
-
-### Usage example
+### Usage example — WebSocket
 
 ```bash
-# First request — MISS (response computed and cached)
-curl -i -X POST http://localhost:8000/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query": "How do I enable offline maps?"}' \
-  | grep X-Cache
-# X-Cache: MISS
+# Connect and send a query
+websocat ws://localhost:8000/ws/chat
 
-# Second request — HIT (served from cache)
-curl -i -X POST http://localhost:8000/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query": "How do I enable offline maps?"}' \
-  | grep X-Cache
-# X-Cache: HIT
+# First request — MISS (response computed and cached)
+{"query": "How do I enable offline maps?"}
+
+# Server responds:
+# {"type": "status", "message": "Retrieving documents..."}
+# {"type": "results", "query": "...", "results": [...], "cache_status": "MISS"}
+
+# Second identical request — HIT (served from cache)
+{"query": "How do I enable offline maps?"}
+
+# Server responds:
+# {"type": "status", "message": "Retrieving documents..."}
+# {"type": "results", "query": "...", "results": [...], "cache_status": "HIT"}
+```
+
+### Cache observability via stats endpoint
+
+Cache activity for all requests is reflected in `GET /cache/stats`:
+
+```bash
+curl http://localhost:8000/cache/stats | jq .l1_query_cache
+# {
+#   "backend": "redis",
+#   "hits": 142,
+#   "misses": 58,
+#   "hit_rate": 0.71,
+#   "size": 87,
+#   ...
+# }
 ```
 
 ---
@@ -363,7 +368,7 @@ curl -i -X POST http://localhost:8000/retrieve \
 
 ### Principle
 
-**Cache failures never propagate to API consumers.** `POST /retrieve` always returns `HTTP 200` even when the cache backend is unreachable or faulting. The cache is a performance optimisation; it is never on the critical path for correctness.
+**Cache failures never propagate to API consumers.** WebSocket `/ws/chat` requests always return results even when the cache backend is unreachable or faulting. The cache is a performance optimisation; it is never on the critical path for correctness.
 
 ### What "fallback" means
 
@@ -530,18 +535,17 @@ This decision **does not block rollout**.
 
 | Endpoint | Cache interaction |
 |----------|------------------|
-| `POST /retrieve` | L1 checked (middleware). On miss, L2 checked (retriever). `X-Cache` header set. |
-| `WS /ws/chat` | Shares L1 cache entries with `POST /retrieve`. No `X-Cache` header on WS messages. |
+| `WS /ws/chat` | L1 checked in `_shared_retrieve_documents`. On miss, L2 checked (retriever). `cache_status` field in response. |
 | `GET /cache/stats` | Returns current L1 + L2 stats and backend health. Not cached. |
 | `PUT /config` | Triggers full L1 clear + `corpus_version` increment on success. |
-| `POST /documents` with JSON body `{"ingest_type":"update"}` | Triggers full L1 clear + `corpus_version` increment. |
-| `POST /documents` with JSON body `{"ingest_type":"add"}` | Preserves L1 cache (eventual consistency until TTL). |
+| `POST /documents` with `ingest_type=update` | Triggers full L1 clear + `corpus_version` increment. |
+| `POST /documents` with `ingest_type=add` | Preserves L1 cache (eventual consistency until TTL). |
 
 ### Key behavioural guarantees
 
 | Guarantee | Detail |
 |-----------|--------|
-| **Fail-open** | Cache errors never produce HTTP 5xx. `POST /retrieve` always returns 200. |
+| **Fail-open** | Cache errors never block retrieval. WebSocket requests always return results, with `cache_status: "ERROR"` if backend failed. |
 | **Transport parity** | REST and WebSocket share L1 cache entries. |
 | **L2 always local** | L2 is in-process, never distributed, regardless of `CACHE_BACKEND`. |
 | **Thread safety** | L2 LRU access is guarded by `threading.Lock` within `HybridRetriever`. |
