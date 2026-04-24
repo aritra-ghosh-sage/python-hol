@@ -5,7 +5,11 @@ import { apiClient } from "@/lib/api";
 import { DocumentIngestionRequest } from "@/lib/types";
 import { Upload } from "lucide-react";
 
-export function FileUpload() {
+interface FileUploadProps {
+  onDataAdded?: () => void;
+}
+
+export function FileUpload({ onDataAdded }: FileUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [label, setLabel] = useState("");
@@ -48,6 +52,7 @@ export function FileUpload() {
     try {
       // Read file and convert to base64
       const reader = new FileReader();
+
       reader.onload = async (event) => {
         const base64Content = (event.target?.result as string).split(",")[1];
 
@@ -69,6 +74,7 @@ export function FileUpload() {
           if (fileInputRef.current) {
             fileInputRef.current.value = "";
           }
+          onDataAdded?.();
         } catch (error) {
           setMessage({
             type: "error",
@@ -78,6 +84,22 @@ export function FileUpload() {
         } finally {
           setIsLoading(false);
         }
+      };
+
+      reader.onerror = () => {
+        setMessage({
+          type: "error",
+          text: "Failed to read file",
+        });
+        setIsLoading(false);
+      };
+
+      reader.onabort = () => {
+        setMessage({
+          type: "error",
+          text: "File reading was aborted",
+        });
+        setIsLoading(false);
       };
 
       reader.readAsDataURL(selectedFile);

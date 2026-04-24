@@ -3,8 +3,13 @@
 import { useState } from "react";
 import { apiClient } from "@/lib/api";
 import { DocumentIngestionRequest } from "@/lib/types";
+import { isValidUrl } from "@/lib/url-utils";
 
-export function UrlInput() {
+interface UrlInputProps {
+  onDataAdded?: () => void;
+}
+
+export function UrlInput({ onDataAdded }: UrlInputProps) {
   const [url, setUrl] = useState("");
   const [label, setLabel] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -12,15 +17,6 @@ export function UrlInput() {
     type: "success" | "error";
     text: string;
   } | null>(null);
-
-  const isValidUrl = (str: string) => {
-    try {
-      new URL(str);
-      return true;
-    } catch {
-      return false;
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,6 +42,7 @@ export function UrlInput() {
       });
       setUrl("");
       setLabel("");
+      onDataAdded?.();
     } catch (error) {
       setMessage({
         type: "error",
