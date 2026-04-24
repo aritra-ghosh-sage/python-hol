@@ -1444,14 +1444,18 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
         elif request.source_type == "url":
             logger.info(f"Fetching content from URL: {request.content}")
             try:
-                response = requests.get(request.content, timeout=10)
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                }
+                response = requests.get(request.content, headers=headers, timeout=10)
                 response.raise_for_status()
                 text_content = response.text
                 source_label = request.source_label or request.content
             except requests.RequestException as e:
                 logger.error(f"Failed to fetch URL: {e}")
                 raise HTTPException(
-                    status_code=400, detail=f"Failed to fetch URL: {str(e)}"
+                    status_code=502, detail=f"Failed to fetch URL: {str(e)}"
                 )
 
         elif request.source_type == "file":
