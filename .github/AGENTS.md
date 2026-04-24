@@ -1,232 +1,148 @@
 # AI Agents Guide - Hybrid RAG Project
 
-This document provides an overview of available AI agents and tools for development assistance in the Hybrid RAG project.
+This guide reflects the current agent catalog, documentation layout, and operational commands for this repository.
 
 ## Available AI Agents
 
-The project includes custom AI agents in `.github/agents/` for specialized development tasks:
+All custom agents live in `.github/agents/`.
 
-### Core Development Agents
+### Planning and Orchestration
 
-- **explore-hybrid-rag.agent.md** - Architecture explorer
-  - Understand library design and structure
-  - Review caching architecture
-  - Analyze code patterns
+- **gem-orchestrator.agent.md**: Multi-step orchestration and execution flow control
+- **gem-planner.agent.md**: DAG-based task decomposition and dependency planning
+- **gem-researcher.agent.md**: Clarification and focused codebase research
 
-- **gem-planner.agent.md** - DAG-based task planning
-  - Break down complex features into steps
-  - Identify task dependencies
-  - Plan implementation sequences
+### Implementation and Debugging
 
-- **gem-implementer.agent.md** - TDD-focused implementation
-  - Write tests before code
-  - Red-Green-Refactor workflow
-  - Deliver working implementations
+- **gem-implementer.agent.md**: TDD-first implementation of backend/frontend tasks
+- **gem-implementer-mobile.agent.md**: Mobile-focused implementation tasks
+- **gem-debugger.agent.md**: Root-cause analysis and minimal fix proposals
+- **gem-code-simplifier.agent.md**: Refactoring for reduced complexity without behavior drift
 
-- **gem-critic.agent.md** - Challenge and validate
-  - Find edge cases and potential bugs
-  - Question design assumptions
-  - Suggest improvements
+### Review and Quality
 
-- **gem-reviewer.agent.md** - Security auditing
-  - Review code for security issues
-  - Check OWASP compliance
-  - Validate error handling
+- **gem-reviewer.agent.md**: Security/compliance review (including OWASP-focused checks)
+- **gem-critic.agent.md**: Edge-case and assumption challenge
+- **qa-subagent.agent.md**: QA validation and test gap analysis
+- **gem-browser-tester.agent.md**: Browser E2E flow validation
+- **gem-mobile-tester.agent.md**: Mobile E2E validation
 
-### Specialized Agents
+### Architecture and Documentation
 
-- **principal-software-engineer.agent.md** - Principal-level guidance
-  - Architecture review and advice
-  - Best practices and standards
-  - Design validation
+- **explore-hybrid-rag.agent.md**: Hybrid RAG architecture exploration and explanation
+- **arch.agent.md**: Architecture design and review support
+- **adr-generator.agent.md**: ADR drafting support
+- **gem-documentation-writer.agent.md**: Developer-facing documentation updates
+- **prd.agent.md**: Product requirement drafting support
 
-- **qa-subagent.agent.md** - Quality assurance
-  - Comprehensive testing strategies
-  - Edge case identification
-  - Test coverage analysis
+### Design
 
-- **adr-generator.agent.md** - Architecture Decision Records
-  - Document design decisions
-  - Create ADR templates
-  - Maintain architecture history
+- **gem-designer.agent.md**: Web UI/UX design guidance
+- **gem-designer-mobile.agent.md**: Mobile UX and interaction guidance
 
-- **se-system-architecture-reviewer.agent.md** - Architecture validation
-  - Review system design
-  - Validate scalability
-  - Check design patterns
+## Documentation Map
 
-## Caching Documentation
+### Primary Project Docs
 
-### Getting Started with Caching
+- [../README.md](../README.md): Project overview and high-level usage
+- [../docs/QUICK_START.md](../docs/QUICK_START.md): Fast setup and first-run workflow
+- [../docs/LIBRARY_DESIGN.md](../docs/LIBRARY_DESIGN.md): Backend architecture and module relationships
+- [../docs/API_INTEGRATION.md](../docs/API_INTEGRATION.md): API contracts and integration guidance
 
-**Quick Reference:**
-- Out-of-the-box caching: In-memory cache enabled by default
-- Configuration: Set `CACHE_BACKEND=memory` (dev) or `redis` (prod)
-- Monitoring: Call `GET /cache/stats` endpoint to view hit rates
+### Caching and Runtime Behavior
 
-**Configuration File:**
-- `.env.local.example` - Complete cache configuration with comments
-- `CACHE_BACKEND`: Backend selection (memory/redis)
-- `REDIS_URL`: Redis connection string (if using Redis)
-- `CACHE_TTL_SECONDS`: Cache expiration time
-- `CACHE_MAX_SIZE`: Maximum in-memory cache entries
+- [../docs/CACHING_ARCHITECTURE.md](../docs/CACHING_ARCHITECTURE.md): Detailed cache-layer architecture
+- [../docs/CACHE_DEPLOYMENT.md](../docs/CACHE_DEPLOYMENT.md): Production cache deployment guidance
+- [../docs/CACHE_PERF_REPORT.md](../docs/CACHE_PERF_REPORT.md): Cache benchmark and performance analysis
+- [../docs/HTTP_ENDPOINT_ALLOWLIST.md](../docs/HTTP_ENDPOINT_ALLOWLIST.md): Endpoint allowlist guidance
 
-### Key Documentation Files
+### Testing and Planning
 
-| Document | Purpose | Audience |
-|----------|---------|----------|
-| [README.md](../README.md#-caching-layer) | Caching overview and quick start | All users |
-| [docs/QUICK_START.md](../docs/QUICK_START.md#configuring-cache) | Cache configuration tutorial | New users |
-| [docs/CACHE_DEPLOYMENT.md](../docs/CACHE_DEPLOYMENT.md) | Advanced production setup | DevOps/SRE |
-| [docs/CACHE_PERF_REPORT.md](../docs/CACHE_PERF_REPORT.md) | Performance benchmarks | Architecture |
+- [../docs/E2E_TESTS_SUMMARY.md](../docs/E2E_TESTS_SUMMARY.md): End-to-end test status and notes
+- [../docs/PRODUCT_PRD.md](../docs/PRODUCT_PRD.md): Product requirement baseline
+- [../docs/plan/](../docs/plan/): Planning artifacts
+- [../docs/diagrams/](../docs/diagrams/): Architecture and flow diagrams
 
-### Architecture Layers
+### Frontend-Specific Docs
 
-The system implements a 3-layer caching architecture:
+- [../frontend/AGENTS.md](../frontend/AGENTS.md): Frontend agent usage and guardrails
+- [../frontend/SETUP.md](../frontend/SETUP.md): Frontend setup details
+- [../frontend/README.md](../frontend/README.md): Frontend module overview
 
-```
-L1: Response Cache (FastAPI Middleware)
-    ↓ Intercepts POST /retrieve
-    ↓ Caches full query responses
+## Caching Quick Reference
 
-L2: Embedding Cache (LRU in HybridRetriever)
-    ↓ Caches embedding computations
-    ↓ ~60% hit rate on repeated queries
+- Default backend: `memory`
+- Production backend: `redis`
+- Key endpoint: `GET /cache/stats`
 
-L3: Vector Storage (ChromaDB)
-    ↓ Persistent document vector store
-```
+Configuration variables:
 
-### Common Tasks
+- `CACHE_BACKEND` (`memory` or `redis`)
+- `REDIS_URL` (required when `CACHE_BACKEND=redis`)
+- `CACHE_TTL_SECONDS`
+- `CACHE_MAX_SIZE`
+- `CACHE_KEY_PREFIX`
 
-#### Enable Redis Caching (Production)
+## Common Commands
+
+### Backend
+
 ```bash
-# 1. Update .env.local
+# from repository root
+source .venv/bin/activate
+uv sync
+
+# run API
+uvicorn api:app --reload
+# or
+python api.py
+
+# run tests
+pytest tests/ -v
+```
+
+### Frontend
+
+```bash
+cd frontend
+pnpm install
+pnpm dev
+pnpm build
+pnpm lint
+pnpm test:unit
+```
+
+### Cache Operations
+
+```bash
+# switch to redis cache
 export CACHE_BACKEND=redis
 export REDIS_URL=redis://localhost:6379/0
 
-# 2. Start API
-python api.py
-
-# 3. Monitor cache
-curl http://localhost:8000/cache/stats
+# inspect cache stats
+curl -s http://localhost:8000/cache/stats | jq
 ```
 
-#### Monitor Cache Performance
-```bash
-# View cache statistics
-curl http://localhost:8000/cache/stats | jq
+## Recommended Agent Workflow
 
-# Expected response includes hit_rate, size, backend
-```
+For feature delivery:
 
-#### Bulk Document Ingestion (Preserve Cache)
-```bash
-# Add documents without clearing cache
-curl -X POST http://localhost:8000/documents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ingest_type": "add",
-    "source_type": "text",
-    "content": "Document content..."
-  }'
-```
+1. Use `gem-researcher.agent.md` or `explore-hybrid-rag.agent.md` to gather context.
+2. Use `gem-planner.agent.md` for implementation planning.
+3. Use `gem-implementer.agent.md` (or mobile variant) for TDD execution.
+4. Use `gem-critic.agent.md` for edge cases and design pressure testing.
+5. Use `gem-reviewer.agent.md` plus `qa-subagent.agent.md` for security and quality verification.
+6. Use `gem-documentation-writer.agent.md` or `adr-generator.agent.md` for artifacts.
 
-#### Configure Cache Expiration
-```bash
-# Set TTL to 30 minutes (1800 seconds)
-export CACHE_TTL_SECONDS=1800
+## Related Governance and Standards
 
-# Set TTL to 1 hour (default)
-export CACHE_TTL_SECONDS=3600
-```
-
-## Using Agents in Your Development
-
-### Example: Planning a Feature
-
-1. Use **gem-planner.agent.md** to break down the feature into tasks
-2. Use **gem-implementer.agent.md** to write implementation with tests
-3. Use **gem-critic.agent.md** to find edge cases
-4. Use **gem-reviewer.agent.md** to check security
-5. Use **principal-software-engineer.agent.md** for final architectural review
-
-### Example: Adding Cache Configuration
-
-1. **Understand current design**: Use explore-hybrid-rag.agent.md
-2. **Create implementation plan**: Use gem-planner.agent.md
-3. **Implement with tests**: Use gem-implementer.agent.md
-4. **Security review**: Use gem-reviewer.agent.md
-5. **Document decision**: Use adr-generator.agent.md
-
-## Cache-Related Commands
-
-### Development Setup
-
-```bash
-# Clone and setup
-git clone <repo>
-cd python-hol
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-# Copy environment template
-cp .env.local.example .env.local
-
-# Run with default in-memory cache
-python api.py
-```
-
-### Testing Cache
-
-```bash
-# Run cache-specific tests
-pytest tests/test_cache.py -v
-
-# Test with cache statistics
-python -c "
-import requests
-resp = requests.get('http://localhost:8000/cache/stats')
-print(resp.json())
-"
-
-# Benchmark cache performance
-python /tmp/cache_benchmark.py
-```
-
-### Production Deployment
-
-```bash
-# With Redis
-export CACHE_BACKEND=redis
-export REDIS_URL=redis://prod-cache:6379/0
-export CACHE_TTL_SECONDS=1800
-python api.py
-
-# Monitor
-watch -n 5 'curl -s http://localhost:8000/cache/stats | jq'
-```
-
-## Further Reading
-
-- **Hybrid RAG Architecture**: See [docs/LIBRARY_DESIGN.md](../docs/LIBRARY_DESIGN.md)
-- **API Integration**: See [docs/API_INTEGRATION.md](../docs/API_INTEGRATION.md)
-- **Performance Analysis**: See [docs/CACHE_PERF_REPORT.md](../docs/CACHE_PERF_REPORT.md)
-- **Security**: Check `.github/instructions/security-and-owasp.instructions.md`
-
-## Contributing
-
-When adding new features or fixes:
-
-1. Reference relevant agents in `.github/agents/` for guidance
-2. Update documentation (README.md, QUICK_START.md, etc.)
-3. Add cache configuration notes if applicable
-4. Link to CACHE_DEPLOYMENT.md for advanced features
-5. Update this file if adding new agents or cache documentation
+- [./instructions/security-and-owasp.instructions.md](./instructions/security-and-owasp.instructions.md)
+- [./instructions/performance-optimization.instructions.md](./instructions/performance-optimization.instructions.md)
+- [./instructions/agent-safety.instructions.md](./instructions/agent-safety.instructions.md)
+- [./copilot-instructions.md](./copilot-instructions.md)
 
 ---
 
-**Last Updated**: April 20, 2026  
+**Last Updated**: April 24, 2026  
 **Maintained By**: Development Team  
-**Cache System Version**: v0.1.0 (Blueprint Phase)
+**Cache System Version**: v0.1.0
