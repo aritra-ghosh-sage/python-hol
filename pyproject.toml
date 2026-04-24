@@ -42,6 +42,3 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-setup_timeout = 5.5
-execution-timeout = 15
-teardown-timeout = 0
