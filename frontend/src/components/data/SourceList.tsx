@@ -43,13 +43,14 @@ export function SourceList({ refreshTrigger }: SourceListProps) {
     );
   }
 
-  const totalDocuments = sources.length;
+  const totalSources = sources.length;
+  const totalChunks = sources.reduce((sum, source) => sum + source.count, 0);
 
   return (
     <span className="text-sm text-gray-300">
-      {totalDocuments === 0
+      {totalSources === 0
         ? "No sources ingested yet"
-        : `${totalDocuments} ${totalDocuments === 1 ? "document" : "documents"} ingested`}
+        : `${totalSources} ${totalSources === 1 ? "source" : "sources"} (${totalChunks} ${totalChunks === 1 ? "chunk" : "chunks"})`}
     </span>
   );
 }
