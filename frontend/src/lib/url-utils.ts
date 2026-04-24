@@ -27,14 +27,14 @@
  * isValidUrl("javascript:alert('xss')") // false (security protection)
  */
 export function isValidUrl(str: string): boolean {
-  if (!str || typeof str !== 'string') {
+  if (!str || typeof str !== "string") {
     return false;
   }
 
   try {
     const url = new URL(str);
-    // Only accept http and https protocols to prevent XSS and other attacks
-    return url.protocol === 'http:' || url.protocol === 'https:';
+    // Only accept http and https protocols
+    return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     // URL constructor throws if the string is not a valid URL
     return false;
