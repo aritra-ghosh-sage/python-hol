@@ -68,27 +68,50 @@ class _FakeCollection:
     """Minimal collection double satisfying _build_corpus_version_token() and add_documents.
 
     Note 5: The leading underscore signals that this class is module-private.
-    Python does not enforce this, but it communicates intent to other developers
-    reading the file.
 
     The count is now stateful: it starts at 5 (matching the "gen0.n5"
     corpus_version token used by most tests) and is incremented by add() so
     that _build_corpus_version_token() returns a genuinely different token
-    after each ingest-add operation.  Without this, prev_version and
-    new_version in the invalidation log would be identical, which would let
-    the AC-1 ingest-add assertion pass vacuously.
+    after each ingest-add operation.
+
+    get() and delete() are required by the source-existence detection logic in
+    add_documents.  Returning empty ids from get() means every ingest is treated
+    as a new source (add path, no cache clear), which is the correct default for
+    observability tests that are not testing the update/delete path.
     """
 
     def __init__(self) -> None:
-        # Start at 5 so _build_corpus_version_token() returns "gen0.n5" —
-        # matching the corpus_version= "gen0.n5" default in _patch_standard_app.
         self._count: int = 5
+        # _store maps source_label -> list of chunk ids; used by get() and delete().
+        self._store: Dict[str, List[str]] = {}
 
     def count(self) -> int:  # noqa: D102
-        # Note 6: noqa: D102 silences the "Missing docstring in public method"
-        # linter warning for this one-liner helper. It keeps test files concise
-        # without disabling linting globally.
         return self._count
+
+    def get(
+        self,
+        where: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+        include: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Return matching ids for simple source equality where-clauses."""
+        ids: List[str] = []
+        if where:
+            source = where.get("source")
+            if source is not None:
+                ids = self._store.get(source, [])
+        if limit is not None:
+            ids = ids[:limit]
+        return {"ids": ids}
+
+    def delete(self, ids: List[str]) -> None:
+        """Remove chunks by id and adjust count."""
+        id_set = set(ids)
+        self._store = {
+            src: [i for i in chunk_ids if i not in id_set]
+            for src, chunk_ids in self._store.items()
+        }
+        self._count -= len(ids)
 
     def add(
         self,
@@ -96,15 +119,7 @@ class _FakeCollection:
         documents: List[str],
         metadatas: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        """Simulate document addition by incrementing the tracked count.
-
-        WHY: _build_corpus_version_token() calls collection.count() to derive
-        the corpus_version token.  A no-op add() would leave the count
-        unchanged, making prev_version == new_version and the ingest-add
-        invalidation log impossible to distinguish from a no-op.  Incrementing
-        by len(ids) mirrors what a real ChromaDB collection does.
-        """
-        # Each id corresponds to one document chunk stored in the collection.
+        """Simulate document addition by incrementing the tracked count."""
         self._count += len(ids)
 
 
@@ -321,21 +336,37 @@ class TestAC1InvalidationLogs:
     def test_ingest_update_logs_prev_and_new_corpus_version(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """POST /documents with ingest_type=update must log old and new versions.
+        """POST /documents re-ingesting an existing source must log old and new versions.
 
-        WHY: ingest_type=update bumps _cache_generation; the log must record
-        both the pre-ingest and post-ingest corpus_version tokens so operators
+        WHY: Re-ingesting an existing source bumps _cache_generation; the log must
+        record both the pre-ingest and post-ingest corpus_version tokens so operators
         can confirm the invalidation event is tied to the ingest operation.
         """
-        client = _patch_standard_app(monkeypatch, corpus_version="gen1.n5")
+        # Pre-populate the fake collection so the backend detects the source as
+        # existing and follows the 'update' path (generation bump + cache clear).
+        retriever = _FakeRetriever()
+        retriever.collection._count = 5
+        # Seed the store with a pre-existing chunk for the ingested source.
+        retriever.collection._store = {"existing-doc": ["existing-doc_0"]}  # type: ignore[attr-defined]
+        monkeypatch.setattr(api, "_retriever", retriever)
+        monkeypatch.setattr(
+            api,
+            "_config",
+            HybridRetrieverConfig(semantic_weight=0.7, keyword_weight=0.3),
+        )
+        monkeypatch.setattr(api, "_corpus_version", "gen1.n5")
+        monkeypatch.setattr(api, "_cache_generation", 0)
+        monkeypatch.setattr(api, "_cache", InMemoryCache())
+        monkeypatch.setattr(api, "_last_fallback_state", None)
+        client = TestClient(api.app)
 
         with caplog.at_level(logging.INFO, logger="api"):
             response = client.post(
                 "/documents",
                 json={
                     "source_type": "text",
-                    "content": "New document added via ingest-update",
-                    "ingest_type": "update",
+                    "content": "Re-ingested document",
+                    "source_label": "existing-doc",
                 },
             )
 
@@ -345,7 +376,7 @@ class TestAC1InvalidationLogs:
             r.message for r in caplog.records if "cache.invalidation" in r.message
         ]
         assert invalidation_logs, (
-            "Expected 'cache.invalidation' log after ingest_type=update. "
+            "Expected 'cache.invalidation' log after re-ingesting existing source. "
             f"All logs: {[r.message for r in caplog.records]}"
         )
         combined = " ".join(invalidation_logs)
@@ -355,9 +386,9 @@ class TestAC1InvalidationLogs:
     def test_ingest_add_logs_corpus_version_transition(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """POST /documents with ingest_type=add must log version transition.
+        """POST /documents ingesting a new source must log version transition.
 
-        WHY: ingest_type=add does NOT bump _cache_generation but DOES rebuild
+        WHY: A new source does NOT bump _cache_generation but DOES rebuild
         _corpus_version using the updated collection count dimension.  Operators
         must be able to confirm the token changed (corpus grew) without seeing a
         generation bump — the log must distinguish the two paths.
@@ -370,7 +401,7 @@ class TestAC1InvalidationLogs:
                 json={
                     "source_type": "text",
                     "content": "Additive ingest — no cache clear",
-                    "ingest_type": "add",
+                    "source_label": "brand-new-source",
                 },
             )
 
@@ -380,16 +411,13 @@ class TestAC1InvalidationLogs:
             r.message for r in caplog.records if "cache.invalidation" in r.message
         ]
         assert invalidation_logs, (
-            "Expected 'cache.invalidation' log after ingest_type=add. "
+            "Expected 'cache.invalidation' log after ingesting new source. "
             f"All logs: {[r.message for r in caplog.records]}"
         )
         combined = " ".join(invalidation_logs)
         assert "prev_version=" in combined
         assert "new_version=" in combined
 
-        # Extract tokens and verify they differ — if the fake collection does
-        # not track count, _build_corpus_version_token() returns the same value
-        # for both and the log would be misleading.
         log_line = invalidation_logs[0]
         prev_token = ""
         new_token = ""
@@ -401,7 +429,7 @@ class TestAC1InvalidationLogs:
 
         assert prev_token != new_token, (
             f"prev_version '{prev_token}' must differ from new_version '{new_token}' "
-            "after ingest_type=add (the collection count dimension must change)."
+            "after ingesting a new source (the collection count dimension must change)."
         )
 
 

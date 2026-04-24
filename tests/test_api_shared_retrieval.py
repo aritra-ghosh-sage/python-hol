@@ -48,9 +48,51 @@ class FakeCollection:
     def __init__(self, count_value: int = 1) -> None:
         self._count_value = count_value
         self.add_calls = 0
+        # _store maps source_label -> list of chunk ids for get()/delete() support.
+        self._store: Dict[str, List[str]] = {}
 
     def count(self) -> int:
         return self._count_value
+
+    def get(
+        self,
+        where: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+        include: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Return matching chunk ids for simple source equality where-clauses.
+
+        Args:
+            where: Equality filter dict.  Supports ``{"source": label}`` only.
+            limit: Maximum number of ids to return.
+            include: Ignored; present for ChromaDB API compatibility.
+
+        Returns:
+            Dict with key ``"ids"`` containing the matched chunk id list.
+
+        Note:
+            ``source_url`` queries return empty because this fake does not track URL
+            metadata per chunk — returning all ids would cause false-positive
+            existence matches on the update path.
+        """
+        ids: List[str] = []
+        if where:
+            source = where.get("source")
+            if source is not None:
+                ids = self._store.get(source, [])
+            # source_url queries intentionally return [] — URL metadata is not
+            # stored in this fake, so we cannot filter meaningfully.
+        if limit is not None:
+            ids = ids[:limit]
+        return {"ids": ids}
+
+    def delete(self, ids: List[str]) -> None:
+        id_set = set(ids)
+        self._store = {
+            src: [i for i in chunk_ids if i not in id_set]
+            for src, chunk_ids in self._store.items()
+        }
+        self._count_value -= len(ids)
 
     def add(
         self,
@@ -59,6 +101,9 @@ class FakeCollection:
         metadatas: List[Dict[str, Any]],
     ) -> None:
         self.add_calls += 1
+        for chunk_id, meta in zip(ids, metadatas):
+            src = meta.get("source", "unknown")
+            self._store.setdefault(src, []).append(chunk_id)
         self._count_value += len(ids)
 
 
@@ -221,34 +266,33 @@ async def test_parity_config_update_invalidates_shared_cache_for_rest_and_ws(
 async def test_parity_ingest_add_bumps_version_and_update_also_invalidates(
     parity_harness: FakeRetriever,
 ) -> None:
-    """ingest_type add bumps corpus_version (WS miss); update clears cache and bumps again.
+    """New-source ingest bumps corpus_version (WS miss); re-ingest clears cache and bumps again.
 
-    WHY: When 'add' ingests new documents, the collection count changes which means
-    _build_corpus_version_token() returns a new token.  Subsequent WS queries built
-    against the new token will be cache misses.  'update' additionally clears the
-    L1 cache giving the same guarantee with even stronger consistency.
+    WHY: When a new source is ingested the collection count changes, producing a
+    new corpus_version token.  Subsequent WS queries use the new token → cache miss.
+    Re-ingesting the same source (update path) additionally clears the L1 cache,
+    giving the same guarantee with even stronger consistency.
 
     Expected retriever call counts:
       1 -- initial WS query (cold miss)
-      2 -- WS query after 'add' (corpus_version changed -> new cache key -> miss)
-      3 -- WS query after 'update' (corpus_version changed again + cache cleared -> miss)
+      2 -- WS query after new-source ingest (corpus_version changed -> new cache key -> miss)
+      3 -- WS query after same-source re-ingest (version changed again + cache cleared -> miss)
     """
 
     ws1 = FakeWebSocket(incoming_messages=[{"query": "ingest parity", "enable_rerank": False}])
     await api.websocket_chat(ws1)
     assert len(parity_harness.calls) == 1
 
+    # First ingest: brand-new source → add path, corpus_version bumps on count dimension.
     add_response = await api.add_documents(
         api.DocumentIngestionRequest(
             source_type="text",
             content="new document content",
-            source_label="parity-add",
-            ingest_type="add",
+            source_label="parity-source",
         )
     )
     assert add_response.status == "success"
 
-    # After 'add' the corpus_version token has changed (collection count grew).
     version_after_add = api._corpus_version
     assert version_after_add.startswith("gen"), (
         f"corpus_version after add should start with 'gen', got: {version_after_add!r}"
@@ -263,19 +307,20 @@ async def test_parity_ingest_add_bumps_version_and_update_also_invalidates(
     await api.websocket_chat(ws_after_add)
     assert len(parity_harness.calls) == 2
 
+    # Second ingest: same source label → update path (generation bump + cache clear).
     update_response = await api.add_documents(
         api.DocumentIngestionRequest(
             source_type="text",
             content="replacement content",
-            source_label="parity-update",
-            ingest_type="update",
+            source_label="parity-source",  # same label → detected as existing → update
         )
     )
     assert update_response.status == "success"
 
     version_after_update = api._corpus_version
     assert version_after_update != version_after_add, (
-        f"corpus_version must change after 'update', was {version_after_add!r} -> {version_after_update!r}"
+        f"corpus_version must change after re-ingesting existing source, "
+        f"was {version_after_add!r} -> {version_after_update!r}"
     )
 
     ws_after_update = FakeWebSocket(

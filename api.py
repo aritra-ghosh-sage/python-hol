@@ -152,15 +152,19 @@ class ConfigUpdateRequest(BaseModel):
 
 class DocumentIngestionRequest(BaseModel):
     """Request model for adding custom documents.
-    
+
     Attributes:
         source_type: Type of data source: 'text', 'url', or 'file'.
         content: Text content, URL, or base64-encoded file.
         filename: Original filename for file uploads.
         source_label: User-friendly label for the data source.
-        ingest_type: Type of ingest operation: 'add' or 'update'.
-            - 'add': Preserve existing cache (for bulk additions)
-            - 'update': Clear cache after ingestion (default for backwards compatibility)
+        ingest_type: Optional override for the ingest operation type.
+            When omitted (the default), the backend derives whether this is an
+            'add' (new source) or 'update' (existing source) by querying the
+            vector collection.  Providing this field explicitly bypasses the
+            derivation and honours the caller's intent:
+            - 'add': treat as new source, preserve existing cache entries.
+            - 'update': treat as a re-ingest, delete stale chunks and clear cache.
     """
 
     source_type: Literal["text", "url", "file"] = Field(
@@ -177,7 +181,10 @@ class DocumentIngestionRequest(BaseModel):
     )
     ingest_type: Literal["add", "update"] = Field(
         default="update",
-        description="Ingest type: 'add' preserves cache, 'update' clears cache"
+        description=(
+            "Ingest type override.  Omit to let the backend derive add/update from "
+            "the collection state.  Provide explicitly to force a specific path."
+        ),
     )
 
 
@@ -1433,13 +1440,21 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
 
     try:
         text_content = ""
-        source_label = request.source_label or request.source_type
+        # source_label is resolved per source_type branch below when not explicitly provided.
+        source_label = request.source_label
 
         # Log ingest type (ADR-003 - Fix for blocking issue #3)
         logger.info(f"Ingest type: {request.ingest_type}; cache {'will be cleared' if request.ingest_type == 'update' else 'will be preserved'}")
 
         if request.source_type == "text":
             text_content = request.content
+            # When no explicit label is provided, derive a deterministic one from the
+            # content so that different unlabelled text uploads are treated as distinct
+            # sources.  The generic fallback ("text") would map everything to the same
+            # source and cause the update path to delete unrelated prior ingests.
+            if not source_label:
+                content_hash = hashlib.sha256(request.content.encode()).hexdigest()[:12]
+                source_label = f"text_{content_hash}"
             logger.info(f"Ingesting text document: {source_label}")
 
         elif request.source_type == "url":
@@ -1506,6 +1521,10 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                     status_code=400, detail="filename required for file uploads"
                 )
 
+            # Use the filename as the stable identifier so repeated uploads of the
+            # same file are treated as updates rather than independent new sources.
+            source_label = request.source_label or request.filename
+
             # Extract text from file
             try:
                 text_content = _extract_text_from_file(request.filename, file_bytes)
@@ -1549,6 +1568,67 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                 for i in range(len(chunks))
             ]
 
+            # Determine effective ingest type.
+            # When the client explicitly sets ingest_type (present in model_fields_set)
+            # we honour that contract.  When omitted (the default), we derive the type
+            # from the collection so the backend can self-heal without client cooperation.
+            #
+            # Derivation: primary check by source label, secondary by source_url to handle
+            # the case where the same URL was previously ingested under a different label.
+            if "ingest_type" in request.model_fields_set:
+                effective_ingest_type = request.ingest_type
+                source_is_new = (effective_ingest_type == "add")
+                matched_by_url = False
+            else:
+                # Pass include=[] so ChromaDB returns only ids, not full documents.
+                existing_by_label = collection.get(
+                    where={"source": source_label}, limit=1, include=[]
+                )
+                matched_by_url = False
+                if not existing_by_label["ids"] and source_url:
+                    existing_by_url = collection.get(
+                        where={"source_url": source_url}, limit=1, include=[]
+                    )
+                    matched_by_url = bool(existing_by_url["ids"])
+
+                source_is_new = not existing_by_label["ids"] and not matched_by_url
+                effective_ingest_type = "add" if source_is_new else "update"
+
+            logger.info(
+                "Ingest source_is_new=%s effective_ingest_type=%s source=%s",
+                source_is_new,
+                effective_ingest_type,
+                source_label,
+            )
+
+            # For updates, remove stale chunks before adding new ones so the corpus
+            # never holds duplicate content for the same source.
+            # When the match was by source_url (label changed), delete by URL to reach
+            # the old chunks that are indexed under the previous label.
+            if effective_ingest_type == "update":
+                old_ids_by_label = collection.get(
+                    where={"source": source_label}, include=[]
+                )["ids"]
+                if old_ids_by_label:
+                    collection.delete(ids=old_ids_by_label)
+                    logger.info(
+                        "Deleted %d stale chunks for source=%s",
+                        len(old_ids_by_label),
+                        source_label,
+                    )
+                if matched_by_url and source_url:
+                    old_ids_by_url = collection.get(
+                        where={"source_url": source_url}, include=[]
+                    )["ids"]
+                    remaining = [id_ for id_ in old_ids_by_url if id_ not in set(old_ids_by_label)]
+                    if remaining:
+                        collection.delete(ids=remaining)
+                        logger.info(
+                            "Deleted %d stale chunks for source_url=%s (label changed)",
+                            len(remaining),
+                            source_url,
+                        )
+
             # Add to collection
             collection.add(
                 ids=doc_ids,
@@ -1559,17 +1639,10 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                 f"Added {len(chunks)} chunks to collection from source: {source_label}"
             )
 
-            # Conditional cache clear based on ingest_type (ADR-003 - Fix for blocking issue #3)
-            # - 'update': Clear cache to ensure new documents are retrieved
-            # - 'add': Preserve cache for bulk additions
-            if request.ingest_type == "update":
+            if effective_ingest_type == "update":
                 prev_version = _corpus_version
                 _cache_generation += 1
-                # Rebuild corpus_version token: generation bumped + collection count grew.
-                # Both dimensions change on 'update', guaranteeing a fully distinct token.
                 _corpus_version = _build_corpus_version_token()
-                # OPTB-012: Structured invalidation log for ingest-update path.
-                # Records old and new tokens so operators can verify the transition.
                 logger.info(
                     "cache.invalidation event=ingest_update prev_version=%s new_version=%s",
                     prev_version,
@@ -1578,29 +1651,23 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                 if _cache is not None:
                     try:
                         lazy_cache.clear()
-                        logger.info(f"Ingest complete (type='update'); cache cleared")
+                        logger.info("Ingest complete (type='update'); cache cleared")
                     except Exception as e:
                         logger.warning(f"Failed to clear cache after ingest: {e}")
                 else:
                     logger.debug("Ingest complete (type='update'); cache not initialized")
-            else:  # ingest_type == 'add'
-                # 'add' does NOT bump the generation counter — cached results for
-                # queries that were answered before the add are still valid (the older
-                # documents haven't changed).  However, the collection count has grown,
-                # so we rebuild the token using the updated count dimension.  Queries
-                # issued after the add will see the new token → cache miss → retriever
-                # called with the full (now-larger) corpus.
+            else:
+                # New source: don't bump the generation counter — cached results for
+                # existing queries are still valid.  Rebuild the token on the count
+                # dimension so queries issued after this add see the grown corpus.
                 prev_version = _corpus_version
                 _corpus_version = _build_corpus_version_token()
-                # OPTB-012: Structured invalidation log for ingest-add path.
-                # Generation counter is NOT bumped for 'add', but the corpus grew
-                # so the token changes on the count dimension.
                 logger.info(
                     "cache.invalidation event=ingest_add prev_version=%s new_version=%s",
                     prev_version,
                     _corpus_version,
                 )
-                logger.info(f"Ingest complete (type='add'); cache preserved")
+                logger.info("Ingest complete (type='add'); cache preserved")
 
             return DocumentIngestionResponse(
                 status="success",
