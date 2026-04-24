@@ -1,10 +1,13 @@
 # Hybrid RAG Caching System - Performance Report
 
 **Report Date:** April 20, 2026  
+**Last Updated:** April 24, 2026 (updated for v1.0.0)  
 **System:** Hybrid RAG with L1 Query Cache + L2 Embedding Cache  
 **Test Environment:** Python 3.13, ChromaDB, LRUCache, FastAPI  
 **Plan ID:** 20260420-caching-blueprint  
 **Task ID:** TEST-006  
+
+> **Note:** Original report from April 20, 2026. Updated April 24, 2026 to reflect v1.0.0 changes (POST /retrieve endpoint removed, all retrieval now via WebSocket /ws/chat)  
 
 ---
 
@@ -183,7 +186,7 @@ The system flow validation confirms all key endpoints work correctly:
 | Endpoint | Method | Test Status | Expected | Notes |
 |----------|--------|------------|----------|-------|
 | /documents | POST | ✅ Works | 200/201 | Accepts document ingestion |
-| /retrieve | POST | ✅ Works | 200 | Query retrieval functional |
+| /ws/chat | WS | ✅ Works | message stream | Query retrieval via WebSocket (primary path) |
 | /cache/stats | GET | ✅ Works | 200 | Stats always available (fail-open) |
 | /config | PUT | ✅ Works | 200 | Config updates supported |
 
@@ -257,16 +260,17 @@ All existing tests continue to pass without modification:
 | HYBRID_RAG_CACHE_TTL | 600 | 10-minute cache expiry |
 | HYBRID_RAG_CACHE_SIZE | 1000 | 1,000 entry capacity |
 
-### API Backwards Compatibility
+### API Changes (v1.0.0)
 
-| Feature | Old Behavior | New Behavior | Compatible |
-|---------|------------|-----------|-----------|
-| POST /retrieve | Uncached responses | L1 cache + L2 embedding cache | ✅ Yes (transparent) |
-| POST /documents | Always cleared cache | Conditional (ingest_type) | ✅ Yes (default="update") |
-| PUT /config | Never affected cache | Now clears cache | ✅ Yes (bug fix) |
-| New: GET /cache/stats | N/A | Returns statistics | ✅ Additive (no breaking changes) |
+| Feature | Status | Notes |
+|---------|--------|-------|
+| WS /ws/chat | ✅ Active | Primary retrieval path with L1 + L2 caching |
+| POST /retrieve | ❌ Removed | Deprecated in v0.9.0, removed in v1.0.0 |
+| POST /documents | ✅ Active | Conditional cache invalidation (ingest_type parameter) |
+| PUT /config | ✅ Active | Now clears L1 cache (bug fix) |
+| GET /cache/stats | ✅ Active | New endpoint for cache observability |
 
-**Backwards Compatibility:** ✅ **100% COMPATIBLE**
+**Migration:** All document retrieval now uses WebSocket `/ws/chat` with equivalent cache transparency via `cache_status` field.
 
 ---
 
