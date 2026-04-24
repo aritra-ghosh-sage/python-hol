@@ -5,7 +5,11 @@ import { apiClient } from "@/lib/api";
 import { DocumentSource } from "@/lib/types";
 import { Shimmer } from "@/components/ui/Shimmer";
 
-export function SourceList() {
+interface SourceListProps {
+  refreshTrigger?: number;
+}
+
+export function SourceList({ refreshTrigger }: SourceListProps) {
   const [sources, setSources] = useState<DocumentSource[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +28,7 @@ export function SourceList() {
     };
 
     fetchSources();
-  }, []);
+  }, [refreshTrigger]);
 
   if (isLoading) {
     return <Shimmer />;

@@ -8,6 +8,11 @@ import { SourceList } from "./SourceList";
 
 export function AddDataPanel() {
   const [activeTab, setActiveTab] = useState<"text" | "url" | "file">("text");
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const handleDataAdded = () => {
+    setRefreshTrigger((prev) => prev + 1);
+  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -56,16 +61,16 @@ export function AddDataPanel() {
       {/* Content area */}
       <div className="flex-1 overflow-y-auto">
         <div className="p-6 space-y-6 max-w-2xl">
-          {activeTab === "text" && <TextInput />}
-          {activeTab === "url" && <UrlInput />}
-          {activeTab === "file" && <FileUpload />}
+          {activeTab === "text" && <TextInput onDataAdded={handleDataAdded} />}
+          {activeTab === "url" && <UrlInput onDataAdded={handleDataAdded} />}
+          {activeTab === "file" && <FileUpload onDataAdded={handleDataAdded} />}
 
           {/* Sources section */}
           <div className="mt-10 border-t border-gray-700 pt-6">
             <h3 className="text-lg font-semibold text-white mb-4">
               Ingested Sources
             </h3>
-            <SourceList />
+            <SourceList refreshTrigger={refreshTrigger} />
           </div>
         </div>
       </div>

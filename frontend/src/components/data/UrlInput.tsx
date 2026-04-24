@@ -4,7 +4,11 @@ import { useState } from "react";
 import { apiClient } from "@/lib/api";
 import { DocumentIngestionRequest } from "@/lib/types";
 
-export function UrlInput() {
+interface UrlInputProps {
+  onDataAdded?: () => void;
+}
+
+export function UrlInput({ onDataAdded }: UrlInputProps) {
   const [url, setUrl] = useState("");
   const [label, setLabel] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -46,6 +50,7 @@ export function UrlInput() {
       });
       setUrl("");
       setLabel("");
+      onDataAdded?.();
     } catch (error) {
       setMessage({
         type: "error",

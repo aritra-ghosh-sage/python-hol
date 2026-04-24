@@ -4,7 +4,11 @@ import { useState } from "react";
 import { apiClient } from "@/lib/api";
 import { DocumentIngestionRequest } from "@/lib/types";
 
-export function TextInput() {
+interface TextInputProps {
+  onDataAdded?: () => void;
+}
+
+export function TextInput({ onDataAdded }: TextInputProps) {
   const [text, setText] = useState("");
   const [label, setLabel] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -34,6 +38,7 @@ export function TextInput() {
       });
       setText("");
       setLabel("");
+      onDataAdded?.();
     } catch (error) {
       setMessage({
         type: "error",

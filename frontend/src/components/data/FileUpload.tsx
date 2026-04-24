@@ -5,7 +5,11 @@ import { apiClient } from "@/lib/api";
 import { DocumentIngestionRequest } from "@/lib/types";
 import { Upload } from "lucide-react";
 
-export function FileUpload() {
+interface FileUploadProps {
+  onDataAdded?: () => void;
+}
+
+export function FileUpload({ onDataAdded }: FileUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [label, setLabel] = useState("");
@@ -69,6 +73,7 @@ export function FileUpload() {
           if (fileInputRef.current) {
             fileInputRef.current.value = "";
           }
+          onDataAdded?.();
         } catch (error) {
           setMessage({
             type: "error",
