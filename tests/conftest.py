@@ -3,8 +3,12 @@
 import logging
 import sys
 from pathlib import Path
-import pytest
 from typing import Generator
+from unittest.mock import MagicMock
+
+import cachetools
+import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 # Ensure project root is importable when tests are run via uv/pytest.
@@ -13,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import api
-from hybrid_rag import initialize_vector_db, get_sample_documents, HybridRetriever, HybridRetrieverConfig
+from hybrid_rag import HybridRetriever, HybridRetrieverConfig, initialize_vector_db, get_sample_documents
 from hybrid_rag.cache import InMemoryCache
 from hybrid_rag.config import CacheSettings, create_cache_backend
 
@@ -41,10 +45,31 @@ def _is_retriever_collection_healthy() -> bool:
         return False
 
 
+def _make_fake_retriever() -> HybridRetriever:
+    """Build a HybridRetriever stub that never loads the sentence-transformer model.
+
+    Bypasses __init__ and injects the minimum attributes required by api.py:
+    collection (with a count() method), config, encoder (stub), and L2 cache.
+    """
+    obj: HybridRetriever = object.__new__(HybridRetriever)
+    collection = MagicMock()
+    collection.count.return_value = 5
+    obj.collection = collection
+    obj.config = HybridRetrieverConfig(
+        semantic_weight=0.7, keyword_weight=0.3, enable_rerank=False
+    )
+    obj.reranker = None
+    obj.encoder = MagicMock()
+    obj.encoder.encode = lambda text: np.zeros(384, dtype=np.float32)
+    obj._embedding_cache: cachetools.LRUCache = cachetools.LRUCache(maxsize=5000)
+    obj._embedding_cache_hits = 0
+    obj._embedding_cache_misses = 0
+    return obj
+
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_environment() -> None:
     """Set up test environment once per session."""
-    # Ensure test environment variables are set
     import os
     os.environ.setdefault("CACHE_BACKEND", "memory")
     os.environ.setdefault("CACHE_TTL_SECONDS", "3600")
@@ -55,13 +80,13 @@ def setup_test_environment() -> None:
 @pytest.fixture(scope="function")
 def initialized_app() -> Generator[TestClient, None, None]:
     """Create and initialize the app with retriever and cache.
-    
+
     This fixture:
     1. Initializes the hybrid retriever
     2. Initializes the cache backend
     3. Returns a TestClient
     4. Cleans up after the test
-    
+
     Yields:
         TestClient: A test client for the initialized app
     """
@@ -92,19 +117,16 @@ def initialized_app() -> Generator[TestClient, None, None]:
         logger.info("✓ Cache initialized")
     except Exception as e:
         logger.error(f"Failed to initialize cache: {e}")
-        # Continue without cache
         api._cache = None
 
     # Reset shared cache generation token for test isolation.
     api._cache_generation = 0
-    
-    # Create test client
+
     client = TestClient(api.app)
-    
+
     try:
         yield client
     finally:
-        # Cleanup after test
         if api._cache is not None:
             try:
                 api._cache.clear()
@@ -113,17 +135,43 @@ def initialized_app() -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture(scope="function")
-def client_with_fresh_cache(initialized_app: TestClient) -> TestClient:
-    """TestClient with fresh (cleared) cache for each test.
-    
-    Args:
-        initialized_app: The initialized app fixture
-        
-    Returns:
-        TestClient: The app with cleared cache
+def fake_initialized_app() -> Generator[TestClient, None, None]:
+    """TestClient with a stub retriever — no ChromaDB, no model download.
+
+    Used by tests that only inspect HTTP response shapes (status codes, JSON
+    field names, admin endpoints) and never call the retrieval pipeline.
+    Setup cost is <10 ms vs 10–18 s for the real initialized_app fixture.
+
+    Yields:
+        TestClient: A test client backed by an in-memory cache and stub retriever.
     """
-    # Clear cache before test
+    api._retriever = _make_fake_retriever()
+    api._config = api._retriever.config
+    api._cache = InMemoryCache(ttl_seconds=3600, max_size=10000)
+    api._cache_generation = 0
+
+    client = TestClient(api.app)
+    try:
+        yield client
+    finally:
+        if api._cache is not None:
+            try:
+                api._cache.clear()
+            except Exception:
+                pass
+
+
+@pytest.fixture(scope="function")
+def client_with_fresh_cache(fake_initialized_app: TestClient) -> TestClient:
+    """TestClient with fresh (cleared) cache for each test.
+
+    Args:
+        fake_initialized_app: The stub-backed app fixture (no model load).
+
+    Returns:
+        TestClient: The app with cleared cache.
+    """
     if api._cache is not None:
         api._cache.clear()
-    
-    return initialized_app
+
+    return fake_initialized_app

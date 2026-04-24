@@ -138,10 +138,10 @@ class FakeCacheForStats:
         return None
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        pass
+        """No-op — FakeCacheForStats discards all writes."""
 
     def delete(self, key: str) -> None:
-        pass
+        """No-op — FakeCacheForStats has no stored state to delete."""
 
     def clear(self) -> None:
         self._clear_call_count += 1
@@ -600,12 +600,12 @@ class TestIngestTypeParameterContract:
 
         # Both documented values must be accepted.
         req_add = DocumentIngestionRequest(
-            source_type="text", content="hello world", ingest_type="add"
+            source_type="text", content="hello world", ingest_type="add", filename="test.txt", source_label="test_source"
         )
         assert req_add.ingest_type == "add"
 
         req_update = DocumentIngestionRequest(
-            source_type="text", content="hello world", ingest_type="update"
+            source_type="text", content="hello world", ingest_type="update", filename="test.txt", source_label="test_source"
         )
         assert req_update.ingest_type == "update"
 
@@ -616,7 +616,7 @@ class TestIngestTypeParameterContract:
         # that invalid inputs are properly rejected.
         with pytest.raises(ValidationError):
             DocumentIngestionRequest(
-                source_type="text", content="hello world", ingest_type="replace"  # type: ignore[arg-type]
+                source_type="text", content="hello world", ingest_type="replace", filename="test.txt", source_label="test_source"  # type: ignore[arg-type]
             )
 
     def test_ingest_type_default_is_update(self) -> None:
@@ -630,7 +630,7 @@ class TestIngestTypeParameterContract:
         """
         from api import DocumentIngestionRequest
 
-        req = DocumentIngestionRequest(source_type="text", content="default test")
+        req = DocumentIngestionRequest(source_type="text", content="default test", filename="test.txt", source_label="test_source")
         assert req.ingest_type == "update", (
             f"Default ingest_type must be 'update' for backwards compatibility; "
             f"got {req.ingest_type!r}"
@@ -1076,7 +1076,7 @@ class _FakeCollection:
         documents: List[str],
         metadatas: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        pass
+        """No-op — _FakeCollection is read-only; count() always returns 5."""
 
 
 class _FakeRetrievingRetriever:

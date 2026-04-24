@@ -72,17 +72,18 @@ class FakeCacheForStats:
         }
 
     # Stubs so the cache can be assigned to api._cache without AttributeErrors
-    def get(self, key: str) -> Optional[Any]:  # noqa: D401
+    def get(self, key: str) -> Optional[Any]:
+        """Return None — FakeCacheForStats never stores values."""
         return None
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        pass
+        """No-op — FakeCacheForStats discards all writes."""
 
     def delete(self, key: str) -> None:
-        pass
+        """No-op — FakeCacheForStats has no stored state to delete."""
 
     def clear(self) -> None:
-        pass
+        """No-op — FakeCacheForStats has no stored state to clear."""
 
     def health(self) -> Dict[str, Any]:
         """Return a healthy sentinel — FakeCacheForStats has no network backend."""

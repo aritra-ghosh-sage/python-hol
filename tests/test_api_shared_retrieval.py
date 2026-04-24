@@ -118,7 +118,7 @@ def _assert_ws_results_message(ws: FakeWebSocket) -> Dict[str, Any]:
     raise AssertionError("results message not sent")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_websocket_uses_shared_facade_and_preserves_message_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     """WS /ws/chat uses shared facade and keeps status/results message contract."""
 
