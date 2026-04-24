@@ -92,6 +92,7 @@ class _FakeCollection:
         self,
         where: Optional[Dict[str, Any]] = None,
         limit: Optional[int] = None,
+        include: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Return matching ids for simple source equality where-clauses."""
         ids: List[str] = []

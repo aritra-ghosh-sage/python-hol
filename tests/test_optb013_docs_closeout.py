@@ -1167,18 +1167,30 @@ class _MutableFakeCollection:
         self,
         where: Optional[Dict[str, Any]] = None,
         limit: Optional[int] = None,
+        include: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Return matching ids for simple equality where-clauses."""
+        """Return matching ids for simple equality where-clauses.
+
+        Args:
+            where: Equality filter dict.  Supports ``{"source": label}`` only.
+            limit: Maximum number of ids to return.
+            include: Ignored; present for ChromaDB API compatibility.
+
+        Returns:
+            Dict with key ``"ids"`` containing the matched chunk id list.
+
+        Note:
+            ``source_url`` queries return empty because this fake does not track URL
+            metadata per chunk — returning all ids would cause false-positive
+            existence matches on the update path.
+        """
         ids: List[str] = []
         if where:
             source = where.get("source")
-            source_url = where.get("source_url")
             if source is not None:
                 ids = self._store.get(source, [])
-            elif source_url is not None:
-                # Scan all stored chunks for a matching source_url value.
-                for stored_ids in self._store.values():
-                    ids.extend(stored_ids)
+            # source_url queries intentionally return [] — URL metadata is not
+            # stored in this fake, so we cannot filter meaningfully.
         if limit is not None:
             ids = ids[:limit]
         return {"ids": ids}

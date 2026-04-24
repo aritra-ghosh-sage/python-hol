@@ -333,7 +333,7 @@ async def test_ingest_endpoint_conditional_cache_clear_update() -> None:
         def count(self) -> int:
             return 5
 
-        def get(self, where=None, limit=None):
+        def get(self, where=None, limit=None, include=None):
             # Return a pre-existing chunk for "existing-source" to trigger update path.
             if where and where.get("source") == "existing-source":
                 return {"ids": ["existing-source_0"]}
@@ -390,7 +390,7 @@ async def test_ingest_endpoint_preserves_cache_on_add() -> None:
         def count(self) -> int:
             return 5
 
-        def get(self, where=None, limit=None):
+        def get(self, where=None, limit=None, include=None):
             # Empty store → source is new → 'add' path → cache preserved.
             return {"ids": []}
 
@@ -681,7 +681,7 @@ async def test_ingest_type_logs_operation() -> None:
         def count(self) -> int:
             return 3
 
-        def get(self, where=None, limit=None):
+        def get(self, where=None, limit=None, include=None):
             return {"ids": []}
 
         def delete(self, ids):
