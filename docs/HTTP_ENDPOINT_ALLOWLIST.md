@@ -35,15 +35,6 @@ The following HTTP endpoints are **approved** for production use:
 |----------|---------|---------------|
 | `/ws/chat` | Real-time document retrieval and chat | Yes |
 
-### Explicitly Forbidden Endpoints
-
-The following endpoints were **deprecated and removed** and must never be reintroduced:
-
-| Endpoint | Removed In | Reason |
-|----------|------------|--------|
-| `POST /retrieve` | T08 | Migrated to WebSocket-only retrieval |
-| `POST /retrieve-filtered` | T04 | Consolidated into WebSocket interface |
-
 ## Rationale
 
 ### WebSocket-Only Retrieval
@@ -122,16 +113,13 @@ The following automated tests enforce this policy:
 2. **`tests/test_route_allowlist.py::test_websocket_routes_match_allowlist`**
    - Fails if unauthorized WebSocket routes detected
 
-3. **`tests/test_route_allowlist.py::test_no_forbidden_routes`**
-   - Fails if deprecated `/retrieve` or `/retrieve-filtered` routes present
-
-4. **`tests/test_route_allowlist.py::test_no_retrieval_http_endpoints`**
+3. **`tests/test_route_allowlist.py::test_no_retrieval_http_endpoints`**
    - Fails if any HTTP path contains "retrieve"
 
-5. **`tests/test_route_allowlist.py::test_openapi_schema_no_retrieval_references`**
-   - Fails if OpenAPI schema references `/retrieve`
+4. **`tests/test_route_allowlist.py::test_openapi_schema_no_retrieval_references`**
+   - Fails if OpenAPI schema exposes unexpected retrieval paths
 
-6. **`tests/test_route_allowlist.py::test_route_inventory_documentation`**
+5. **`tests/test_route_allowlist.py::test_route_inventory_documentation`**
    - Generates route inventory for CI artifacts
    - Validates route counts match expectations
 
@@ -178,7 +166,6 @@ Track these metrics to detect policy violations or drift:
 
 3. **OpenAPI Schema Monitoring**:
    - Periodically audit `/openapi.json` for unexpected changes
-   - Alert on any references to deprecated `/retrieve` paths
 
 ### Incident Response
 

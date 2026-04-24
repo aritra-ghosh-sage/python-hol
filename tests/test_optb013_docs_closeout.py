@@ -19,7 +19,7 @@ WHY THIS FILE EXISTS:
 WHAT IS COVERED (one class per contract):
     TestLayeredStatsSchemaContract     — OPTB-008 layered /cache/stats schema
     TestCorpusVersionFormatContract    — corpus_version token shape
-    TestXCacheHeaderContract           — X-Cache response header naming/values
+    TestWebSocketCacheStatusContract   — WebSocket cache_status field in messages
     TestIngestTypeParameterContract    — DocumentIngestionRequest.ingest_type
     TestNodeLocalL2ScopeContract       — L2 stats come from retriever, not Redis
     TestFallbackSemanticsContract      — backend_health.fallback_active logic
@@ -515,31 +515,35 @@ class TestCorpusVersionFormatContract:
 
 
 # ===========================================================================
-# TestXCacheHeaderContract
+# TestWebSocketCacheStatusContract
 # ===========================================================================
 
 
-class TestXCacheHeaderContract:
-    """Contract test for X-Cache header absence on admin endpoints.
+class TestWebSocketCacheStatusContract:
+    """Contract test for WebSocket cache_status field in messages.
 
-    Asserts that GET /cache/stats does not carry an X-Cache header.
+    Asserts that WebSocket /ws/chat responses include cache_status field.
     """
 
-    def test_x_cache_header_absent_on_stats_endpoint(
+    def test_websocket_cache_status_field_present(
         self, stats_client: TestClient
     ) -> None:
-        """GET /cache/stats must NOT carry an X-Cache header.
+        """WebSocket /ws/chat messages must include cache_status field.
 
-        WHAT: Confirms that the /cache/stats path has no X-Cache header.
-        WHY: No path should receive X-Cache headers; the middleware that
-        injected this header has been removed.
+        WHAT: Confirms that WebSocket results messages include cache_status.
+        WHY: WebSocket is the sole retrieval path; cache visibility is
+        provided via the cache_status field in the message payload, not
+        via HTTP headers (which don't exist in WebSocket).
         """
-        response = stats_client.get("/cache/stats")
-        assert response.status_code == 200
+        from api import WsResultsMessage
 
-        header_names_lower = {h.lower() for h in response.headers}
-        assert "x-cache" not in header_names_lower, (
-            "X-Cache header must NOT be present on GET /cache/stats"
+        field_names = set(WsResultsMessage.model_fields.keys())
+        assert "cache_status" in field_names, (
+            "WsResultsMessage must have a 'cache_status' field (T03 WS cache-status contract)"
+        )
+        field = WsResultsMessage.model_fields["cache_status"]
+        assert field.default in ("HIT", "MISS", "ERROR"), (
+            f"cache_status default must be one of HIT/MISS/ERROR, got {field.default!r}"
         )
 
 
@@ -983,8 +987,7 @@ class TestCrossIssueDecisionContract:
     WHAT CONTRACT: Two explicit cross-issue decisions made during OPTB-007
     through OPTB-012 are enforced here:
 
-      1. The cache response header is named 'X-Cache' (not 'X-Cache-Status'
-         or 'Cache-Status').
+      1. WebSocket messages include cache_status field (not HTTP headers).
       2. The pre-OPTB-008 flat stat fields (hits, misses, hit_rate, size,
          backend) are not present at the top level of /cache/stats.
 
@@ -1079,7 +1082,7 @@ class _FakeCollection:
 class _FakeRetrievingRetriever:
     """Retriever double that returns one deterministic document on retrieve().
 
-    WHY: Tests for X-Cache and fail-open behaviour need a functional retriever
+    WHY: Tests for cache_status and fail-open behaviour need a functional retriever
     so the endpoint doesn't raise HTTP 503 ('Retriever not initialized').  The
     results themselves are not under test in those classes.
     """

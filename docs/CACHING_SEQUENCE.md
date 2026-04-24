@@ -1,16 +1,120 @@
-# Hybrid RAG Caching System - Sequence Diagram
+# Hybrid RAG Caching System — Diagrams & Reference
 
-> Canonical Mermaid source: [`cache-sequence-flow.mmd`](./cache-sequence-flow.mmd)
->
-> Rendered counterpart: [`cache-sequence-flow.svg`](./cache-sequence-flow.svg)
->
-> This section intentionally references the standalone Mermaid source rather than duplicating it here, so the unified HIT/MISS flow has a single editable source of truth.
-    R->>R: s12 cross-encoder rerank
-    R->>R: source deduplication
-    R-->>SR: return results
-    SR->>CB: lazy_cache.set(cache_key, results)
-    SR-->>WS: return results
-    WS-->>U: {type:"results", cache_status:"MISS"}
+**Document Version:** 1.2  
+**Last Updated:** 2026-04-24  
+**Audience:** Developers, architects, operators
+
+---
+
+## Table of Contents
+
+1. [Component Flow Diagram](#component-flow-diagram)
+2. [Sequence: Cache Hit](#1-websocket-query--cache-hit)
+3. [Sequence: Cache Miss](#2-websocket-query--cache-miss-full-retrieval-pipeline)
+4. [Sequence: Fail-Open Path](#3-cache-backend-error--fail-open-path)
+5. [Sequence: Config Invalidation](#4-cache-invalidation--config-update-put-config)
+6. [Sequence: Ingest Invalidation](#5-cache-invalidation--document-ingest-post-documents)
+7. [Sequence: Stats Observability](#6-cache-stats-observability-get-cachestats)
+8. [Cache Key Reference](#cache-key-construction-reference)
+9. [Invalidation Flow Reference](#invalidation-flow-reference)
+10. [Multi-Process Considerations](#multi-process-considerations)
+11. [Design Decisions](#design-decisions-adrs)
+
+---
+
+## Component Flow Diagram
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        WS[WebSocket Client<br/>/ws/chat]
+    end
+
+    subgraph "API Layer - api.py"
+        direction TB
+        SHARED[_shared_retrieve_documents<br/>L1 Query Cache & Facade]
+
+        WS --> SHARED
+    end
+
+    subgraph "Cache Backend Selection"
+        direction LR
+        INMEM[InMemoryCache<br/>cachetools.TTLCache<br/>Thread-safe]
+        REDIS[RedisCache<br/>redis-py client<br/>Connection pooling]
+
+        CONFIG{CACHE_BACKEND<br/>env var}
+        CONFIG -->|memory| INMEM
+        CONFIG -->|redis| REDIS
+    end
+
+    subgraph "Retriever Layer - hybrid_rag/retriever.py"
+        RET[HybridRetriever<br/>L2 Embedding Cache]
+        L2[cachetools.LRUCache<br/>SHA-256 keyed<br/>Node-local only]
+
+        RET -->|Cache Miss| L2
+    end
+
+    subgraph "Vector Database Layer"
+        CHROMA[ChromaDB<br/>Persistent Vector Store<br/>sentence-transformers]
+    end
+
+    subgraph "Cache Key Identity"
+        KEY1[L1 Key Components:<br/>• query normalized<br/>• enable_rerank<br/>• config_fingerprint<br/>• corpus_version]
+        KEY2[L2 Key:<br/>• SHA-256 query_text]
+    end
+
+    SHARED -->|Uses| INMEM
+    SHARED -->|Uses| REDIS
+    SHARED -->|L1 Hit| WS
+    SHARED -->|L1 Miss| RET
+    RET -->|L2 Hit| SHARED
+    RET -->|L2 Miss| CHROMA
+    CHROMA -->|Results| RET
+    RET -->|Cache & Return| SHARED
+    SHARED -->|Send to Client| WS
+
+    subgraph "Invalidation Events"
+        INV1[PUT /config<br/>• L1 full clear<br/>• corpus_version++]
+        INV2[POST /documents<br/>ingest_type=update<br/>• L1 full clear<br/>• corpus_version++]
+        INV3[POST /documents<br/>ingest_type=add<br/>• Preserve L1<br/>• Update corpus count]
+        INV4[TTL Expiry<br/>• Backend-managed<br/>• No corpus_version change]
+    end
+
+    INV1 -.->|Invalidates| SHARED
+    INV2 -.->|Invalidates| SHARED
+    INV3 -.->|Updates token| SHARED
+    INV4 -.->|Evicts entries| INMEM
+    INV4 -.->|Evicts entries| REDIS
+
+    subgraph "Observability"
+        STATS[GET /cache/stats<br/>Layered Schema]
+        STATS -.->|Reports| SHARED
+        STATS -.->|Reports| RET
+        STATS -.->|Health check| REDIS
+    end
+
+    subgraph "Fail-Open Semantics"
+        FO[Cache Backend Errors<br/>• Log & continue<br/>• Never raise to client<br/>• Retrieval proceeds<br/>• fallback_active=true]
+        REDIS -.->|Error| FO
+        FO -.->|Non-blocking| SHARED
+    end
+
+    style SHARED fill:#fff3e0
+    style RET fill:#f3e5f5
+    style CHROMA fill:#e8f5e9
+    style INMEM fill:#ffe0b2
+    style REDIS fill:#ffccbc
+    style CONFIG fill:#fce4ec
+    style STATS fill:#f1f8e9
+    style FO fill:#ffebee
+
+    classDef cacheLayer fill:#bbdefb,stroke:#1976d2,stroke-width:2px
+    classDef backend fill:#ffccbc,stroke:#d84315,stroke-width:2px
+    classDef observability fill:#dcedc8,stroke:#689f38,stroke-width:2px
+
+    class SHARED,RET cacheLayer
+    class INMEM,REDIS backend
+    class STATS observability
 ```
 
 ---
@@ -247,6 +351,79 @@ sequenceDiagram
 
 | Layer | Key Components | Algorithm |
 |-------|---------------|-----------|
-| L1 (shared retrieval) | `normalized_query` + `effective_enable_rerank` + `config_fingerprint` + `corpus_version` | `SHA-256(JSON(shared_identity))` |
+| L1 (shared retrieval) | `normalized_query` + `effective_enable_rerank` + `config_fingerprint` + `corpus_version` | `SHA-256(JSON(shared_identity, sort_keys=True))` |
 | L2 (embedding) | `query_text` (raw) | `SHA-256(query_text.encode())` |
 | `corpus_version` token | `_cache_generation` + `collection.count()` | `"gen{N}.n{count}"` |
+
+**Note:** L2 does NOT include config or corpus version — embeddings are model-deterministic and config-independent.
+
+---
+
+## Invalidation Flow Reference
+
+### `PUT /config`
+1. Increments `_cache_generation` (process-local counter)
+2. Rebuilds `corpus_version` token from ChromaDB
+3. Calls `_cache.clear()` to flush L1
+4. L2 unaffected (embeddings remain valid)
+
+### `POST /documents` with `ingest_type=update`
+1. Increments `_cache_generation`
+2. Rebuilds `corpus_version` token
+3. Calls `_cache.clear()` to flush L1
+4. L2 unaffected
+
+### `POST /documents` with `ingest_type=add`
+1. `_cache_generation` NOT incremented
+2. Rebuilds `corpus_version` with new document count
+3. L1 entries preserved (eventual consistency)
+4. L2 unaffected
+
+### TTL Expiry
+1. Backend (InMemoryCache or Redis) evicts expired entries
+2. No `corpus_version` change; no `_cache_generation` change
+3. L2 evicts via LRU capacity pressure
+
+---
+
+## Multi-Process Considerations
+
+### Worker Isolation
+
+- Each uvicorn worker has an independent `_cache_generation` counter
+- Each worker has an independent L2 embedding cache
+- Redis L1 backend is shared across workers
+- InMemory L1 backend is **not** shared across workers
+
+### Invalidation in Multi-Worker Setup
+
+`PUT /config` is handled by one worker — only that worker's counter increments.
+
+- **Redis backend**: `clear()` flushes the shared cache, affecting all workers
+- **InMemory backend**: `clear()` affects only the handling worker
+
+**Recommendation:** Use `CACHE_BACKEND=redis` for multi-worker production deployments to ensure invalidation is effective across all workers.
+
+---
+
+## Design Decisions (ADRs)
+
+| ADR | Decision | Rationale |
+|-----|----------|-----------|
+| ADR-002 | Include `enable_rerank` in L1 cache key | Requests with different rerank settings produce different result sets; must be cached separately |
+| ADR-005 | L2 always node-local (never distributed) | Embedding inference is fast (<10ms on CPU); serialization overhead of a distributed L2 outweighs the benefit |
+| ADR-007 | `corpus_version` token format: `gen{N}.n{count}` | Process-local counter alone loses meaning after restart; including the live document count grounds the token in DB state |
+
+---
+
+## Related Documentation
+
+- [CACHING_ARCHITECTURE.md](./CACHING_ARCHITECTURE.md) — Authoritative architecture reference
+- [CACHE_DEPLOYMENT.md](./CACHE_DEPLOYMENT.md) — Deployment procedures and environment variables
+- [CACHE_PERF_REPORT.md](./CACHE_PERF_REPORT.md) — Performance benchmarks and test results
+
+---
+
+**Document Status:** ✅ Current  
+**Maintained By:** Development Team  
+**Last Review:** April 24, 2026

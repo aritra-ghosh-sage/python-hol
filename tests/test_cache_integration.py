@@ -267,10 +267,44 @@ async def test_config_endpoint_clears_cache_on_update() -> None:
 
 
 @pytest.mark.asyncio
-async def test_config_endpoint_returns_status_with_cache_header() -> None:
-    """Test that PUT /config returns response with cache status header."""
-    # Test: X-Cache-Status header should be in response
-    # Test: Cache status should indicate 'cleared' or similar
+async def test_config_endpoint_clears_cache_and_returns_200() -> None:
+    """Test that PUT /config clears the cache and returns a successful response."""
+    import api as api_module
+
+    mock_cache = MagicMock(spec=CacheBackend)
+    mock_cache.clear = MagicMock()
+
+    fake_config = MagicMock()
+    fake_config.semantic_top_k = 10
+    fake_config.keyword_top_k = 10
+    fake_config.final_top_k = 5
+    fake_config.semantic_weight = 0.7
+    fake_config.keyword_weight = 0.3
+    fake_config.enable_rerank = True
+    fake_config.pre_rerank_top_k = 20
+    updated_config = MagicMock()
+    updated_config.semantic_top_k = 10
+    updated_config.keyword_top_k = 10
+    updated_config.final_top_k = 5
+    updated_config.semantic_weight = 0.8
+    updated_config.keyword_weight = 0.2
+    updated_config.enable_rerank = True
+    updated_config.pre_rerank_top_k = 20
+    fake_config.update.return_value = updated_config
+
+    with (
+        patch.object(api_module, "_config", fake_config),
+        patch.object(api_module, "_cache", mock_cache),
+        patch.object(api_module, "_cache_generation", 0),
+        patch.object(api_module, "_corpus_version", "gen0.n1"),
+    ):
+        client = TestClient(api_module.app)
+        response = client.put(
+            "/config", json={"semantic_weight": 0.8, "keyword_weight": 0.2}
+        )
+
+    assert response.status_code == 200
+    mock_cache.clear.assert_called_once()
 
 
 # ============================================================================
@@ -356,22 +390,42 @@ def test_cache_stats_endpoint_never_fails() -> None:
 
 
 # ============================================================================
-# TEST: RESPONSE HEADERS
+# TEST: WEBSOCKET CACHE STATUS
 # ============================================================================
 
 
-def test_cache_status_response_header(client: TestClient) -> None:
-    """Test that responses include X-Cache-Status header."""
-    # Retrieve endpoint should add X-Cache: HIT/MISS/ERROR
-    # Config endpoint should add X-Cache-Status header
+def _receive_websocket_message_with_cache_status(client: TestClient) -> Dict[str, Any]:
+    """Connect to the chat WebSocket and return the first message with cache_status."""
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json(
+            {
+                "message": "cache status integration test",
+                "query": "cache status integration test",
+            }
+        )
+
+        for _ in range(10):
+            message = websocket.receive_json()
+            if isinstance(message, dict) and "cache_status" in message:
+                return message
+
+    pytest.fail("WebSocket did not return a JSON message containing 'cache_status'")
 
 
-def test_cache_timestamp_response_header(client: TestClient) -> None:
-    """Test that responses include X-Cache-Timestamp header."""
-    # Optional header with cache operation timestamp
-    pass
+def test_websocket_cache_status_field(client: TestClient) -> None:
+    """Test that WebSocket messages include cache_status field."""
+    message = _receive_websocket_message_with_cache_status(client)
+
+    assert isinstance(message, dict)
+    assert "cache_status" in message
+    assert isinstance(message["cache_status"], str)
 
 
+def test_websocket_cache_status_values(client: TestClient) -> None:
+    """Test that cache_status field has correct values."""
+    message = _receive_websocket_message_with_cache_status(client)
+
+    assert message["cache_status"] in {"HIT", "MISS", "ERROR"}
 # ============================================================================
 # TEST: ERROR HANDLING & LOGGING
 # ============================================================================

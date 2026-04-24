@@ -420,11 +420,10 @@ class WsResultsMessage(BaseModel):
     """WebSocket results message sent by server.
 
     T03 WS cache-status contract: the ``cache_status`` field carries
-    the retrieval-layer cache outcome (HIT / MISS / ERROR) so that WS
-    clients have the same cache visibility that REST clients get via the
-    ``X-Cache`` response header.  The field uses the retrieval-layer
-    signal (``cache.retrieval_*``) rather than the HTTP-middleware signal
-    (``cache.http_*``) because WebSocket traffic bypasses the middleware.
+    the retrieval-layer cache outcome (HIT / MISS / ERROR).  The field uses
+    the retrieval-layer signal (``cache.retrieval_*``) rather than the
+    HTTP-middleware signal (``cache.http_*``) because WebSocket traffic
+    bypasses the middleware.
     """
 
     type: Literal["results"] = "results"
@@ -1329,8 +1328,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 )
 
                 # T03 WS cache-status contract: include retrieval-layer cache
-                # outcome in the results payload so WS clients have the same
-                # cache visibility that REST clients get via X-Cache header.
+                # outcome in the results payload so WS clients have direct
+                # cache visibility via the cache_status field in the message.
                 # _shared_retrieve_documents always appends exactly one element;
                 # the fallback handles any unexpected empty-list edge case.
                 _raw_status = ws_cache_status_out[0] if ws_cache_status_out else "MISS"

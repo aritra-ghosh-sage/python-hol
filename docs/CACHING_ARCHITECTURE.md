@@ -22,7 +22,7 @@
    - 4.4 [`timestamp`](#44-timestamp-field)
 5. [corpus_version — Redis-Backed Behavior and Fallback Semantics](#5-corpus_version--redis-backed-behavior-and-fallback-semantics)
 6. [Node-Local L2 Scope and Thread-Safety Caveats](#6-node-local-l2-scope-and-thread-safety-caveats)
-7. [X-Cache Response Header Contract](#7-x-cache-response-header-contract)
+7. [Cache Status Observability — WebSocket and Stats](#7-cache-status-observability--websocket-and-stats)
 8. [Fail-Open and Fallback Behavior](#8-fail-open-and-fallback-behavior)
 9. [Cache Invalidation Rules](#9-cache-invalidation-rules)
 10. [Migration Notes — Flat → Layered Stats Schema (OPTB-008)](#10-migration-notes--flat--layered-stats-schema-optb-008)
@@ -576,11 +576,8 @@ curl -s http://localhost:8000/cache/stats | jq '.l1_query_cache.corpus_version'
 # 4. Check if fallback mode is active
 curl -s http://localhost:8000/cache/stats | jq '.backend_health.fallback_active'
 
-# 5. Inspect X-Cache header on a retrieve request
-curl -si -X POST http://localhost:8000/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query": "test query"}' \
-  | grep -i x-cache
+# 5. Inspect cache_status in WebSocket messages
+curl -s http://localhost:8000/cache/stats | jq '.l1_query_cache'
 
 # 6. Force L1 invalidation (requires config change)
 curl -X PUT http://localhost:8000/config \

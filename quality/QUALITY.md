@@ -1,10 +1,10 @@
 # Quality Constitution: Hybrid RAG Caching System
 
 **Plan ID:** `20260420-caching-blueprint`  
-**Module:** `hybrid_rag/cache.py`, `api_middleware.py`, `api.py` (cache integration)  
+**Module:** `hybrid_rag/cache.py`, `api.py` (cache integration)  
 **Date:** 2026-04-20  
 **Owned by:** Caching Task Force  
-**Last Updated:** 2026-04-20
+**Last Updated:** 2026-04-24
 
 ---
 
@@ -42,10 +42,10 @@ For a caching system, fitness for use means:
 | Subsystem | Target | Rationale |
 |-----------|--------|-----------|
 | `cache.py` (core module) | ≥85% | Defensive code (error handling, TTL logic, thread safety) must be tested. Miss TTL expiration or locking edge cases → production cache corruption. |
-| `api_middleware.py` (L1 caching) | ≥90% | ASGI body replay is complex; incorrect replay corrupts streaming requests. Middleware must handle both HIT and MISS paths, error conditions, and optional response bodies. |
+| `api.py` (L1 caching via shared retrieval) | ≥90% | L1 cache is integrated into `_shared_retrieve_documents()` function. Must handle HIT/MISS/ERROR paths, key canonicalization, and cache invalidation on config/ingest changes. |
 | `api.py` (cache integration) | ≥80% | Cache initialization, invalidation on config/ingest, and stats endpoint. Integration tests cover the full lifecycle (startup → requests → cache clear → shutdown). |
 | `config.py` (cache config) | ≥90% | Schema validation + backend factory. Invalid backend selection or missing Redis URL must fail loudly at startup, not silently at runtime. |
-| E2E (end-to-end cache pipeline) | 100% | Real workflow: ingest docs → retrieve → cache hit on repeat. Verify that the cache is actually populated and hit on subsequent requests. |
+| E2E (end-to-end cache pipeline) | 100% | Real workflow: ingest docs → WebSocket /ws/chat query → cache hit on repeat. Verify that the cache is actually populated and hit on subsequent requests. |
 
 ---
 
@@ -121,34 +121,31 @@ def test_in_memory_cache_basic_operations():
 
 ```python
 # ❌ FAKE TEST
-def test_middleware_calls_cache():
+def test_cache_check():
     mock_cache = MagicMock()
-    middleware = QueryCacheMiddleware(app, cache_backend=mock_cache)
     # Assertion checks if mock is configured, not if it's called
     assert mock_cache.get is not None  # ← Useless
 
 # ✅ REAL TEST
-def test_middleware_cache_hit():
+def test_shared_retrieve_cache_hit():
     cache = InMemoryCache()
-    app_with_middleware = FastAPI()
-    app_with_middleware.add_middleware(QueryCacheMiddleware, cache_backend=cache)
-    
-    @app_with_middleware.post("/retrieve")
-    def retrieve(query: dict):
-        return {"results": []}
-    
-    client = TestClient(app_with_middleware)
+    global _cache
+    _cache = cache
     
     # First call: cache miss
-    resp1 = client.post("/retrieve", json={"query": "test", "enable_rerank": False})
-    assert resp1.headers.get("X-Cache") == "MISS"
+    results1 = _shared_retrieve_documents("test query")
+    assert len(results1) > 0
     
-    # Second call: cache hit
-    resp2 = client.post("/retrieve", json={"query": "test", "enable_rerank": False})
-    assert resp2.headers.get("X-Cache") == "HIT"
+    # Second call with same query: cache hit
+    results2 = _shared_retrieve_documents("test query")
+    assert results1 == results2  # Verify exact match
+    
+    # Check cache was actually used
+    stats = cache.stats()
+    assert stats["hits"] > 0
 ```
 
-**Fix:** Call actual code. Verify side effects (headers, logs, state changes).
+**Fix:** Call actual code. Verify cache behavior with real cache backends, not mocks.
 
 ### ❌ Theater Pattern 5: Happy Path Only
 
@@ -203,15 +200,15 @@ def test_cache_set():
 ### Scenario 1: Cache Never Returns Stale Config Results
 **[Req: formal — Caching_Architecture_Blueprint.md § 3-Layer Strategy, ADR-006]**
 
-**What happens:** A user calls `POST /config` to change `semantic_weight` from 0.65 to 0.8. This changes how retrieval scores are fused. If L1 (response cache) still contains results computed with the old weight, subsequent retrieval requests get incorrect scores.
+**What happens:** A user calls `PUT /config` to change `semantic_weight` from 0.65 to 0.8. This changes how retrieval scores are fused. If L1 (response cache) still contains results computed with the old weight, subsequent retrieval requests get incorrect scores.
 
 **Why it matters:** Users rely on config changes to take effect immediately. Returning cached results with old weights silently produces wrong rankings — users see results in the wrong order without any indication that the system is stale. This is silent correctness loss.
 
 **How to verify:**
-1. Make a retrieval request with default config (semantic_weight=0.65)
-2. Verify response is cached and X-Cache header shows "HIT" on repeat
-3. Call `POST /config` with semantic_weight=0.8
-4. Verify cache is cleared: X-Cache header shows "MISS" on next request
+1. Make a WebSocket `/ws/chat` query with default config (semantic_weight=0.65)
+2. Verify response is cached and `cache_status` field shows "HIT" on repeat query
+3. Call `PUT /config` with semantic_weight=0.8
+4. Verify cache is cleared: `cache_status` field shows "MISS" on next request
 5. Verify new request produces different (reweighted) scores
 
 **Edge cases:**
@@ -231,9 +228,9 @@ def test_cache_set():
 **Why it matters:** Cache stampede turns a 10-second slow request into a 60-second hang (or crash if resources exhaust). In production, this can cascade to other services or databases if rate limits are exceeded.
 
 **How to verify:** (MVP approach — defer lock-based fix to v1.1)
-1. Make a retrieval request and verify it caches (X-Cache: MISS → HIT)
-2. Clear cache via `POST /config` or `POST /ingest`
-3. Simulate 50+ concurrent retrieval requests for the same query
+1. Make a WebSocket `/ws/chat` query and verify it caches (`cache_status: MISS` → `HIT`)
+2. Clear cache via `PUT /config` or `POST /ingest`
+3. Simulate 50+ concurrent WebSocket queries for the same query
 4. Check `/cache/stats` endpoint: latency spike should be visible (first request takes 200–1000ms, subsequent get <5ms after the first completes)
 5. Verify no errors occur; all 50 requests eventually return correct results
 
@@ -268,15 +265,15 @@ def test_cache_set():
 ### Scenario 4: Fail-Open: Cache Backend Failure Never Breaks API
 **[Req: formal — Caching_Architecture_Blueprint.md § Guiding Principles, § Fail-Open]**
 
-**What happens:** Redis connection pool is exhausted, or Redis server is down. An API request to `POST /retrieve` arrives. If cache fails ungracefully (raises exception), the entire request fails, and users get a 500 error.
+**What happens:** Redis connection pool is exhausted, or Redis server is down. A WebSocket query via `/ws/chat` arrives. If cache fails ungracefully (raises exception), the entire request fails, and users get an error message.
 
 **Why it matters:** Availability > performance. A slow response (live retrieval, no cache) is better than no response (error). Users would rather wait 500ms for results than get an error.
 
 **How to verify:**
 1. Simulate Redis connection failure (mock `redis.Redis` to raise `ConnectionError`)
-2. Make a retrieval request
+2. Make a retrieval request via WebSocket `/ws/chat`
 3. Verify: request completes successfully, returns correct results (via live retriever)
-4. Verify: X-Cache header shows "ERROR" (not "HIT" or "MISS")
+4. Verify: WebSocket message includes cache_status field showing "ERROR" (not "HIT" or "MISS")
 5. Verify: error is logged at WARNING level, not ERROR or CRITICAL
 6. Verify: `/cache/stats` reflects the error (error_count incremented)
 
@@ -339,20 +336,20 @@ def test_cache_set():
 
 ---
 
-### Scenario 8: X-Cache Header Accuracy
-**[Req: inferred — from code inspection: X-Cache header set by middleware]**
+### Scenario 8: Cache Status Field Accuracy
+**[Req: inferred — from code inspection: cache_status field in WebSocket messages]**
 
-**What happens:** Middleware sets X-Cache header to indicate cache status (HIT, MISS, ERROR). If this header is wrong (e.g., returns HIT when it should be MISS), monitoring systems and clients will be confused.
+**What happens:** WebSocket `/ws/chat` messages include a `cache_status` field to indicate cache state (HIT, MISS, ERROR). If this field is wrong (e.g., returns HIT when it should be MISS), monitoring systems and clients will be confused.
 
-**Why it matters:** Ops teams rely on X-Cache header to diagnose cache health. Wrong header → wrong diagnosis → wasted troubleshooting time.
+**Why it matters:** Clients and ops teams rely on cache_status field to diagnose cache health. Wrong status → wrong diagnosis → wasted troubleshooting time.
 
 **How to verify:**
-1. Make retrieval request (cache miss): verify X-Cache: MISS in response headers
-2. Repeat request (cache hit): verify X-Cache: HIT
-3. Corrupt cache (delete the key externally): make request, verify X-Cache: MISS (not HIT)
-4. Simulate cache error: verify X-Cache: ERROR (not HIT or MISS)
+1. Make WebSocket query (cache miss): verify `cache_status: "MISS"` in first response message
+2. Repeat same query (cache hit): verify `cache_status: "HIT"` in response
+3. Corrupt cache (delete the key externally): make query, verify `cache_status: "MISS"` (not HIT)
+4. Simulate cache error: verify `cache_status: "ERROR"` (not HIT or MISS)
 
-**See tests:** `test_x_cache_header_miss`, `test_x_cache_header_hit`, `test_x_cache_header_error`
+**See tests:** `test_cache_status_miss`, `test_cache_status_hit`, `test_cache_status_error`
 
 ---
 

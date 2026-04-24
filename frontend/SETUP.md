@@ -77,8 +77,7 @@ pnpm start  # Runs optimized production build
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/ws/chat` | WebSocket | Real-time query/response with status updates |
-| `/retrieve` | POST | REST API for document retrieval |
+| `/ws/chat` | WebSocket | Real-time query/response with status updates (primary retrieval path) |
 | `/documents` | POST | Add custom data (text/URL/files) |
 | `/documents/sources` | GET | List ingested document sources |
 | `/config` | GET/PUT | View/update retriever settings |
@@ -323,7 +322,6 @@ wscat -c ws://localhost:8000/ws/chat
 │ │ /ws/chat (WebSocket)     Handlers for real-time chat   │ │
 │ │ /documents (POST)        Add text/URL/files            │ │
 │ │ /documents/sources (GET) List ingested sources         │ │
-│ │ /retrieve (POST)         REST retrieval endpoint       │ │
 │ │ /config (GET/PUT)        Get/update configuration      │ │
 │ │ /health (GET)            Health check                  │ │
 │ └──────────────────────────────────────────────────────────┘ │

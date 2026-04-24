@@ -6,6 +6,7 @@ dist/
 wheels/
 *.egg-info
 .coverage
+pytest_output.log
 
 # Virtual environments
 .venv
@@ -15,10 +16,13 @@ wheels/
 .env.*
 
 *.bin
-implementation_docs/*.md
+implementation_docs/
 
 # ChromaDB persistent storage (development artefact — too large for git)
 ai_support_kb/
 support_kb/
 
 
+quality/code_reviews/
+quality/results/
+quality/spec_audits/

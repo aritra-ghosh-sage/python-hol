@@ -278,13 +278,8 @@ __all__ = [
 **Pattern: Request/Response models + proper error handling**
 
 ```python
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from pydantic import BaseModel, Field
-
-class RetrievalRequest(BaseModel):
-    """Request model for retrieval endpoint."""
-    query: str = Field(..., min_length=1, max_length=500)
-    enable_rerank: Optional[bool] = None
 
 class DocumentResult(BaseModel):
     """Response model for a single document."""
@@ -292,52 +287,87 @@ class DocumentResult(BaseModel):
     text: str = Field(..., description="Document content")
     score: float = Field(..., description="Relevance score")
 
-class RetrievalResponse(BaseModel):
-    """Response model for retrieval endpoint."""
-    query: str
-    results: List[DocumentResult]
-    total_results: int
+class HealthResponse(BaseModel):
+    """Response model for health check endpoint."""
+    status: str = Field(..., description="Service status")
 
-@app.post("/retrieve", response_model=RetrievalResponse)
-async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
-    """Retrieve documents using hybrid search.
+@app.get("/health", response_model=HealthResponse)
+async def health_check() -> HealthResponse:
+    """Health check endpoint.
     
-    Args:
-        request: RetrievalRequest with query and optional reranking setting
-        
     Returns:
-        RetrievalResponse with retrieved documents and scores
-        
-    Raises:
-        HTTPException(400): If validation fails
-        HTTPException(500): If retrieval operation fails
-        HTTPException(503): If retriever not initialized
+        HealthResponse with status
     """
-    if _retriever is None:
-        logger.error("Retriever not initialized")
-        raise HTTPException(status_code=503, detail="Retriever not initialized")
+    return HealthResponse(status="ok")
+
+@app.websocket("/ws/chat")
+async def websocket_chat(websocket: WebSocket) -> None:
+    """WebSocket endpoint for real-time chat and retrieval.
     
+    Client sends: {"query": "...", "enable_rerank": false}
+    
+    Server responds with:
+    1. Status message: {"type": "status", "message": "..."}
+    2. Results message: {"type": "results", "cache_status": "HIT|MISS|ERROR", "results": [...]}
+    3. Error message: {"type": "error", "message": "..."}
+    
+    Raises:
+        WebSocketException on connection errors
+    """
+    await websocket.accept()
     try:
-        logger.info(f"Retrieval request: {request.query[:50]}...")
-        results = _retriever.retrieve(request.query)
-        
-        doc_results = [
-            DocumentResult(id=r["id"], text=r["text"], score=r["score"])
-            for r in results
-        ]
-        
-        logger.info(f"Retrieval complete: {len(doc_results)} results")
-        return RetrievalResponse(
-            query=request.query,
-            results=doc_results,
-            total_results=len(doc_results)
-        )
-    except RetrievalError as e:
-        logger.error(f"Retrieval error: {e}")
-        raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)}")
+        while True:
+            data = await websocket.receive_json()
+            query = data.get("query")
+            
+            if not query:
+                await websocket.send_json(
+                    {"type": "error", "message": "Query is required"}
+                )
+                continue
+            
+            enable_rerank: bool = data.get("enable_rerank", True)
+            
+            try:
+                # Retrieve documents using HybridRetriever
+                results: List[Dict[str, Any]] = retriever.retrieve(
+                    query=query,
+                    enable_rerank=enable_rerank
+                )
+                
+                await websocket.send_json({
+                    "type": "results",
+                    "query": query,
+                    "cache_status": "HIT",
+                    "results": [
+                        {
+                            "id": r["id"],
+                            "text": r["text"],
+                            "score": r["score"],
+                            "source": r.get("source", "")
+                        }
+                        for r in results
+                    ]
+                })
+            except RetrievalError as e:
+                logger.error(f"Retrieval failed: {e}")
+                await websocket.send_json(
+                    {"type": "error", "message": f"Retrieval failed: {str(e)}"}
+                )
+            except VectorDBError as e:
+                logger.error(f"Vector DB error: {e}")
+                await websocket.send_json(
+                    {"type": "error", "message": f"Database error: {str(e)}"}
+                )
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Unexpected error")
+        logger.error(f"WebSocket error: {e}", exc_info=True)
+        try:
+            await websocket.send_json(
+                {"type": "error", "message": f"Error: {str(e)}"}
+            )
+        except Exception as send_error:
+            logger.error(f"Failed to send error message: {send_error}")
+        await websocket.close()
 ```
 
 ---

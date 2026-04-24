@@ -105,7 +105,7 @@ The hybrid RAG system implements a **3-layer distributed caching architecture** 
 
 ### 📊 Caching System Architecture
 
-For a complete visual overview of the caching system, see the **[Component Flow Diagram](./docs/diagrams/CACHING_FLOW.md)** which illustrates:
+For a complete visual overview of the caching system, see the **[Caching Diagrams](./docs/CACHING_SEQUENCE.md)** which illustrates:
 - Request flow from clients through L1/L2 cache layers
 - Cache backend selection (InMemory vs Redis)
 - Invalidation events and their impact
@@ -134,7 +134,7 @@ Set these environment variables to customize caching behavior:
 
 ### For Production Deployments
 - See [docs/CACHING_ARCHITECTURE.md](./docs/CACHING_ARCHITECTURE.md) for authoritative architecture reference
-- See [docs/diagrams/CACHING_FLOW.md](./docs/diagrams/CACHING_FLOW.md) for visual component flow
+- See [docs/CACHING_SEQUENCE.md](./docs/CACHING_SEQUENCE.md) for component flow and sequence diagrams
 - See [docs/CACHE_DEPLOYMENT.md](./docs/CACHE_DEPLOYMENT.md) for deployment procedures
 - See [docs/CACHE_PERF_REPORT.md](./docs/CACHE_PERF_REPORT.md) for performance benchmarks
 - Use Redis for distributed deployments and better reliability

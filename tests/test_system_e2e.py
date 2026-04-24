@@ -376,29 +376,31 @@ class TestEdgeCases:
     """Edge case and boundary condition tests."""
 
     def test_health_check_not_cached(self, app_with_cache: TestClient) -> None:
-        """/health endpoint is excluded from cache (should not have X-Cache header).
-        
+        """/health endpoint is excluded from cache observability.
+
         Expected behavior:
         - /health returns 200
         - Not cached (excluded_paths)
+        - WebSocket cache_status not relevant for REST endpoint
         """
         response = app_with_cache.get("/health")
         assert response.status_code == 200
-        
+
         # Health check should not be in cache exclusions or should work normally
         result = response.json()
         assert "status" in result
 
     def test_config_endpoint_excluded_from_cache(self, app_with_cache: TestClient) -> None:
-        """/config endpoint is excluded from cache (should not have X-Cache header).
-        
+        """/config endpoint is excluded from cache observability.
+
         Expected behavior:
         - /config GET returns 200
         - Not cached (excluded_paths)
+        - Cache status tracked via GET /cache/stats instead
         """
         response = app_with_cache.get("/config")
         assert response.status_code == 200
-        
+
         config = response.json()
         assert "semantic_weight" in config
         assert "keyword_weight" in config

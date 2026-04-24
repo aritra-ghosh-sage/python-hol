@@ -9,7 +9,7 @@
 ## TL;DR
 
 **What is this?** A production-ready 3-layer caching system for Hybrid RAG (semantic + keyword search) that:
-- Caches full retrieval responses (L1) for 24-48 hours
+- Caches full retrieval responses (L1) for 24-48 hours via `_shared_retrieve_documents()` in `api.py`
 - Caches query embeddings (L2) for infinite reuse
 - Caches config responses (L3) with event invalidation
 
@@ -17,12 +17,11 @@
 
 **Where is the code?**
 - Core: `hybrid_rag/cache.py` (CacheBackend ABC, InMemoryCache, RedisCache)
-- Integration: `api_middleware.py` (QueryCacheMiddleware for L1)
-- FastAPI: `api.py` (cache init, stats endpoint, invalidation)
+- Integration: `api.py` (`_shared_retrieve_documents()` function for L1, WebSocket `/ws/chat` endpoint)
 - Config: `hybrid_rag/config.py` (CacheSettings, create_cache_backend)
 
 **Three blocking issues addressed:**
-- Issue #1: Config changes now clear cache (ADR-006, `POST /config` → `cache.clear()`)
+- Issue #1: Config changes now clear cache (ADR-006, `PUT /config` → `cache.clear()`)
 - Issue #2: Cache stampede monitored via `/cache/stats` endpoint (ADR-005)
 - Issue #3: Aggressive ingest invalidation fixed with `ingest_type` parameter (ADR-003)
 
@@ -36,15 +35,15 @@
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ FastAPI Client Requests                         │
+│ FastAPI WebSocket Client Requests               │
 └──────────────────┬──────────────────────────────┘
                    │
                    ▼
 ┌─────────────────────────────────────────────────┐
-│ QueryCacheMiddleware (L1 Response Cache)        │
-│ - Intercepts POST /retrieve                     │
-│ - SHA-256 cache key (with enable_rerank flag)   │
-│ - X-Cache header (HIT/MISS/ERROR)               │
+│ WS /ws/chat Handler                             │
+│ - Calls _shared_retrieve_documents()            │
+│ - L1 Response Cache (via lazy_cache)            │
+│ - Returns cache_status: HIT/MISS/ERROR          │
 │ Backend: Redis (prod) or InMemoryCache (dev)    │
 │ TTL: 24-48h, max_size: 10k entries              │
 └──────────────────┬──────────────────────────────┘
@@ -74,7 +73,7 @@
               └────────────────┘   └──────────────┘
 ```
 
-**Key insight:** L1 caches **entire responses**, so most requests never hit retriever. L2 caches only **embeddings**, saving encoder calls. L3 caches **config responses**, avoiding recomputation.
+**Key insight:** L1 caches **entire responses** in `_shared_retrieve_documents()`, so most requests never hit retriever. L2 caches only **embeddings**, saving encoder calls. L3 caches **config responses**, avoiding recomputation.
 
 ---
 
@@ -83,14 +82,15 @@
 ### Request 1 (Cold Start: Cache Miss)
 
 ```
-POST /retrieve {"query": "...", "enable_rerank": false}
+WS /ws/chat {"query": "...", "enable_rerank": false}
   ↓
-QueryCacheMiddleware.dispatch():
-  - Generate cache key: sha256(json_canonical_request)
-  - Check cache.get(key) → None (MISS)
-  - Pass through to handler
+websocket_chat handler:
+  - Call _shared_retrieve_documents()
   ↓
-API handler: retrieve(req)
+_shared_retrieve_documents():
+  - Generate cache key: sha256(json_canonical_request + corpus_version)
+  - Check lazy_cache.get(key) → None (MISS)
+  - Pass through to retriever
   ↓
 HybridRetriever.retrieve(query):
   - Check L2 embedding cache for query
@@ -101,21 +101,24 @@ HybridRetriever.retrieve(query):
   - Fusion (semantic_weight * sem_score + keyword_weight * kw_score)
   - Optional reranking (cross-encoder)
   ↓
-API stores response in L1 cache with TTL=24h
+_shared_retrieve_documents() stores response in L1 cache with TTL=24h
   ↓
-Response returned to client with X-Cache: MISS (latency: ~500ms)
+WebSocket message sent with cache_status: MISS (latency: ~500ms)
 ```
 
 ### Request 2 (Warm: Cache Hit)
 
 ```
-POST /retrieve {"query": "...", "enable_rerank": false}
+WS /ws/chat {"query": "...", "enable_rerank": false}
   ↓
-QueryCacheMiddleware.dispatch():
-  - Generate cache key: sha256(json_canonical_request)
-  - Check cache.get(key) → Found!
+websocket_chat handler:
+  - Call _shared_retrieve_documents()
   ↓
-Response returned from cache with X-Cache: HIT (latency: <5ms)
+_shared_retrieve_documents():
+  - Generate cache key: sha256(json_canonical_request + corpus_version)
+  - Check lazy_cache.get(key) → Found!
+  ↓
+WebSocket message sent with cache_status: HIT (latency: <5ms)
 
 [Retriever never called; no ChromaDB query; no encoding]
 ```
@@ -125,18 +128,21 @@ Response returned from cache with X-Cache: HIT (latency: <5ms)
 ```
 PUT /config {"semantic_weight": 0.8}
   ↓
-API handler: put_config(update):
+API handler: update_config(update):
   - _config = _config.update(**update.dict())
   - cache.clear()  ← ADR-006 implementation
   ↓
-POST /retrieve (same query as before)
+WS /ws/chat (same query as before)
   ↓
-QueryCacheMiddleware:
-  - Check cache.get(key) → None (cache was cleared)
+websocket_chat handler:
+  - Call _shared_retrieve_documents()
+  ↓
+_shared_retrieve_documents():
+  - Check lazy_cache.get(key) → None (cache was cleared)
   ↓
 Retriever runs with NEW config (semantic_weight=0.8)
 Result stored in cache
-Response returned with X-Cache: MISS
+WebSocket message sent with cache_status: MISS
 
 [Users see config change take effect immediately]
 ```
@@ -246,11 +252,11 @@ The quality system has 6 artifacts. Before changing any code:
 
 ### Gotcha 3: Config Not Taking Effect
 
-**Scenario:** Change config via `PUT /config`, but queries still return results with old config weights.
+**Scenario:** Change config via `PUT /config`, but WebSocket queries still return results with old config weights.
 
 **Cause:** Config invalidation (ADR-006) not implemented. Cache returns old results. See QUALITY.md Scenario #1.
 
-**Verification:** Check X-Cache header after config change. Should be MISS (cache was cleared).
+**Verification:** Check WebSocket message's `cache_status` field after config change. Should be "MISS" (cache was cleared), then subsequent identical query should show "HIT" with new weights.
 
 ### Gotcha 4: Redis Connection Timeout
 
@@ -308,12 +314,10 @@ pytest quality/RUN_INTEGRATION_TESTS.md  # Full e2e pipeline
 | File | Purpose | Ownership |
 |------|---------|-----------|
 | `hybrid_rag/cache.py` | Core cache backends (ABC, InMemory, Redis) | Critical ⚠️ |
-| `api_middleware.py` | L1 caching middleware, X-Cache header | Critical ⚠️ |
-| `api.py` | Cache integration (init, stats, invalidation) | Critical ⚠️ |
+| `api.py` | L1 caching via `_shared_retrieve_documents()`, stats endpoint, cache invalidation | Critical ⚠️ |
 | `hybrid_rag/config.py` | CacheSettings, create_cache_backend factory | Important |
 | `quality/test_caching_functional.py` | Functional tests | Important |
 | `tests/test_cache_integration.py` | Integration tests | Important |
-| `tests/test_query_cache_middleware.py` | Middleware tests | Important |
 | `quality/QUALITY.md` | Quality constitution (read first) | Reference |
 
 ---
@@ -321,7 +325,7 @@ pytest quality/RUN_INTEGRATION_TESTS.md  # Full e2e pipeline
 ## Debugging Checklist
 
 **Cache not hitting:**
-- [ ] Is X-Cache header "MISS"? (Not "ERROR")
+- [ ] Is `cache_status` field "MISS"? (Not "ERROR")
 - [ ] Check cache size: `GET /cache/stats` → size > 0?
 - [ ] Check TTL hasn't expired (24h default)
 - [ ] Check cache key canonicalization (ADR-002)
@@ -339,7 +343,7 @@ pytest quality/RUN_INTEGRATION_TESTS.md  # Full e2e pipeline
 
 **Performance slow:**
 - [ ] Check if cache is enabled: `GET /config` → config reflects setup
-- [ ] Check X-Cache headers: are most hits?
+- [ ] Check WebSocket message `cache_status`: are most HIT?
 - [ ] If many MISS: why? (TTL too short, cache cleared, high cardinality)
 
 ---
@@ -370,11 +374,11 @@ curl -X PUT http://localhost:8000/config -H "Content-Type: application/json" -d 
 **API should still work** (fail-open pattern):
 ```bash
 redis-cli shutdown  # Simulate Redis down
-curl http://localhost:8000/retrieve -X POST -H "Content-Type: application/json" -d '{"query": "test"}'
-# Should return 200 OK with X-Cache: ERROR (not 500)
+# Test via WebSocket or frontend UI
+# Should return correct results with cache_status: ERROR (not crash)
 ```
 
-If API returns 500, that's a BUG (fail-open not implemented).
+If API crashes or returns errors, that's a BUG (fail-open not implemented).
 
 ---
 
@@ -421,7 +425,8 @@ You'll know the cache is working when:
 
 **Code References:**
 - `hybrid_rag/cache.py:30-80` — CacheBackend ABC definition
-- `api_middleware.py:90-130` — Cache key generation (canonicalization)
+- `api.py:652-880` — `_shared_retrieve_documents()` function (L1 cache implementation, key generation, cache hits/misses)
+- `api.py:1277-1370` — WebSocket handler with cache status reporting
 - `api.py:250-280` — Config update & cache clear
 - `api.py:310-330` — Cache stats endpoint
 
