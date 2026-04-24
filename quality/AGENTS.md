@@ -159,7 +159,7 @@ Read these. They explain the "why" behind every implementation choice.
 | ADR-002 | Include enable_rerank in cache key | Reranked/non-reranked cached separately |
 | ADR-003 | Ingest type parameter (add vs update) | Selective cache invalidation |
 | ADR-005 | Cache stampede mitigation (MVP) | Stats monitoring; defer lock-based to v1.1 |
-| ADR-006 | Config changes clear cache | `POST /config` → `cache.clear()` |
+| ADR-006 | Config changes clear cache | `PUT /config` → `cache.clear()` |
 
 ---
 

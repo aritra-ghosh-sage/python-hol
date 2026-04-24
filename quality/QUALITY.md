@@ -229,7 +229,7 @@ def test_cache_set():
 
 **How to verify:** (MVP approach — defer lock-based fix to v1.1)
 1. Make a WebSocket `/ws/chat` query and verify it caches (`cache_status: MISS` → `HIT`)
-2. Clear cache via `PUT /config` or `POST /ingest`
+2. Clear cache via `PUT /config` or `POST /documents` (with `ingest_type="update"`)
 3. Simulate 50+ concurrent WebSocket queries for the same query
 4. Check `/cache/stats` endpoint: latency spike should be visible (first request takes 200–1000ms, subsequent get <5ms after the first completes)
 5. Verify no errors occur; all 50 requests eventually return correct results
@@ -245,7 +245,7 @@ def test_cache_set():
 ### Scenario 3: Aggressive Cache Invalidation Causes Cold Starts
 **[Req: formal — Caching_Architecture_Blueprint.md § Cache Invalidation, ADR-003]**
 
-**What happens:** Document ingestion via `POST /ingest` clears the entire L1 cache. If documents are ingested frequently (e.g., every 5 minutes), the cache is cold most of the time, and retrieval requests always miss. The cache becomes useless, and system performance degrades to live-retrieval speeds (200–1000ms per query).
+**What happens:** Document ingestion via `POST /documents` (with `ingest_type="update"`) clears the entire L1 cache. If documents are ingested frequently (e.g., every 5 minutes), the cache is cold most of the time, and retrieval requests always miss. The cache becomes useless, and system performance degrades to live-retrieval speeds (200–1000ms per query).
 
 **Why it matters:** The cache is supposed to improve performance. If ingestion invalidation is too aggressive, it defeats the purpose. Users see slow queries after every ingest.
 
