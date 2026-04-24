@@ -43,29 +43,13 @@ export function SourceList({ refreshTrigger }: SourceListProps) {
     );
   }
 
-  if (sources.length === 0) {
-    return (
-      <div className="text-gray-400 text-sm px-3 py-2">
-        No sources added yet. Start by adding text, URL, or files above.
-      </div>
-    );
-  }
+  const totalDocuments = sources.length;
 
   return (
-    <div className="space-y-2">
-      {sources.map((source) => (
-        <div
-          key={source.source}
-          className="flex items-center justify-between bg-gray-800 px-3 py-2 rounded border border-gray-700"
-        >
-          <span className="text-sm text-gray-300 truncate">
-            {source.source}
-          </span>
-          <span className="text-xs bg-blue-500/30 text-blue-300 px-2 py-1 rounded flex-shrink-0">
-            {source.count} chunks
-          </span>
-        </div>
-      ))}
-    </div>
+    <span className="text-sm text-gray-300">
+      {totalDocuments === 0
+        ? "No sources ingested yet"
+        : `${totalDocuments} ${totalDocuments === 1 ? "document" : "documents"} ingested`}
+    </span>
   );
 }
