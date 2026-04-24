@@ -1,7 +1,7 @@
 # Hybrid RAG Caching System - Component Flow Diagram
 
-**Document Version:** 1.0
-**Last Updated:** 2026-04-23
+**Document Version:** 1.1
+**Last Updated:** 2026-04-24
 **Task:** Documentation update and cleanup
 **Audience:** Developers, architects, operators
 
@@ -16,16 +16,13 @@ This diagram visualizes the complete Hybrid RAG caching architecture, showing th
 ```mermaid
 graph TB
     subgraph "Client Layer"
-        HTTP[HTTP Client<br/>POST /retrieve]
         WS[WebSocket Client<br/>/ws/chat]
     end
 
     subgraph "API Layer - api.py"
         direction TB
-        MW[QueryCacheMiddleware<br/>L1 Query Cache]
-        SHARED[_shared_retrieve_documents<br/>Shared Retrieval Facade]
+        SHARED[_shared_retrieve_documents<br/>L1 Query Cache & Facade]
 
-        MW -->|Cache Miss| SHARED
         WS --> SHARED
     end
 
@@ -55,17 +52,15 @@ graph TB
         KEY2[L2 Key:<br/>• SHA-256 query_text]
     end
 
-    HTTP --> MW
-    MW -->|Uses| INMEM
-    MW -->|Uses| REDIS
-    SHARED -->|L1 Hit| HTTP
+    SHARED -->|Uses| INMEM
+    SHARED -->|Uses| REDIS
     SHARED -->|L1 Hit| WS
     SHARED -->|L1 Miss| RET
     RET -->|L2 Hit| SHARED
     RET -->|L2 Miss| CHROMA
     CHROMA -->|Results| RET
     RET -->|Cache & Return| SHARED
-    SHARED -->|Store L1| MW
+    SHARED -->|Send to Client| WS
 
     subgraph "Invalidation Events"
         INV1[PUT /config<br/>• L1 full clear<br/>• corpus_version++]
@@ -74,20 +69,17 @@ graph TB
         INV4[TTL Expiry<br/>• Backend-managed<br/>• No corpus_version change]
     end
 
-    INV1 -.->|Invalidates| MW
-    INV2 -.->|Invalidates| MW
+    INV1 -.->|Invalidates| SHARED
+    INV2 -.->|Invalidates| SHARED
     INV3 -.->|Updates token| SHARED
     INV4 -.->|Evicts entries| INMEM
     INV4 -.->|Evicts entries| REDIS
 
     subgraph "Observability"
         STATS[GET /cache/stats<br/>Layered Schema]
-        STATS -.->|Reports| MW
+        STATS -.->|Reports| SHARED
         STATS -.->|Reports| RET
         STATS -.->|Health check| REDIS
-
-        HEADER[X-Cache: HIT/MISS<br/>HTTP Response Header]
-        MW -.->|Sets| HEADER
     end
 
     subgraph "Fail-Open Semantics"
@@ -96,7 +88,6 @@ graph TB
         FO -.->|Non-blocking| SHARED
     end
 
-    style MW fill:#e1f5ff
     style SHARED fill:#fff3e0
     style RET fill:#f3e5f5
     style CHROMA fill:#e8f5e9
@@ -110,9 +101,9 @@ graph TB
     classDef backend fill:#ffccbc,stroke:#d84315,stroke-width:2px
     classDef observability fill:#dcedc8,stroke:#689f38,stroke-width:2px
 
-    class MW,SHARED,RET cacheLayer
+    class SHARED,RET cacheLayer
     class INMEM,REDIS backend
-    class STATS,HEADER observability
+    class STATS observability
 ```
 
 ---
@@ -120,20 +111,15 @@ graph TB
 ## Component Descriptions
 
 ### Client Layer
-- **HTTP Client**: Traditional REST API calls via `POST /retrieve` (deprecated)
-- **WebSocket Client**: Real-time streaming via `/ws/chat` (current recommended path)
+- **WebSocket Client**: Real-time streaming via `/ws/chat` (primary retrieval path)
 
 ### API Layer (api.py)
-- **QueryCacheMiddleware**: HTTP middleware that implements L1 query cache
-  - Intercepts `POST /retrieve` requests
-  - Caches complete HTTP response bodies
-  - Configurable backend (memory or Redis)
-
-- **_shared_retrieve_documents**: Unified retrieval facade
-  - Handles both HTTP and WebSocket requests
-  - Manages cache key construction
-  - Implements fail-open semantics
-  - Contains application-layer caching logic
+- **_shared_retrieve_documents**: Unified retrieval facade with L1 query cache
+  - Handles all WebSocket requests from `/ws/chat`
+  - Implements L1 query cache at the application layer
+  - Manages cache key construction (SHA-256 of normalized query + enable_rerank + config_fingerprint + corpus_version)
+  - Implements fail-open semantics (cache failures never block retrieval)
+  - Calls the HybridRetriever on cache miss
 
 ### Cache Backends
 - **InMemoryCache**: Development/single-process deployments
@@ -285,6 +271,7 @@ Use `CACHE_BACKEND=redis` for multi-worker production deployments to ensure inva
 
 ## Related Documentation
 
+- [CACHING_SEQUENCE.md](./CACHING_SEQUENCE.md) - Detailed sequence diagrams for cache HIT/MISS paths
 - [CACHING_ARCHITECTURE.md](../CACHING_ARCHITECTURE.md) - Authoritative architecture reference
 - [CACHE_DEPLOYMENT.md](../CACHE_DEPLOYMENT.md) - Deployment procedures and environment variables
 - [CACHE_PERF_REPORT.md](../CACHE_PERF_REPORT.md) - Performance benchmarks and test results
@@ -294,4 +281,4 @@ Use `CACHE_BACKEND=redis` for multi-worker production deployments to ensure inva
 
 **Document Status:** ✅ Current
 **Maintained By:** Development Team
-**Last Review:** April 23, 2026
+**Last Review:** April 24, 2026

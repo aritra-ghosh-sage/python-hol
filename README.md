@@ -86,7 +86,7 @@ Each module has a single, well-defined responsibility:
 - ✅ Clear separation of concerns
 
 ### 7. **Distributed Caching** (L1 + L2 layers)
-- ✅ L1 Response Cache: FastAPI middleware intercepts and caches POST /retrieve
+- ✅ L1 Response Cache: Shared retrieval layer caches full query responses for `WS /ws/chat`
 - ✅ L2 Embedding Cache: LRU cache embedded in HybridRetriever for repeated embeddings
 - ✅ Backend options: In-memory (development) or Redis (production)
 - ✅ Configurable TTL, key prefixes, and max size
@@ -257,15 +257,14 @@ retriever = HybridRetriever(collection, config)
 results = retriever.retrieve("How do I use offline maps?")
 ```
 
-### REST API Usage
+### WebSocket API Usage
 ```bash
 # Start server
 python api.py
 
-# Make request
-curl -X POST http://localhost:8000/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Your search query"}'
+# Connect via WebSocket and send a query (example using wscat)
+wscat -c ws://localhost:8000/ws/chat
+# Then send: {"query": "Your search query"}
 ```
 
 ## 📋 Best Practices Implemented

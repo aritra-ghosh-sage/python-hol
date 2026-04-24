@@ -99,21 +99,7 @@ curl http://localhost:8000/health
 # {"status": "healthy", "retriever_ready": "yes"}
 ```
 
-#### 2. Retrieve Documents (Legacy — Deprecated)
-
-> **⚠️ Deprecated:** Use the WebSocket endpoint `ws://localhost:8000/ws/chat` instead.
-> `POST /retrieve` will be removed in v2.0 (sunset: 2026-10-31).
-
-```bash
-curl -X POST http://localhost:8000/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "How do I use offline maps?",
-    "enable_rerank": true
-  }'
-```
-
-#### 3. WebSocket Chat (Preferred)
+#### 2. WebSocket Chat (Retrieval)
 
 ```bash
 # Install websocat: cargo install websocat
@@ -368,8 +354,8 @@ from hybrid_rag.config import HybridRetrieverConfig
 # Default enabled
 config = HybridRetrieverConfig(enable_rerank=True)
 
-# But the API allows override:
-# POST /retrieve with enable_rerank: false to skip reranking
+# WebSocket allows per-query override:
+# Send {"query": "...", "enable_rerank": false} to skip reranking
 ```
 
 ## Example Scripts

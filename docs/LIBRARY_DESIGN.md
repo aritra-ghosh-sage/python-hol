@@ -224,17 +224,18 @@ results = retriever.retrieve("Your query here")
 ```
 
 ### API Usage
-```python
+```bash
 # Run the FastAPI server
 python api.py
 
-# Make requests
-curl -X POST http://localhost:8000/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query": "How do I use offline maps?"}'
+# Connect via WebSocket (the primary retrieval path)
+websocat ws://localhost:8000/ws/chat
+
+# Send a query
+{"query": "How do I use offline maps?"}
 ```
 
-> The API includes an L1 query cache (middleware) and L2 embedding cache (retriever-internal). See [CACHING_ARCHITECTURE.md](./CACHING_ARCHITECTURE.md) for details.
+> The API includes an L1 query cache (in `_shared_retrieve_documents`) and L2 embedding cache (retriever-internal). See [CACHING_ARCHITECTURE.md](./CACHING_ARCHITECTURE.md) for details.
 
 ## Testing Considerations
 
