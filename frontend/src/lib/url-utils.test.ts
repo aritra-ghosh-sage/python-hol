@@ -57,4 +57,40 @@ describe("isValidUrl", () => {
     expect(isValidUrl("https://192.168.1.1:3000")).toBe(true);
     expect(isValidUrl("https://example.com/#anchor")).toBe(true);
   });
+
+  describe("security validations", () => {
+    it("should prevent XSS via javascript: protocol", () => {
+      expect(isValidUrl("javascript:alert('xss')")).toBe(false);
+      expect(isValidUrl("javascript:void(0)")).toBe(false);
+      expect(isValidUrl("JAVASCRIPT:alert(document.cookie)")).toBe(false);
+    });
+
+    it("should prevent data: URI injection", () => {
+      expect(isValidUrl("data:text/html,<script>alert('xss')</script>")).toBe(false);
+      expect(isValidUrl("data:text/html;base64,PHNjcmlwdD5hbGVydCgneHNzJyk8L3NjcmlwdD4=")).toBe(false);
+    });
+
+    it("should prevent file: protocol access", () => {
+      expect(isValidUrl("file:///etc/passwd")).toBe(false);
+      expect(isValidUrl("file:///C:/Windows/System32/config/sam")).toBe(false);
+    });
+
+    it("should prevent protocol-relative URLs", () => {
+      // Protocol-relative URLs can be used for bypasses
+      expect(isValidUrl("//evil.com/payload")).toBe(false);
+      expect(isValidUrl("///evil.com")).toBe(false);
+    });
+
+    it("should handle URL constructor normalization", () => {
+      // URL constructor is smart and normalizes many edge cases
+      // This demonstrates why URL constructor is better than regex:
+      // it handles edge cases correctly according to the spec
+      expect(isValidUrl("http:///example.com")).toBe(true); // normalized to http://example.com/
+      expect(isValidUrl("https:example.com")).toBe(true); // normalized to https://example.com/
+
+      // These are truly invalid
+      expect(isValidUrl("ht tp://example.com")).toBe(false); // space in protocol
+      expect(isValidUrl("http//example.com")).toBe(false); // missing colon
+    });
+  });
 });
