@@ -40,18 +40,18 @@ Both layers support multiple backend implementations:
 
 ---
 
-## Cross-Channel Cache Architecture (REST/WS Parity)
+## Cross-Channel Cache Architecture (WebSocket-Only)
 
-*Added in Wave 2–3 (2026-04-21). Source: `docs/plan/20260420/cache-gap-plan.yaml`, task IDs CACHE-PARITY-IMPLEMENT and CACHE-PARITY-TESTS.*
+*Updated in v1.0.0 (2026-04-23). The REST `POST /retrieve` endpoint was removed; all retrieval now routes through WebSocket `/ws/chat`.*
 
 ### Shared Retrieval Facade
 
-Both the REST `POST /retrieve` endpoint and the WebSocket `/ws/chat` handler route all retrieval execution through one shared function, `_shared_retrieve_documents(query, enable_rerank)` in `api.py`. This eliminates the previous channel divergence where WS bypassed middleware and hit the retriever directly.
+The WebSocket `/ws/chat` handler routes all retrieval execution through the shared function `_shared_retrieve_documents(query, enable_rerank)` in `api.py`. This function implements the application-layer L1 query cache.
 
 **What the facade does:**
 1. Normalises the query string (whitespace-collapsed).
 2. Resolves the effective rerank mode from the request parameter; the global `_config.enable_rerank` is used as default but is **never mutated at request time**.
-3. Computes a stable cache key from `{normalized_query, effective_enable_rerank, config_fingerprint, corpus_version}`. Transport (`rest`/`ws`) is **excluded** from key identity.
+3. Computes a stable cache key from `{normalized_query, effective_enable_rerank, config_fingerprint, corpus_version}`.
 4. Reads from and writes to the shared L1 cache (`lazy_cache`) with fail-open semantics.
 5. Calls `_retriever.retrieve()` only on a cache miss.
 
@@ -89,13 +89,13 @@ effective_enable_rerank = (
 
 Concurrent requests with different `enable_rerank` values do not interfere. The global `_config.enable_rerank` reflects only the last committed `PUT /config` value, never a transient per-request override.
 
-### Observability Limitations and Known Residual Risk
+### Observability
 
-| Limitation | Detail |
+| Capability | Detail |
 |---|---|
-| **Cache stats aggregate backend activity** | `GET /cache/stats` reports backend-level hit/miss counters from the shared cache backend. Both HTTP middleware lookups and WS/shared-facade lookups increment the same counters, so WS cache activity is reflected in `/cache/stats`. |
-| **No structured cache-hit header on WS** | REST responses include `X-Cache: HIT/MISS`; WS messages do not expose cache status in the current message schema. |
-| **Fail-open parity test gap** | AC6 (cache backend errors must not cause retrieval failures for WS) is verified for REST via `test_query_cache_middleware.py::test_fail_open_errors` and is covered structurally in `_shared_retrieve_documents` (try/except on all cache calls). However, an independent end-to-end assertion that the WS handler returns a successful `results` message under a faulting cache backend has not been added to `test_api_shared_retrieval.py` as of Wave 3. This is a known test gap, not a production risk. |
+| **Cache stats** | `GET /cache/stats` reports backend-level hit/miss counters from the shared L1 cache. WS `/ws/chat` requests increment the same counters. |
+| **Cache status in WebSocket** | WS responses include `cache_status: "HIT" \| "MISS" \| "ERROR"` in the results message, providing equivalent visibility to the former REST `X-Cache` header. |
+| **Fail-open semantics** | Cache backend errors never cause retrieval failures for WebSocket requests. Errors are logged, and retrieval proceeds with `cache_status: "ERROR"` reported to client. |
 
 ---
 
@@ -1041,7 +1041,7 @@ Use this checklist before deploying caching to production:
 - [ ] Fail-open behavior tested (simulate Redis outage):
   ```bash
   redis-cli SHUTDOWN  # Simulate Redis outage
-  curl http://localhost:8000/retrieve -X POST ...  # API should still work
+  echo '{"query": "test"}' | websocat ws://localhost:8000/ws/chat  # API should still work
   ```
 
 - [ ] Load test completed with caching enabled:
