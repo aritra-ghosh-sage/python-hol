@@ -36,6 +36,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
+from html.parser import HTMLParser
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 
@@ -1445,18 +1446,50 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
             logger.info(f"Fetching content from URL: {request.content}")
             try:
                 headers = {
-                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
                 }
-                response = requests.get(request.content, headers=headers, timeout=10)
+                response = requests.get(request.content, headers=headers, timeout=15)
                 response.raise_for_status()
-                text_content = response.text
-                source_label = request.source_label or request.content
             except requests.RequestException as e:
                 logger.error(f"Failed to fetch URL: {e}")
                 raise HTTPException(
                     status_code=502, detail=f"Failed to fetch URL: {str(e)}"
                 )
+
+            class _TextExtractor(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self._parts: list[str] = []
+                    self._skip = False
+                def handle_starttag(self, tag, attrs):
+                    if tag in {"script", "style", "nav", "footer", "header"}:
+                        self._skip = True
+                def handle_endtag(self, tag):
+                    if tag in {"script", "style", "nav", "footer", "header"}:
+                        self._skip = False
+                def handle_data(self, data):
+                    if not self._skip:
+                        s = data.strip()
+                        if s:
+                            self._parts.append(s)
+                def get_text(self) -> str:
+                    return " ".join(self._parts)
+
+            extractor = _TextExtractor()
+            extractor.feed(response.text)
+            text_content = extractor.get_text()
+            if not text_content:
+                logger.error(f"No extractable text from URL: {request.content}")
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"No readable text could be extracted from {request.content}. "
+                        "The page may require JavaScript, a login, or bot verification."
+                    ),
+                )
+            source_label = request.source_label or request.content
 
         elif request.source_type == "file":
             # Decode base64
