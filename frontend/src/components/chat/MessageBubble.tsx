@@ -2,6 +2,7 @@
 
 import { ChatMessage } from "@/lib/types";
 import { Shimmer } from "@/components/ui/Shimmer";
+import { isValidUrl } from "@/lib/url-utils";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -45,14 +46,20 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                   >
                     {/* Score badge and source */}
                     <div className="flex items-center justify-between gap-2">
-                      <a
-                        href={result.source}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-400 hover:text-blue-300 truncate font-medium"
-                      >
-                        {result.source}
-                      </a>
+                      {isValidUrl(result.source) ? (
+                        <a
+                          href={result.source}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:text-blue-300 truncate font-medium"
+                        >
+                          {result.source}
+                        </a>
+                      ) : (
+                        <span className="text-gray-400 truncate font-medium">
+                          {result.source}
+                        </span>
+                      )}
                       <span
                         className="bg-blue-500/30 text-blue-300 px-2 py-0.5 rounded text-xs flex-shrink-0 cursor-help"
                         title={`Relevance: ${(result.score * 100).toFixed(0)}%`}
