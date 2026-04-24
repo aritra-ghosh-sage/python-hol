@@ -18,6 +18,7 @@ export function SourceList({ refreshTrigger }: SourceListProps) {
     const fetchSources = async () => {
       try {
         setIsLoading(true);
+        setError(null);
         const response = await apiClient.getDocumentSources();
         setSources(response.sources);
       } catch (err) {

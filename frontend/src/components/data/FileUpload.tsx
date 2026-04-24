@@ -52,6 +52,7 @@ export function FileUpload({ onDataAdded }: FileUploadProps) {
     try {
       // Read file and convert to base64
       const reader = new FileReader();
+
       reader.onload = async (event) => {
         const base64Content = (event.target?.result as string).split(",")[1];
 
@@ -83,6 +84,22 @@ export function FileUpload({ onDataAdded }: FileUploadProps) {
         } finally {
           setIsLoading(false);
         }
+      };
+
+      reader.onerror = () => {
+        setMessage({
+          type: "error",
+          text: "Failed to read file",
+        });
+        setIsLoading(false);
+      };
+
+      reader.onabort = () => {
+        setMessage({
+          type: "error",
+          text: "File reading was aborted",
+        });
+        setIsLoading(false);
       };
 
       reader.readAsDataURL(selectedFile);
