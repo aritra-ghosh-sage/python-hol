@@ -46,7 +46,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                   >
                     {/* Score badge and source */}
                     <div className="flex items-center justify-between gap-2">
-                      {result.source_url ? (
+                      {result.source_url && isValidUrl(result.source_url) ? (
                         <a
                           href={result.source_url}
                           target="_blank"
