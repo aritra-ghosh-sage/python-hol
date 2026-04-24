@@ -95,7 +95,8 @@ class DocumentResult(BaseModel):
 
     id: str = Field(..., description="Document identifier")
     text: str = Field(..., description="Document text content")
-    source: str = Field(..., description="Document source URL")
+    source: str = Field(..., description="Document source label or URL")
+    source_url: Optional[str] = Field(None, description="Original URL when source has a custom label")
     score: float = Field(..., description="Relevance score (may be negative due to fusion/reranking)")
 
 
@@ -887,6 +888,7 @@ def _to_filtered_document_results(
             id=r["id"],
             text=r["text"],
             source=r["metadata"]["source"],
+            source_url=r["metadata"].get("source_url"),
             score=float(r["score"]),
         )
         for r in filtered_results
@@ -1500,8 +1502,11 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
 
             # Prepare documents for ChromaDB
             doc_ids = [f"{source_label}_{i}" for i in range(len(chunks))]
+            source_url = request.content if request.source_type == "url" and request.source_label else None
+            url_meta: dict[str, str] = {"source_url": source_url} if source_url else {}
             metadatas = [
-                {"source": source_label, "chunk_index": i} for i in range(len(chunks))
+                {"source": source_label, "chunk_index": i, **url_meta}
+                for i in range(len(chunks))
             ]
 
             # Add to collection

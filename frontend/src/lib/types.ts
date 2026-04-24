@@ -6,6 +6,8 @@ export interface DocumentResult {
   id: string;
   text: string;
   source: string;
+  /** Original URL when source has a custom label */
+  source_url?: string;
   /** Relevance score (0-1). After backend filtering, only scores >= 0.85 are shown. */
   score: number;
 }
