@@ -639,17 +639,18 @@ class TestIngestTypeParameterContract:
     def test_ingest_update_clears_cache(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """POST /documents with ingest_type='update' must call cache.clear().
+        """POST /documents for a pre-existing source must call cache.clear().
 
-        WHAT: Wires a tracking cache double and verifies that a successful
-        ingest with ingest_type='update' results in exactly one cache.clear()
-        call.
-        WHY: If cache.clear() is not called, stale retrieval results will be
-        served to users after the corpus is updated.  This is a correctness
-        regression with direct user-visible impact.
+        WHAT: Pre-populates the fake collection with the ingested source label so
+        the backend detects it as an existing source and follows the 'update' path
+        (delete stale chunks, clear cache, bump generation).
+        WHY: If cache.clear() is not called when re-ingesting an existing source,
+        stale retrieval results will be served to users after the corpus is replaced.
         """
         tracking_cache = FakeCacheForStats()
-        fake_retriever = _FakeIngestableRetriever()
+        fake_retriever = _FakeIngestableRetriever(
+            existing_sources={"existing-source": ["existing-source_0"]}
+        )
         monkeypatch.setattr(api, "_cache", tracking_cache)
         monkeypatch.setattr(api, "_retriever", fake_retriever)
         monkeypatch.setattr(api, "_config", _fake_config())
@@ -659,30 +660,30 @@ class TestIngestTypeParameterContract:
         client = TestClient(api.app)
         response = client.post(
             "/documents",
-            json={"source_type": "text", "content": "New doc.", "ingest_type": "update"},
+            json={"source_type": "text", "content": "Updated doc.", "source_label": "existing-source"},
         )
 
         assert response.status_code == 200, (
-            f"Expected 200 for ingest_type='update', got {response.status_code}: "
+            f"Expected 200 for re-ingest of existing source, got {response.status_code}: "
             f"{response.text}"
         )
         assert tracking_cache._clear_call_count >= 1, (
-            "cache.clear() must be called at least once for ingest_type='update'"
+            "cache.clear() must be called at least once when re-ingesting an existing source"
         )
 
     def test_ingest_add_preserves_cache(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """POST /documents with ingest_type='add' must NOT call cache.clear().
+        """POST /documents for a brand-new source must NOT call cache.clear().
 
-        WHAT: Wires a tracking cache double and verifies that a successful
-        ingest with ingest_type='add' results in zero cache.clear() calls.
-        WHY: Bulk import workflows send hundreds of 'add' requests.  A single
+        WHAT: Uses an empty fake collection so the backend detects the source as
+        new and follows the 'add' path (no cache clear, no generation bump).
+        WHY: Bulk import workflows send hundreds of new-source requests.  A single
         unintentional cache.clear() per document would flush all cached query
         results for every document in the batch — an O(N) correctness bug.
         """
         tracking_cache = FakeCacheForStats()
-        fake_retriever = _FakeIngestableRetriever()
+        fake_retriever = _FakeIngestableRetriever()  # empty store → source is new
         monkeypatch.setattr(api, "_cache", tracking_cache)
         monkeypatch.setattr(api, "_retriever", fake_retriever)
         monkeypatch.setattr(api, "_config", _fake_config())
@@ -692,15 +693,15 @@ class TestIngestTypeParameterContract:
         client = TestClient(api.app)
         response = client.post(
             "/documents",
-            json={"source_type": "text", "content": "Bulk doc.", "ingest_type": "add"},
+            json={"source_type": "text", "content": "Brand new doc.", "source_label": "new-source"},
         )
 
         assert response.status_code == 200, (
-            f"Expected 200 for ingest_type='add', got {response.status_code}: "
+            f"Expected 200 for new source ingest, got {response.status_code}: "
             f"{response.text}"
         )
         assert tracking_cache._clear_call_count == 0, (
-            f"cache.clear() must NOT be called for ingest_type='add'; "
+            f"cache.clear() must NOT be called for a brand-new source; "
             f"was called {tracking_cache._clear_call_count} time(s)"
         )
 
@@ -1111,14 +1112,16 @@ class _FakeRetrievingRetriever:
 class _FakeIngestableRetriever:
     """Retriever double that supports document ingestion via a fake collection.
 
-    WHY: The add_documents endpoint calls _retriever.collection.add() to store
-    chunks, then reads collection.count() to rebuild the corpus version token.
-    This double provides both operations without touching ChromaDB.
+    WHY: The add_documents endpoint calls collection.get() to detect pre-existing
+    sources, collection.delete() to remove stale chunks, and collection.add() to
+    store new ones.  Pass existing_sources to pre-populate the store and simulate
+    a re-ingest scenario (triggers the 'update' path); leave it empty to simulate
+    a first-time ingest (triggers the 'add' path).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, existing_sources: Optional[Dict[str, List[str]]] = None) -> None:
         self._chunk_store: List[str] = []
-        self.collection = _MutableFakeCollection()
+        self.collection = _MutableFakeCollection(existing_sources=existing_sources)
 
     def retrieve(
         self, query: str, enable_rerank: Optional[bool] = None
@@ -1139,20 +1142,55 @@ class _FakeIngestableRetriever:
 
 
 class _MutableFakeCollection:
-    """Collection double that accepts add() and returns a stable count().
+    """Collection double that accepts add(), get(), delete(), and returns a stable count().
 
     WHY: _build_corpus_version_token() calls collection.count() after an ingest
     to build a new corpus version token.  A static count() would produce the
     same token before and after the ingest — masking token-change bugs.
     Incrementing on add() mirrors ChromaDB behaviour.
+
+    get(where=...) and delete() are required by the new source-existence detection
+    logic in add_documents.  The store is keyed by source label so tests can
+    pre-populate it to simulate a pre-existing source.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, existing_sources: Optional[Dict[str, List[str]]] = None) -> None:
+        # _store maps source_label -> list of chunk ids
+        self._store: Dict[str, List[str]] = existing_sources or {}
         self._count: int = 5
 
     def count(self) -> int:
         """Return current corpus size; incremented by each add() call."""
         return self._count
+
+    def get(
+        self,
+        where: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Return matching ids for simple equality where-clauses."""
+        ids: List[str] = []
+        if where:
+            source = where.get("source")
+            source_url = where.get("source_url")
+            if source is not None:
+                ids = self._store.get(source, [])
+            elif source_url is not None:
+                # Scan all stored chunks for a matching source_url value.
+                for stored_ids in self._store.values():
+                    ids.extend(stored_ids)
+        if limit is not None:
+            ids = ids[:limit]
+        return {"ids": ids}
+
+    def delete(self, ids: List[str]) -> None:
+        """Remove chunks by id from the store."""
+        id_set = set(ids)
+        self._store = {
+            src: [i for i in chunk_ids if i not in id_set]
+            for src, chunk_ids in self._store.items()
+        }
+        self._count -= len(ids)
 
     def add(
         self,
@@ -1160,6 +1198,10 @@ class _MutableFakeCollection:
         documents: List[str],
         metadatas: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
+        if metadatas:
+            for chunk_id, meta in zip(ids, metadatas):
+                src = meta.get("source", "unknown")
+                self._store.setdefault(src, []).append(chunk_id)
         self._count += len(ids)
 
 

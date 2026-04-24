@@ -318,7 +318,7 @@ async def test_ingest_endpoint_has_ingest_type_parameter() -> None:
 
 @pytest.mark.asyncio
 async def test_ingest_endpoint_conditional_cache_clear_update() -> None:
-    """Test that POST /documents clears cache when ingest_type='update' (ADR-003)."""
+    """Test that POST /documents clears cache when re-ingesting an existing source."""
     import api as api_module
     from types import SimpleNamespace
 
@@ -332,6 +332,16 @@ async def test_ingest_endpoint_conditional_cache_clear_update() -> None:
     class FakeCollection:
         def count(self) -> int:
             return 5
+
+        def get(self, where=None, limit=None):
+            # Return a pre-existing chunk for "existing-source" to trigger update path.
+            if where and where.get("source") == "existing-source":
+                return {"ids": ["existing-source_0"]}
+            return {"ids": []}
+
+        def delete(self, ids):
+            pass
+
         def add(self, ids, documents, metadatas=None):
             pass
 
@@ -356,7 +366,7 @@ async def test_ingest_endpoint_conditional_cache_clear_update() -> None:
         client = TestClient(api_module.app)
         response = client.post(
             "/documents",
-            json={"source_type": "text", "content": "New doc.", "ingest_type": "update"},
+            json={"source_type": "text", "content": "Updated doc.", "source_label": "existing-source"},
         )
 
     assert response.status_code == 200
@@ -365,7 +375,7 @@ async def test_ingest_endpoint_conditional_cache_clear_update() -> None:
 
 @pytest.mark.asyncio
 async def test_ingest_endpoint_preserves_cache_on_add() -> None:
-    """Test that POST /documents preserves cache when ingest_type='add' (ADR-003)."""
+    """Test that POST /documents preserves cache when ingesting a brand-new source."""
     import api as api_module
     from types import SimpleNamespace
 
@@ -379,6 +389,14 @@ async def test_ingest_endpoint_preserves_cache_on_add() -> None:
     class FakeCollection:
         def count(self) -> int:
             return 5
+
+        def get(self, where=None, limit=None):
+            # Empty store → source is new → 'add' path → cache preserved.
+            return {"ids": []}
+
+        def delete(self, ids):
+            pass
+
         def add(self, ids, documents, metadatas=None):
             pass
 
@@ -403,7 +421,7 @@ async def test_ingest_endpoint_preserves_cache_on_add() -> None:
         client = TestClient(api_module.app)
         response = client.post(
             "/documents",
-            json={"source_type": "text", "content": "Bulk doc.", "ingest_type": "add"},
+            json={"source_type": "text", "content": "Brand new doc.", "source_label": "new-source"},
         )
 
     assert response.status_code == 200
@@ -662,6 +680,13 @@ async def test_ingest_type_logs_operation() -> None:
     class FakeCollection:
         def count(self) -> int:
             return 3
+
+        def get(self, where=None, limit=None):
+            return {"ids": []}
+
+        def delete(self, ids):
+            pass
+
         def add(self, ids, documents, metadatas=None):
             pass
 

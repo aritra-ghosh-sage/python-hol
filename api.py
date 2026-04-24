@@ -1549,6 +1549,54 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                 for i in range(len(chunks))
             ]
 
+            # Detect whether this source already exists in the collection to decide
+            # whether this ingest replaces existing content (update) or adds new content (add).
+            # The request field `ingest_type` is intentionally ignored here — the UI has
+            # no way to know if a source is pre-existing, so the backend derives it.
+            #
+            # Primary check: match by source label (applies to text, file, and URL).
+            # Secondary check: match by source_url when the label check finds nothing —
+            # catches the case where the same URL was previously ingested under a different
+            # label (e.g. first time without a custom label, second time with one).
+            existing_by_label = collection.get(where={"source": source_label}, limit=1)
+            matched_by_url = False
+            if not existing_by_label["ids"] and source_url:
+                existing_by_url = collection.get(where={"source_url": source_url}, limit=1)
+                matched_by_url = bool(existing_by_url["ids"])
+
+            source_is_new = not existing_by_label["ids"] and not matched_by_url
+            effective_ingest_type = "add" if source_is_new else "update"
+            logger.info(
+                "Ingest source_is_new=%s effective_ingest_type=%s source=%s",
+                source_is_new,
+                effective_ingest_type,
+                source_label,
+            )
+
+            # For updates, remove stale chunks before adding new ones so the corpus
+            # never holds duplicate content for the same source.
+            # When the match was by source_url (label changed), delete by URL to reach
+            # the old chunks that are indexed under the previous label.
+            if effective_ingest_type == "update":
+                old_ids_by_label = collection.get(where={"source": source_label})["ids"]
+                if old_ids_by_label:
+                    collection.delete(ids=old_ids_by_label)
+                    logger.info(
+                        "Deleted %d stale chunks for source=%s",
+                        len(old_ids_by_label),
+                        source_label,
+                    )
+                if matched_by_url and source_url:
+                    old_ids_by_url = collection.get(where={"source_url": source_url})["ids"]
+                    remaining = [id_ for id_ in old_ids_by_url if id_ not in set(old_ids_by_label)]
+                    if remaining:
+                        collection.delete(ids=remaining)
+                        logger.info(
+                            "Deleted %d stale chunks for source_url=%s (label changed)",
+                            len(remaining),
+                            source_url,
+                        )
+
             # Add to collection
             collection.add(
                 ids=doc_ids,
@@ -1559,17 +1607,10 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                 f"Added {len(chunks)} chunks to collection from source: {source_label}"
             )
 
-            # Conditional cache clear based on ingest_type (ADR-003 - Fix for blocking issue #3)
-            # - 'update': Clear cache to ensure new documents are retrieved
-            # - 'add': Preserve cache for bulk additions
-            if request.ingest_type == "update":
+            if effective_ingest_type == "update":
                 prev_version = _corpus_version
                 _cache_generation += 1
-                # Rebuild corpus_version token: generation bumped + collection count grew.
-                # Both dimensions change on 'update', guaranteeing a fully distinct token.
                 _corpus_version = _build_corpus_version_token()
-                # OPTB-012: Structured invalidation log for ingest-update path.
-                # Records old and new tokens so operators can verify the transition.
                 logger.info(
                     "cache.invalidation event=ingest_update prev_version=%s new_version=%s",
                     prev_version,
@@ -1578,29 +1619,23 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                 if _cache is not None:
                     try:
                         lazy_cache.clear()
-                        logger.info(f"Ingest complete (type='update'); cache cleared")
+                        logger.info("Ingest complete (type='update'); cache cleared")
                     except Exception as e:
                         logger.warning(f"Failed to clear cache after ingest: {e}")
                 else:
                     logger.debug("Ingest complete (type='update'); cache not initialized")
-            else:  # ingest_type == 'add'
-                # 'add' does NOT bump the generation counter — cached results for
-                # queries that were answered before the add are still valid (the older
-                # documents haven't changed).  However, the collection count has grown,
-                # so we rebuild the token using the updated count dimension.  Queries
-                # issued after the add will see the new token → cache miss → retriever
-                # called with the full (now-larger) corpus.
+            else:
+                # New source: don't bump the generation counter — cached results for
+                # existing queries are still valid.  Rebuild the token on the count
+                # dimension so queries issued after this add see the grown corpus.
                 prev_version = _corpus_version
                 _corpus_version = _build_corpus_version_token()
-                # OPTB-012: Structured invalidation log for ingest-add path.
-                # Generation counter is NOT bumped for 'add', but the corpus grew
-                # so the token changes on the count dimension.
                 logger.info(
                     "cache.invalidation event=ingest_add prev_version=%s new_version=%s",
                     prev_version,
                     _corpus_version,
                 )
-                logger.info(f"Ingest complete (type='add'); cache preserved")
+                logger.info("Ingest complete (type='add'); cache preserved")
 
             return DocumentIngestionResponse(
                 status="success",
