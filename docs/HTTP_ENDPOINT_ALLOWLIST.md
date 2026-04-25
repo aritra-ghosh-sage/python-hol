@@ -19,7 +19,7 @@ The following HTTP endpoints are **approved** for production use:
 | `/health` | GET | Health check and readiness probe | No |
 | `/config` | GET, PUT | Retriever configuration management | Yes (admin) |
 | `/documents` | POST | Document ingestion | Yes (admin) |
-| `/documents/sources` | GET | List document sources | Yes (admin) |
+| `/documents/sources` | GET | List document sources with chunk counts | Yes (admin) |
 | `/cache/stats` | GET | Cache statistics and observability | Yes (admin) |
 | `/` | GET | API information and version | No |
 

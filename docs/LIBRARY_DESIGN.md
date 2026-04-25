@@ -81,9 +81,13 @@ config = HybridRetrieverConfig(
 
 ### `constants.py` - Constants and Defaults
 Centralized default values:
-- `DEFAULT_PERSIST_DIRECTORY`: ChromaDB persistence location
+- `DEFAULT_PERSIST_DIRECTORY`: ChromaDB persistence location (default: `./ai_support_kb`)
+  - Controls where ChromaDB stores vector collections on disk
+  - Can be overridden by passing `persist_dir` parameter to `initialize_vector_db()`
+  - Ensures persistent storage of embeddings across application restarts
 - `MIN_RELEVANCE_SCORE`: Score threshold for relevant documents
 - `STOP_WORDS`: Filtered keywords for keyword search
+- `CACHE_TELEMETRY_LABELS`: Structured event labels for cache observability
 
 ### `exceptions.py` - Exception Hierarchy
 Custom exceptions for better error handling:
@@ -94,15 +98,27 @@ Custom exceptions for better error handling:
 
 ### `vectordb.py` - Vector Database Management
 Core functions:
-- `chunk_text()`: Split text into overlapping chunks
+- `chunk_text()`: Split text into overlapping chunks using recursive character splitting
 - `initialize_vector_db()`: Set up ChromaDB collection with embeddings
+  - Accepts `documents`, `persist_dir` (defaults to `DEFAULT_PERSIST_DIRECTORY`), and `collection_name` parameters
+  - Creates persistent ChromaDB client at specified directory
+  - Deletes and recreates collection to ensure clean state
+  - Uses SentenceTransformer embeddings (all-MiniLM-L6-v2)
 - `get_sample_documents()`: Load sample Google Maps documentation
+
+Collection Management:
+- **Persistent Storage**: Collections are stored on disk at `persist_dir` location
+- **Collection Naming**: Default collection name is `"hybrid_rag_collection"`
+- **Embedding Function**: Uses local sentence-transformers (no external API calls)
+- **Distance Metric**: Cosine similarity for normalized embeddings
+- **Document Chunking**: Automatic text splitting for optimal embedding performance
+- **Metadata**: Each chunk stores source URL for traceability
 
 Features:
 - Local sentence-transformer embeddings (no external APIs)
 - Cosine distance metric for similarity
-- Persistent storage
-- Comprehensive error handling
+- Persistent storage across application restarts
+- Comprehensive error handling with `VectorDBError` exceptions
 
 ### `reranker.py` - Cross-Encoder Reranking
 `CrossEncoderReranker` class:
@@ -263,13 +279,35 @@ def test_hybrid_retriever():
 ### Environment-based Configuration
 ```python
 import os
+from hybrid_rag.constants import DEFAULT_PERSIST_DIRECTORY
+
+# Override default persist directory via environment variable
+persist_dir = os.getenv("PERSIST_DIRECTORY", DEFAULT_PERSIST_DIRECTORY)
 
 batch_size = int(os.getenv("BATCH_SIZE", 32))
 config = HybridRetrieverConfig(
     semantic_weight=float(os.getenv("SEMANTIC_WEIGHT", 0.7)),
     enable_rerank=os.getenv("ENABLE_RERANK", "true").lower() == "true"
 )
+
+# Initialize with custom persist directory
+collection = initialize_vector_db(
+    documents=get_sample_documents(),
+    persist_dir=persist_dir,
+    collection_name="my_custom_collection"
+)
 ```
+
+### Collection Persistence
+The vector database uses ChromaDB's persistent storage to maintain embeddings across application restarts:
+
+- **Default Location**: `./ai_support_kb` (configurable via `persist_dir` parameter)
+- **Collection Lifecycle**:
+  - `initialize_vector_db()` creates or recreates the collection
+  - Existing collections at the same path are deleted before recreation
+  - This ensures clean state for each initialization
+- **Storage Format**: ChromaDB internal format (SQLite + HNSW index)
+- **Access Pattern**: Collections are accessed via the retriever's `collection` property
 
 ### Logging Configuration
 ```python
