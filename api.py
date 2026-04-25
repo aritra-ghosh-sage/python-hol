@@ -35,7 +35,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
@@ -207,7 +207,7 @@ class DocumentSource(BaseModel):
 class SourcesResponse(BaseModel):
     """Response model for listing document sources."""
 
-    sources: List[DocumentSource] = Field(
+    sources: list[DocumentSource] = Field(
         ..., description="List of available document sources"
     )
 
@@ -438,7 +438,7 @@ class WsResultsMessage(BaseModel):
 
     type: Literal["results"] = "results"
     query: str = Field(..., description="Original query")
-    results: List[DocumentResult] = Field(..., description="Retrieved documents")
+    results: list[DocumentResult] = Field(..., description="Retrieved documents")
     total_results: int = Field(..., description="Total number of results")
     cache_status: Literal["HIT", "MISS", "ERROR"] = Field(
         "MISS",
@@ -601,7 +601,7 @@ class LazyCache(CacheBackend):
         except Exception as e:
             logger.warning(f"Cache clear failed: {e}")
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Get stats from cache if available."""
         if _cache is None:
             return {
@@ -625,7 +625,7 @@ class LazyCache(CacheBackend):
                 "ttl_seconds": 0,
             }
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         """Proxy health() to the underlying cache backend.
 
         WHY (OPTB-008): The get_cache_stats endpoint calls lazy_cache.health()
@@ -753,8 +753,8 @@ def _shared_retrieve_documents(
     query: str,
     enable_rerank: Optional[bool] = None,
     correlation_id: Optional[str] = None,
-    _out_cache_status: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+    _out_cache_status: Optional[list[str]] = None,
+) -> list[dict[str, Any]]:
     """Execute retrieval through one shared path for REST and WebSocket handlers.
 
     Args:
@@ -882,8 +882,8 @@ def _shared_retrieve_documents(
 
 
 def _to_filtered_document_results(
-    results: List[Dict[str, Any]], min_score_threshold: float
-) -> List[DocumentResult]:
+    results: list[dict[str, Any]], min_score_threshold: float
+) -> list[DocumentResult]:
     """Filter retrieval results and convert them to API response models."""
     filtered_results = [r for r in results if float(r.get("score", 0.0)) >= min_score_threshold]
     logger.debug(
@@ -1327,7 +1327,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 # always auto-generate a UUID.  This links cache hit/miss logs
                 # to the specific WebSocket message.
                 ws_correlation_id = str(uuid.uuid4())
-                ws_cache_status_out: List[str] = []
+                ws_cache_status_out: list[str] = []
                 results = _shared_retrieve_documents(
                     query,
                     enable_rerank=enable_rerank,
