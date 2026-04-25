@@ -206,7 +206,8 @@ def retrieve_documents(
 
 #### Testing Standards
 - **Test Coverage**: Minimum **80%** overall coverage (check with `pytest --cov`)
-- **Test Pass Rate**: Minimum **85%** tests must pass before check-in
+- **Test Pass Requirement**: **100%** of executed tests must pass before check-in; CI and local validation should be fully green
+- **Flaky Tests**: Do not rely on an allowed failure rate — fix, quarantine, or track flaky tests separately from the required passing test suite
 - **Test Organization**:
   - One test class per module/class being tested
   - Descriptive test names: `test_<method>_<condition>_<expected_outcome>`
