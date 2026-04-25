@@ -1,7 +1,7 @@
 """Vector database initialization and management."""
 
 import logging
-from typing import Any, Dict, List, cast
+from typing import Any, cast
 
 import chromadb
 from chromadb.api.models.Collection import Collection
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def chunk_text(
     text: str, chunk_size: int = 500, chunk_overlap: int = 50
-) -> List[str]:
+) -> list[str]:
     """Split text into overlapping chunks using recursive character splitting.
 
     Uses recursive splitting strategy to maintain semantic boundaries by splitting
@@ -63,7 +63,7 @@ def chunk_text(
         raise
 
 
-def get_sample_documents() -> List[Dict[str, str]]:
+def get_sample_documents() -> list[dict[str, str]]:
     """Retrieve a list of sample Google Maps support documents.
 
     Provides sample documentation for testing and demonstration purposes.
@@ -119,7 +119,7 @@ def get_sample_documents() -> List[Dict[str, str]]:
 
 
 def initialize_vector_db(
-    documents: List[Dict[str, str]],
+    documents: list[dict[str, str]],
     persist_dir: str = DEFAULT_PERSIST_DIRECTORY,
     collection_name: str = "hybrid_rag_collection",
 ) -> Collection:
@@ -184,9 +184,9 @@ def initialize_vector_db(
         logger.debug(f"Created collection: {collection_name}")
 
         # Process and add documents to collection
-        doc_ids: List[str] = []
-        doc_texts: List[str] = []
-        doc_metadatas: List[Dict[str, str]] = []
+        doc_ids: list[str] = []
+        doc_texts: list[str] = []
+        doc_metadatas: list[dict[str, str]] = []
         id_counter = 0
 
         for doc in documents:

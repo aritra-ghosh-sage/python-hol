@@ -34,7 +34,7 @@ import os
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 try:
@@ -81,7 +81,7 @@ class CacheBackend(ABC):
         ...     def clear(self) -> None:
         ...         # Clear directory
         ...         pass
-        ...     def stats(self) -> Dict[str, Any]:
+        ...     def stats(self) -> dict[str, Any]:
         ...         return {"backend": "filesystem"}
     """
 
@@ -169,7 +169,7 @@ class CacheBackend(ABC):
         pass
 
     @abstractmethod
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Return cache statistics.
 
         Returns:
@@ -188,7 +188,7 @@ class CacheBackend(ABC):
         """
         pass
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         """Return backend connectivity and health information.
 
         WHY (OPTB-008): The layered /cache/stats schema requires a
@@ -337,7 +337,7 @@ class InMemoryCache(CacheBackend):
         with self._lock:
             self._cache.clear()
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Return cache statistics.
 
         Thread-safe operation using a lock.
@@ -574,7 +574,7 @@ class RedisCache(CacheBackend):
         except Exception as e:
             logger.warning(f"Redis clear() error: {e}")
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Return cache statistics.
 
         Returns:
@@ -601,7 +601,7 @@ class RedisCache(CacheBackend):
             "misses": self._misses,
         }
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         """Return Redis connectivity and latency health information.
 
         WHY (OPTB-008): Overrides the CacheBackend default to perform an

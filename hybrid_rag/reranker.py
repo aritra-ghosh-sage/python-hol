@@ -3,7 +3,7 @@
 import logging
 import math
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 from dotenv import load_dotenv
 from sentence_transformers import CrossEncoder
@@ -67,8 +67,8 @@ class CrossEncoderReranker:
         return 1 / (1 + math.exp(-x))
 
     def rerank(
-        self, query: str, docs: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, query: str, docs: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Rerank documents by computing cross-encoder scores and sorting.
 
         Scores each document relative to the query using the cross-encoder model,
