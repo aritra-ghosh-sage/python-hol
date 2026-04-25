@@ -81,7 +81,7 @@ config = HybridRetrieverConfig(
 
 ### `constants.py` - Constants and Defaults
 Centralized default values:
-- `DEFAULT_PERSIST_DIRECTORY`: ChromaDB persistence location
+- `KNOWLEDGE_DB_DIRECTORY`: ChromaDB persistence location (formerly `DEFAULT_PERSIST_DIRECTORY`)
 - `MIN_RELEVANCE_SCORE`: Score threshold for relevant documents
 - `STOP_WORDS`: Filtered keywords for keyword search
 
