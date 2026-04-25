@@ -21,6 +21,7 @@ implementation_docs/
 # ChromaDB persistent storage (development artefact — too large for git)
 ai_support_kb/
 support_kb/
+knowledge_db/
 
 
 quality/code_reviews/
