@@ -120,6 +120,7 @@ Custom AI development agents live in `.github/agents/` (planner, orchestrator, i
 - **Use modern syntax**: `list[str]`, `dict[str, Any]` (not `List[str]`, `Dict[str, Any]`)
 - **Optional types**: Use `Optional[T]` or `T | None` for nullable values
 - **TYPE_CHECKING**: Use for circular imports
+- **py.typed marker**: Library includes `py.typed` marker for PEP 561 compliance
   ```python
   from __future__ import annotations
   from typing import TYPE_CHECKING, Optional
@@ -188,8 +189,8 @@ def retrieve_documents(
 
 #### Configuration & Validation
 - **Dataclasses**: Use `@dataclass` for configuration models
-- **Validation**: Implement `__post_init__` for parameter validation
-- **Defaults**: Centralize in `constants.py`, reference in config classes
+- **Validation**: Implement `__post_init__` for parameter validation (all config validated in `__post_init__`)
+- **Defaults**: Centralize in `constants.py`, reference in config classes (defaults centralized in `constants.py`)
 - **Immutability**: Use `replace()` for config updates (returns new instance)
   ```python
   @dataclass
