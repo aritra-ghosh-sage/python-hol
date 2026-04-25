@@ -299,7 +299,6 @@ Breaking Changes:
 ## Pre-Commit Checklist
 - [ ] All tests pass (`pytest tests/ -v`)
 - [ ] Test coverage ≥80% (`pytest --cov=hybrid_rag --cov=api`)
-- [ ] Test pass rate ≥85%
 - [ ] RUFF checks pass (`ruff check .`)
 - [ ] Type hints on all new functions
 - [ ] Google-style docstrings on public functions
