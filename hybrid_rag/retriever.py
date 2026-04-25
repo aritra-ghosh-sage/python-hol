@@ -104,6 +104,7 @@ class HybridRetriever:
                 - semantic_top_k, keyword_top_k, final_top_k
                 - semantic_weight, keyword_weight
                 - enable_rerank, pre_rerank_top_k
+                - collection_name
 
         Returns:
             The new updated configuration object.
