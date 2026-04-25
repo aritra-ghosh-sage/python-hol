@@ -238,12 +238,6 @@ def retrieve_documents(
 - **Logging levels**: DEBUG for detailed traces, INFO for significant events, WARNING for issues, ERROR for failures
 - **Async/await**: Use for I/O operations (database, network, file operations)
 
-### TypeScript/Frontend
-- No implicit `any` types
-- Zod validation at API boundaries
-- No component-local state for server data — use Zustand stores
-- Accessibility attributes required (`alt`, `aria-label`, etc.)
-
 ## Git Workflow
 
 ### Branch Naming Convention
