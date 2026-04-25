@@ -119,7 +119,8 @@ export function ChatWindow({
 ```
 
 ### State Management
-- **Server state**: Never store in component state — use Zustand stores
+- **Shared app/client state**: Use Zustand for cross-component, persisted, or long-lived client state
+- **Fetched/remote data**: Keep it in component state when it is local to a feature, or use a dedicated server-state library when caching, synchronization, or revalidation is needed
 - **Local UI state**: Component state is fine (`useState` for toggles, modals)
 - **Zustand patterns**:
   ```typescript
