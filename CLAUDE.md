@@ -104,7 +104,7 @@ Custom AI development agents live in `.github/agents/` (planner, orchestrator, i
   ```python
   # Standard library
   import logging
-  from typing import Any, Dict, List, Optional
+  from typing import Any, Optional
 
   # Third-party
   import numpy as np
@@ -179,13 +179,14 @@ def retrieve_documents(
 ```
 
 #### Error Handling
-- **Use custom exceptions**: Import from `hybrid_rag.exceptions` — never bare `Exception`
+- **Use custom exceptions**: Import from `hybrid_rag.exceptions` — do not raise bare `Exception`; raise specific built-in exceptions (e.g., `ValueError`, `TypeError`) or project exceptions instead
+- **Broad exception catches**: Avoid `except Exception` in normal application logic; only use it at clear boundary layers when intentionally failing open (e.g., cache backends) or when wrapping unexpected errors into a domain-specific exception
 - **Exception hierarchy**: All inherit from `HybridRAGException`
   - `RetrieverNotInitializedError`: Retriever accessed before initialization
   - `RetrievalError`: Document retrieval failures
   - `VectorDBError`: Vector database operation failures
 - **Logging**: Module-level loggers only — `logger = logging.getLogger(__name__)`, NO `print()`
-- **Fail-open caching**: Cache failures should never break requests
+- **Fail-open caching**: Cache failures should never break requests; log the failure and return the uncached result instead
 
 #### Configuration & Validation
 - **Dataclasses**: Use `@dataclass` for configuration models
@@ -300,7 +301,7 @@ Breaking Changes:
 ## Pre-Commit Checklist
 - [ ] All tests pass (`pytest tests/ -v`)
 - [ ] Test coverage ≥80% (`pytest --cov=hybrid_rag --cov=api`)
-- [ ] RUFF checks pass (`ruff check .`)
+- [ ] RUFF checks pass (`ruff check .`) if installed
 - [ ] Type hints on all new functions
 - [ ] Google-style docstrings on public functions
 - [ ] No `print()` statements (use `logger`)

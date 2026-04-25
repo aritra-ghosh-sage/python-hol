@@ -10,17 +10,17 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 ### TypeScript Configuration
 - **Strict mode enabled**: All type checking rules enforced (`strict: true`)
-- **No implicit `any`**: Every variable, parameter, and return value must have explicit types
+- **No implicit `any`**: Function parameters and returns must never be implicit `any`
 - **ESNext features**: Use modern ES2017+ syntax
 - **Path aliases**: Use `@/` prefix for imports from `src/` directory
 
 ### Type Safety Requirements
-- **Explicit typing**: Never rely on type inference for function signatures
+- **Explicit typing**: Always annotate exported/public function signatures; allow local variable inference when the inferred type is clear
 - **Type guards**: Validate external data (API responses, user input) at boundaries
 - **Zod validation**: Use Zod schemas for runtime validation at API boundaries
 - **Generic types**: Use for reusable components and utilities
   ```typescript
-  // GOOD: Explicit types
+  // GOOD: Explicit public API types
   interface ButtonProps {
     variant: "primary" | "secondary" | "ghost";
     size: "sm" | "md" | "lg";
@@ -28,7 +28,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
     children: React.ReactNode;
   }
 
-  // BAD: Implicit any
+  // BAD: Implicit any on function parameters
   function handleClick(event) {  // 'event' has implicit 'any'
     console.log(event);
   }
@@ -63,7 +63,7 @@ src/
 
 - **One component per file**: Export component as default or named export
 - **Colocation**: Keep related files together (component + styles + tests)
-- **Barrel exports**: Use `index.ts` for public API of feature directories
+- **Imports**: Prefer direct imports (e.g., `@/components/layout/Sidebar`) to keep dependencies explicit and preserve tree-shaking; use `index.ts` barrels only for carefully curated public APIs where the re-export surface is intentional
 
 ## React & Next.js Best Practices
 
@@ -188,7 +188,8 @@ export function ChatWindow({
 - **Focus management**: Handle focus states for modals and navigation
 
 ### Performance
-- **Lazy loading**: Use `React.lazy()` for code splitting
+- **Code splitting**: Prefer Next.js App Router's built-in route-level splitting
+- **Client component lazy loading**: Use `next/dynamic` when you need to defer loading of Client Components
 - **Memoization**: Use `useMemo` and `useCallback` for expensive computations
   - But don't overuse — profile first
 - **Image optimization**: Use Next.js `<Image>` component
@@ -241,7 +242,12 @@ class WebSocketClient {
 
   connect(): void {
     this.ws = new WebSocket(WS_URL);
-    this.ws.onmessage = this.handleMessage;
+    this.ws.onmessage = (event) => this.handleMessage(event);
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    // Process message and notify handlers
+    this.messageHandlers.forEach(handler => handler(event.data));
   }
 
   onMessage(handler: MessageHandler): () => void {
@@ -249,23 +255,36 @@ class WebSocketClient {
     // Return cleanup function
     return () => this.messageHandlers.delete(handler);
   }
+
+  disconnect(): void {
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+  }
 }
 ```
 
 ### Custom Hooks
 ```typescript
 function useWebSocket(url: string) {
-  const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
-    const client = new WebSocketClient(url);
-    client.onStatusChange(setConnectionState);
+    const client = new WebSocketClient();
+
+    // Simple connection tracking
+    const handleOpen = () => setIsConnected(true);
+    const handleClose = () => setIsConnected(false);
+
     client.connect();
 
-    return () => client.disconnect();
+    return () => {
+      client.disconnect();
+    };
   }, [url]);
 
-  return connectionState;
+  return isConnected;
 }
 ```
 
