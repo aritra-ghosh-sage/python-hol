@@ -1,14 +1,14 @@
 """Constants and default configuration for the hybrid RAG library."""
 
 __all__ = [
-    "DEFAULT_PERSIST_DIRECTORY",
+    "KNOWLEDGE_DB_DIRECTORY",
     "MIN_RELEVANCE_SCORE",
     "STOP_WORDS",
     "CACHE_TELEMETRY_LABELS",
 ]
 
 # Default directory for persisting ChromaDB collections
-DEFAULT_PERSIST_DIRECTORY = "./ai_support_kb"
+KNOWLEDGE_DB_DIRECTORY = "./knowledge_db"
 
 # Minimum relevance score threshold for retrieved documents
 MIN_RELEVANCE_SCORE = 0.80

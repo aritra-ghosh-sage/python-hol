@@ -1,6 +1,8 @@
 """Vector database initialization and management."""
 
 import logging
+import re
+from pathlib import Path
 from typing import Any, cast
 
 import chromadb
@@ -10,10 +12,17 @@ from chromadb.errors import NotFoundError
 from chromadb.utils import embedding_functions
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from .constants import DEFAULT_PERSIST_DIRECTORY
+from .constants import KNOWLEDGE_DB_DIRECTORY
 from .exceptions import VectorDBError
 
-__all__ = ["chunk_text", "initialize_vector_db", "get_sample_documents"]
+__all__ = [
+    "chunk_text",
+    "initialize_vector_db",
+    "get_sample_documents",
+    "is_valid_collection_name",
+    "sanitize_collection_name",
+    "list_existing_collections",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +129,7 @@ def get_sample_documents() -> list[dict[str, str]]:
 
 def initialize_vector_db(
     documents: list[dict[str, str]],
-    persist_dir: str = DEFAULT_PERSIST_DIRECTORY,
+    persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
     collection_name: str = "hybrid_rag_collection",
 ) -> Collection:
     """Initialize ChromaDB, embed and store the provided documents, and return the collection.
@@ -133,7 +142,7 @@ def initialize_vector_db(
     Args:
         documents: List of document dictionaries with 'id', 'source', and 'text' keys.
         persist_dir: Directory path to persist the ChromaDB collection.
-                     Defaults to DEFAULT_PERSIST_DIRECTORY.
+                     Defaults to KNOWLEDGE_DB_DIRECTORY.
         collection_name: Name of the ChromaDB collection to create or retrieve.
                         Defaults to "hybrid_rag_collection".
 
@@ -216,3 +225,147 @@ def initialize_vector_db(
     except Exception as e:
         logger.error(f"Vector DB initialization failed: {e}")
         raise VectorDBError(f"Failed to initialize vector database: {e}") from e
+
+
+def is_valid_collection_name(name: str) -> bool:
+    """Validate if a collection name is valid according to OS file naming rules.
+
+    Checks that the name:
+    - Has length between 6 and 20 characters (inclusive)
+    - Contains only alphanumeric characters, underscores, hyphens, or periods
+    - Does not contain consecutive periods (..)
+    - Does not start or end with a period
+
+    Args:
+        name: The collection name to validate.
+
+    Returns:
+        True if the name is valid, False otherwise.
+
+    Example:
+        >>> is_valid_collection_name("my_collection_1")
+        True
+        >>> is_valid_collection_name("abc")
+        False
+        >>> is_valid_collection_name("invalid..name")
+        False
+    """
+    if not isinstance(name, str):
+        return False
+    
+    # Check length
+    if not (6 <= len(name) <= 20):
+        return False
+    
+    # Check for consecutive periods
+    if ".." in name:
+        return False
+    
+    # Check if starts or ends with period
+    if name.startswith(".") or name.endswith("."):
+        return False
+    
+    # Check if contains only valid characters (alphanumeric, underscore, hyphen, period)
+    if not re.match(r'^[a-zA-Z0-9_\-\.]+$', name):
+        return False
+    
+    return True
+
+
+def sanitize_collection_name(name: str) -> str:
+    """Sanitize a collection name to make it valid for ChromaDB and OS file systems.
+
+    Performs the following transformations:
+    - Replaces invalid characters with underscores
+    - Removes consecutive periods
+    - Removes leading/trailing periods and underscores
+    - Truncates to 20 characters maximum
+    - Pads to 6 characters minimum with underscores if needed
+
+    Args:
+        name: The collection name to sanitize.
+
+    Returns:
+        Sanitized collection name that is guaranteed to be valid.
+
+    Example:
+        >>> sanitize_collection_name("My Collection!@#")
+        'my_collection'
+        >>> sanitize_collection_name("a..b..c")
+        'a_b_c_'
+        >>> sanitize_collection_name("x")
+        'x_____'
+    """
+    if not isinstance(name, str) or not name:
+        return "default_collection"
+    
+    # Convert to lowercase for consistency
+    sanitized = name.lower()
+    
+    # Replace invalid characters with underscores
+    sanitized = re.sub(r'[^a-z0-9_\-\.]', '_', sanitized)
+    
+    # Replace consecutive periods with single underscore
+    sanitized = re.sub(r'\.{2,}', '_', sanitized)
+    
+    # Remove leading/trailing periods and underscores
+    sanitized = sanitized.strip('._')
+    
+    # Truncate to maximum length
+    if len(sanitized) > 20:
+        sanitized = sanitized[:20].rstrip('._')
+    
+    # Pad to minimum length
+    if len(sanitized) < 6:
+        sanitized = sanitized + '_' * (6 - len(sanitized))
+    
+    return sanitized
+
+
+def list_existing_collections(persist_dir: str = KNOWLEDGE_DB_DIRECTORY) -> list[str]:
+    """List all existing ChromaDB collection names in the persistence directory.
+
+    Scans the ChromaDB persistence directory and returns names of all collections
+    that have been created and persisted.
+
+    Args:
+        persist_dir: Directory path where ChromaDB collections are persisted.
+                     Defaults to KNOWLEDGE_DB_DIRECTORY.
+
+    Returns:
+        List of collection names found in the persistence directory.
+        Returns empty list if directory does not exist or contains no collections.
+
+    Raises:
+        VectorDBError: If unable to access or read the persistence directory.
+
+    Example:
+        >>> collections = list_existing_collections()
+        >>> isinstance(collections, list)
+        True
+        >>> all(isinstance(name, str) for name in collections)
+        True
+    """
+    try:
+        persist_path = Path(persist_dir)
+        
+        # If directory doesn't exist, return empty list
+        if not persist_path.exists():
+            logger.debug(f"Persistence directory does not exist: {persist_dir}")
+            return []
+        
+        # Initialize ChromaDB client to query collections
+        client = chromadb.PersistentClient(path=persist_dir)
+        
+        # List all collections
+        collections = client.list_collections()
+        
+        # Extract collection names
+        collection_names = [col.name for col in collections]
+        
+        logger.debug(f"Found {len(collection_names)} collections in {persist_dir}")
+        return collection_names
+    
+    except Exception as e:
+        logger.error(f"Failed to list collections in {persist_dir}: {e}")
+        raise VectorDBError(f"Failed to list collections: {e}") from e
