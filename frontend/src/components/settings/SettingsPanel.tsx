@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api";
-import { ConfigResponse, ConfigUpdateRequest } from "@/lib/types";
+import { CollectionInfo, ConfigResponse, ConfigUpdateRequest } from "@/lib/types";
 import { Shimmer } from "@/components/ui/Shimmer";
 
 export function SettingsPanel() {
@@ -14,7 +14,7 @@ export function SettingsPanel() {
     text: string;
   } | null>(null);
   const [health, setHealth] = useState<"healthy" | "unhealthy" | null>(null);
-  const [collections, setCollections] = useState<string[]>([]);
+  const [collections, setCollections] = useState<CollectionInfo[]>([]);
   const [collectionsLoading, setCollectionsLoading] = useState(true);
   const [newCollectionName, setNewCollectionName] = useState("");
 
@@ -326,15 +326,20 @@ export function SettingsPanel() {
                   <option disabled value="">Loading...</option>
                 ) : (
                   Array.from(
-                    new Set(
-                      [...collections, config.collection_name].filter(
-                        (col): col is string => Boolean(col)
-                      )
-                    )
+                    new Map(
+                      [
+                        ...collections,
+                        ...(config.collection_name
+                          ? [{ name: config.collection_name, count: 0 }]
+                          : []),
+                      ].map((col) => [col.name, col])
+                    ).values()
                   )
-                    .sort((a, b) => a.localeCompare(b))
+                    .sort((a, b) => a.name.localeCompare(b.name))
                     .map((col) => (
-                      <option key={col} value={col}>{col}</option>
+                      <option key={col.name} value={col.name}>
+                        {col.name} ({col.count} docs)
+                      </option>
                     ))
                 )}
               </select>

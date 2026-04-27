@@ -1179,35 +1179,6 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
         )
 
 
-@app.get(
-    "/collections",
-    response_model=CollectionsResponse,
-    tags=["Configuration"],
-    summary="List existing ChromaDB collections",
-)
-async def get_collections() -> CollectionsResponse:
-    """List all ChromaDB collections in the knowledge database directory.
-
-    Returns:
-        CollectionsResponse containing a list of collection name strings.
-
-    Raises:
-        HTTPException: 503 if the knowledge database cannot be accessed.
-
-    Example:
-        GET /collections
-        Response: {"collections": ["hybrid_rag_collection", "my_docs"]}
-    """
-    try:
-        names = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
-        return CollectionsResponse(collections=names)
-    except VectorDBError as e:
-        logger.error(f"Failed to list collections: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Failed to list collections: {str(e)}",
-        )
-
 
 @app.get(
     "/cache/stats",
