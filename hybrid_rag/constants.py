@@ -5,10 +5,14 @@ __all__ = [
     "MIN_RELEVANCE_SCORE",
     "STOP_WORDS",
     "CACHE_TELEMETRY_LABELS",
+    "DEFAULT_EMBEDDING_MODEL",
 ]
 
 # Default directory for persisting ChromaDB collections
 KNOWLEDGE_DB_DIRECTORY = "./knowledge_db"
+
+# Default sentence-transformer model used for embeddings
+DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Minimum relevance score threshold for retrieved documents
 MIN_RELEVANCE_SCORE = 0.80

@@ -68,6 +68,7 @@ __all__ = [
     "MIN_RELEVANCE_SCORE",
     "KNOWLEDGE_DB_DIRECTORY",
     "CACHE_TELEMETRY_LABELS",
+    "DEFAULT_EMBEDDING_MODEL",
 ]
 
 # Public API imports
@@ -79,10 +80,11 @@ from .config import (
     create_cache_backend,
 )
 from .constants import (
+    CACHE_TELEMETRY_LABELS,
+    DEFAULT_EMBEDDING_MODEL,
     KNOWLEDGE_DB_DIRECTORY,
     MIN_RELEVANCE_SCORE,
     STOP_WORDS,
-    CACHE_TELEMETRY_LABELS,
 )
 from .exceptions import (
     HybridRAGException,

@@ -4,11 +4,11 @@
  * Exercises every control on the Settings page and reports bugs.
  */
 
-const { chromium } = require("/home/aritraghosh/projects/python-hol/frontend/node_modules/playwright");
+const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
 
-const SCREENSHOTS_DIR = "/home/aritraghosh/projects/python-hol/frontend/tmp-e2e/screenshots";
+const SCREENSHOTS_DIR = path.join(__dirname, "screenshots");
 if (!fs.existsSync(SCREENSHOTS_DIR)) {
   fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 }

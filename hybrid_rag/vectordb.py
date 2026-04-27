@@ -12,7 +12,7 @@ from chromadb.errors import NotFoundError
 from chromadb.utils import embedding_functions
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from .constants import KNOWLEDGE_DB_DIRECTORY
+from .constants import KNOWLEDGE_DB_DIRECTORY, DEFAULT_EMBEDDING_MODEL
 from .exceptions import VectorDBError
 
 __all__ = [
@@ -178,7 +178,7 @@ def initialize_vector_db(
         # Using local embeddings to avoid HF Inference API issues
         logger.debug("Initializing SentenceTransformer embeddings")
         embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
+            model_name=DEFAULT_EMBEDDING_MODEL
         )
         typed_embedding_function = cast(
             EmbeddingFunction[Embeddable], embedding_function
@@ -255,7 +255,7 @@ def open_collection(
     try:
         client = chromadb.PersistentClient(path=persist_dir)
         embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
+            model_name=DEFAULT_EMBEDDING_MODEL
         )
         typed_embedding_function = cast(EmbeddingFunction[Embeddable], embedding_function)
         collection = client.get_collection(

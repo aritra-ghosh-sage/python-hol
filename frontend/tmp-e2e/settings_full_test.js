@@ -1,9 +1,9 @@
 /* eslint-disable */
-const { chromium } = require("/home/aritraghosh/projects/python-hol/frontend/node_modules/playwright");
+const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
 
-const SCREENSHOTS = "/home/aritraghosh/projects/python-hol/frontend/tmp-e2e/screenshots";
+const SCREENSHOTS = path.join(__dirname, "screenshots");
 if (!fs.existsSync(SCREENSHOTS)) fs.mkdirSync(SCREENSHOTS, { recursive: true });
 
 const bugs = [];

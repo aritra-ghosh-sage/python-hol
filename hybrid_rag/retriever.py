@@ -11,7 +11,7 @@ from chromadb.api.models.Collection import Collection
 from sentence_transformers import SentenceTransformer
 
 from .config import HybridRetrieverConfig
-from .constants import STOP_WORDS
+from .constants import DEFAULT_EMBEDDING_MODEL, STOP_WORDS
 from .exceptions import RetrievalError
 from .reranker import CrossEncoderReranker
 
@@ -79,7 +79,7 @@ class HybridRetriever:
         try:
             logger.debug("Initializing SentenceTransformer encoder")
             self.encoder: SentenceTransformer = SentenceTransformer(
-                "all-MiniLM-L6-v2"
+                DEFAULT_EMBEDDING_MODEL
             )
         except Exception as e:
             logger.error(f"Failed to initialize encoder: {e}")

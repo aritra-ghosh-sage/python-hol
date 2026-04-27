@@ -50,6 +50,6 @@ def test_sanitize_preserves_valid_names() -> None:
     assert sanitize_collection_name("my_col") == "my_col"
 
 
-def test_open_collection_raises_for_nonexistent() -> None:
+def test_open_collection_raises_for_nonexistent(tmp_path) -> None:
     with pytest.raises(VectorDBError):
-        open_collection("./nonexistent_path_xyz_abc", "missing_col_123")
+        open_collection(str(tmp_path / "nonexistent_path_xyz_abc"), "missing_col_123")

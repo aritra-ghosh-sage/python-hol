@@ -1,7 +1,1 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(pnpm test:unit)"
-    ]
-  }
-}
+{}
