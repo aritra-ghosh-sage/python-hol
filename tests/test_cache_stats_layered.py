@@ -21,8 +21,7 @@ STYLE REFERENCE:
     tests/test_api_shared_retrieval.py — TestClient usage, fixture patterns
 """
 
-from typing import Any, Dict, List, NoReturn, Optional
-from unittest.mock import MagicMock
+from typing import Any, Dict, NoReturn, Optional
 
 import pytest
 from fastapi.testclient import TestClient

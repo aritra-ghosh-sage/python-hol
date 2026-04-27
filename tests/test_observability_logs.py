@@ -39,7 +39,6 @@ WHY each scenario matters:
 # Note 1: Standard library imports come first, then third-party, then local.
 # This ordering follows PEP 8 and makes dependency scanning easier for tools.
 import logging
-import uuid
 from typing import Any, Dict, List, Optional, NoReturn
 
 # Note 2: pytest is the test framework; TestClient wraps FastAPI's ASGI app

@@ -436,12 +436,12 @@ class TestAC2QualityMetricsAcrossConfigChanges:
         client = TestClient(api.app)
 
         # Warm the cache: first WS call hits retriever, subsequent calls hit cache
-        sample1 = _measure_request(client, "config comparison test")
+        _measure_request(client, "config comparison test")
         calls_after_warmup = retriever.call_count
         assert calls_after_warmup >= 1, "retriever must be called on first (cold) request"
 
         # Second call: should be a cache hit (retriever NOT called again)
-        sample2 = _measure_request(client, "config comparison test")
+        _measure_request(client, "config comparison test")
         calls_before_config_change = retriever.call_count
         assert calls_before_config_change == calls_after_warmup, (
             "retriever must NOT be called on second identical request (L1 cache hit)"
@@ -451,7 +451,7 @@ class TestAC2QualityMetricsAcrossConfigChanges:
         client.put("/config", json={"semantic_weight": 0.9, "keyword_weight": 0.1})
 
         # Same query after config change: must hit retriever (cache was cleared)
-        sample3 = _measure_request(client, "config comparison test")
+        _measure_request(client, "config comparison test")
         calls_after_config_change = retriever.call_count
         assert calls_after_config_change > calls_before_config_change, (
             "retriever must be called after config change (cache should be cleared)"
@@ -485,7 +485,7 @@ class TestAC2QualityMetricsAcrossConfigChanges:
 
         # Call with rerank=False via WS (first call = MISS, sets cache entry A)
         sample_no_rerank = _measure_request(client, query, enable_rerank=False)
-        calls_after_no_rerank = retriever.call_count
+        _calls_after_no_rerank = retriever.call_count
 
         # Call with rerank=True via WS (different cache key, also MISS, sets cache entry B)
         sample_rerank = _measure_request(client, query, enable_rerank=True)

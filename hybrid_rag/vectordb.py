@@ -2,8 +2,7 @@
 
 import logging
 import re
-from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import chromadb
 from chromadb.api.models.Collection import Collection

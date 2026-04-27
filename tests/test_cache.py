@@ -3,7 +3,6 @@
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -135,7 +134,6 @@ class TestInMemoryCache:
         import threading
 
         cache = InMemoryCache()
-        results = []
         errors = []
 
         def write_thread(key: str, value: str) -> None:

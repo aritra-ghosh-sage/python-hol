@@ -119,7 +119,9 @@ export class WebSocketClient {
 
     try {
       this.ws = new WebSocket(this.url);
-      console.log("[WS] WebSocket object created");
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[WS] WebSocket object created");
+      }
 
       this.ws.onopen = () => {
         if (process.env.NODE_ENV !== "production") {

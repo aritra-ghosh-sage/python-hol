@@ -14,22 +14,14 @@ Uses TestClient for HTTP testing and unittest.mock for simulating failures.
 Tests are independent with no shared state between them.
 """
 
-import asyncio
-import hashlib
-import json
 import logging
 import time
-import timeit
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from typing import Any, Dict, List
 
 import pytest
 from fastapi.testclient import TestClient
 
-from api import app, _config, _retriever, _cache
-from hybrid_rag.cache import CacheBackend, InMemoryCache
 
 # Configure logging for tests
 logging.basicConfig(level=logging.DEBUG)

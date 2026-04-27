@@ -341,7 +341,7 @@ def create_cache_backend(settings: CacheSettings) -> CacheBackend:
         >>> cache = create_cache_backend(settings)
         >>> cache.set("key", {"value": 123})
     """
-    from .cache import CacheBackend, InMemoryCache, RedisCache
+    from .cache import InMemoryCache, RedisCache
 
     if settings.backend == "memory":
         return InMemoryCache(

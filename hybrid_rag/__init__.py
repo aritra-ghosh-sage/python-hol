@@ -63,6 +63,8 @@ __all__ = [
     "open_collection",
     "get_sample_documents",
     "list_existing_collections",
+    "is_valid_collection_name",
+    "sanitize_collection_name",
     "DEFAULT_CONFIG",
     "STOP_WORDS",
     "MIN_RELEVANCE_SCORE",

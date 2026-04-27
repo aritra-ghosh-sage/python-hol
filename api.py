@@ -164,12 +164,6 @@ class ConfigUpdateRequest(BaseModel):
     )
 
 
-class CollectionsResponse(BaseModel):
-    """Response model for listing ChromaDB collections."""
-
-    collections: list[str] = Field(..., description="List of existing collection names")
-
-
 class DocumentIngestionRequest(BaseModel):
     """Request model for adding custom documents.
 
@@ -200,7 +194,7 @@ class DocumentIngestionRequest(BaseModel):
         None, description="User-friendly label for the data source"
     )
     ingest_type: Literal["add", "update"] = Field(
-        default="update",
+        "update",
         description=(
             "Ingest type override.  Omit to let the backend derive add/update from "
             "the collection state.  Provide explicitly to force a specific path."

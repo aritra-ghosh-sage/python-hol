@@ -6,7 +6,6 @@ cache stats endpoint, and response headers.
 """
 
 from datetime import datetime
-from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -95,7 +94,6 @@ def test_create_cache_backend_validates_settings() -> None:
 async def test_cache_stats_response_model() -> None:
     """Test CacheStatsResponse Pydantic model validation."""
     from pydantic import BaseModel, Field
-    from datetime import datetime
 
     class CacheStatsResponse(BaseModel):
         """Response model for cache statistics."""
@@ -168,11 +166,13 @@ async def test_ingest_request_with_type() -> None:
         source_type: Literal["text", "url", "file"] = Field(
             ..., description="Type of data source"
         )
-        content: str = Field(..., min_length=1, description="Text content, URL, or base64-encoded file")
+        content: str = Field(
+            ..., min_length=1, description="Text content, URL, or base64-encoded file"
+        )
         filename: Optional[str] = Field(None, description="Original filename")
         source_label: Optional[str] = Field(None, description="User-friendly label")
         ingest_type: Literal["add", "update"] = Field(
-            default="update",
+            "update",
             description="Ingest type: 'add' preserves cache, 'update' clears cache",
         )
 
