@@ -36,9 +36,18 @@ class ApiClient {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      throw new Error(
-        error.detail || `API error: ${response.statusText}`
-      );
+      const detail = error.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail
+                .map((e: { msg?: string; loc?: string[] }) =>
+                  [e.loc?.join("."), e.msg].filter(Boolean).join(": ")
+                )
+                .join("; ")
+            : `API error ${response.status}: ${response.url}`;
+      throw new Error(message);
     }
 
     return response.json();

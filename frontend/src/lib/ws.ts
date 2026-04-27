@@ -146,11 +146,14 @@ export class WebSocketClient {
 
       this.ws.onerror = () => {
         // Browser WebSocket API gives an opaque Event on error (no message/code).
-        // The real cause is always reported in the subsequent onclose event.
-        console.error(
-          `[WS] Connection error (url: ${this.url}) — check that the backend is reachable`
-        );
-        this.notifyStatusChange("error");
+        // The real cause is always reported in the subsequent onclose event,
+        // which also drives reconnection — so we only log here and let onclose
+        // handle the state transition to avoid a spurious error→disconnected flip.
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(
+            `[WS] Connection error (url: ${this.url}) — check that the backend is reachable`
+          );
+        }
       };
 
       this.ws.onclose = (event) => {

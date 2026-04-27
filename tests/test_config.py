@@ -11,7 +11,7 @@ class TestHybridRetrieverConfig:
     def test_default_config_has_collection_name(self):
         """DEFAULT_CONFIG includes collection_name with correct default value."""
         assert hasattr(DEFAULT_CONFIG, "collection_name")
-        assert DEFAULT_CONFIG.collection_name == "hybrid_rag_collection"
+        assert DEFAULT_CONFIG.collection_name == "rag_collection"
 
     def test_config_creation_with_collection_name(self):
         """HybridRetrieverConfig can be created with collection_name parameter."""
@@ -21,7 +21,7 @@ class TestHybridRetrieverConfig:
     def test_config_creation_without_collection_name_uses_default(self):
         """HybridRetrieverConfig uses default collection_name when not specified."""
         config = HybridRetrieverConfig()
-        assert config.collection_name == "hybrid_rag_collection"
+        assert config.collection_name == "rag_collection"
 
     def test_config_update_with_collection_name(self):
         """config.update() supports collection_name parameter."""
@@ -59,7 +59,7 @@ class TestHybridRetrieverConfig:
         config_dict = config.to_dict()
 
         assert "collection_name" in config_dict
-        assert config_dict["collection_name"] == "hybrid_rag_collection"
+        assert config_dict["collection_name"] == "rag_collection"
 
     def test_config_to_dict_includes_all_fields(self):
         """config.to_dict() includes collection_name along with all other fields."""
@@ -125,7 +125,7 @@ class TestHybridRetrieverConfig:
         assert DEFAULT_CONFIG.semantic_weight == 0.7
         assert DEFAULT_CONFIG.keyword_weight == 0.3
         assert DEFAULT_CONFIG.enable_rerank is True
-        assert DEFAULT_CONFIG.collection_name == "hybrid_rag_collection"
+        assert DEFAULT_CONFIG.collection_name == "rag_collection"
         # Also check default values for fields not specified in DEFAULT_CONFIG
         assert DEFAULT_CONFIG.semantic_top_k == 10
         assert DEFAULT_CONFIG.keyword_top_k == 10
