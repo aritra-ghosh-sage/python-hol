@@ -61,10 +61,13 @@ __all__ = [
     "chunk_text",
     "initialize_vector_db",
     "get_sample_documents",
+    "is_valid_collection_name",
+    "sanitize_collection_name",
+    "list_existing_collections",
     "DEFAULT_CONFIG",
     "STOP_WORDS",
     "MIN_RELEVANCE_SCORE",
-    "DEFAULT_PERSIST_DIRECTORY",
+    "KNOWLEDGE_DB_DIRECTORY",
     "CACHE_TELEMETRY_LABELS",
 ]
 
@@ -77,7 +80,7 @@ from .config import (
     create_cache_backend,
 )
 from .constants import (
-    DEFAULT_PERSIST_DIRECTORY,
+    KNOWLEDGE_DB_DIRECTORY,
     MIN_RELEVANCE_SCORE,
     STOP_WORDS,
     CACHE_TELEMETRY_LABELS,
@@ -90,4 +93,11 @@ from .exceptions import (
 )
 from .reranker import CrossEncoderReranker
 from .retriever import HybridRetriever
-from .vectordb import chunk_text, get_sample_documents, initialize_vector_db
+from .vectordb import (
+    chunk_text,
+    get_sample_documents,
+    initialize_vector_db,
+    is_valid_collection_name,
+    list_existing_collections,
+    sanitize_collection_name,
+)

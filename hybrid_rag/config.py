@@ -33,6 +33,8 @@ class HybridRetrieverConfig:
         keyword_weight: Weight factor for keyword search scores in fusion (0-1). Defaults to 0.35.
         enable_rerank: Whether to apply cross-encoder reranking for better ranking. Defaults to True.
         pre_rerank_top_k: Number of candidates to rerank before selecting final_top_k. Defaults to 50.
+        collection_name: Name of the ChromaDB collection to use for vector storage. Defaults to
+            "hybrid_rag_collection".
 
     Raises:
         ValueError: If weights don't sum to approximately 1.0 or are not in valid range.
@@ -47,6 +49,7 @@ class HybridRetrieverConfig:
 
     enable_rerank: bool = True
     pre_rerank_top_k: int = 50
+    collection_name: str = "hybrid_rag_collection"
 
     def __post_init__(self) -> None:
         """Validate configuration parameters after initialization."""
@@ -82,6 +85,7 @@ class HybridRetrieverConfig:
                 - semantic_top_k, keyword_top_k, final_top_k
                 - semantic_weight, keyword_weight
                 - enable_rerank, pre_rerank_top_k
+                - collection_name
 
         Returns:
             New HybridRetrieverConfig instance with updated values.
@@ -105,6 +109,7 @@ class HybridRetrieverConfig:
             "keyword_weight",
             "enable_rerank",
             "pre_rerank_top_k",
+            "collection_name",
         }
         unknown_params = set(kwargs.keys()) - valid_params
         if unknown_params:
@@ -137,6 +142,7 @@ class HybridRetrieverConfig:
             "keyword_weight": self.keyword_weight,
             "enable_rerank": self.enable_rerank,
             "pre_rerank_top_k": self.pre_rerank_top_k,
+            "collection_name": self.collection_name,
         }
 
 
@@ -145,6 +151,7 @@ DEFAULT_CONFIG = HybridRetrieverConfig(
     semantic_weight=0.7,
     keyword_weight=0.3,
     enable_rerank=True,
+    collection_name="hybrid_rag_collection",
 )
 
 

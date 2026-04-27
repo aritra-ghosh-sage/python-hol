@@ -69,6 +69,7 @@ Defines `HybridRetrieverConfig` dataclass with:
 - **Keyword search parameters**: `keyword_top_k`, `keyword_weight`
 - **Fusion parameters**: `final_top_k`, `pre_rerank_top_k`
 - **Reranking**: `enable_rerank` toggle
+- **Collection**: `collection_name` (default: `"hybrid_rag_collection"`)
 - **Validation**: Post-init validation of weights and ranges
 
 ```python
@@ -81,7 +82,7 @@ config = HybridRetrieverConfig(
 
 ### `constants.py` - Constants and Defaults
 Centralized default values:
-- `DEFAULT_PERSIST_DIRECTORY`: ChromaDB persistence location
+- `KNOWLEDGE_DB_DIRECTORY`: Default ChromaDB persistence location (`./knowledge_db`)
 - `MIN_RELEVANCE_SCORE`: Score threshold for relevant documents
 - `STOP_WORDS`: Filtered keywords for keyword search
 
@@ -97,6 +98,11 @@ Core functions:
 - `chunk_text()`: Split text into overlapping chunks
 - `initialize_vector_db()`: Set up ChromaDB collection with embeddings
 - `get_sample_documents()`: Load sample Google Maps documentation
+
+Collection management utilities:
+- `is_valid_collection_name()`: Validate a collection name against ChromaDB naming rules
+- `sanitize_collection_name()`: Coerce an arbitrary string into a valid collection name
+- `list_existing_collections()`: List all collections present in `KNOWLEDGE_DB_DIRECTORY`
 
 Features:
 - Local sentence-transformer embeddings (no external APIs)

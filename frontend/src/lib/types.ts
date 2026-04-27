@@ -31,6 +31,7 @@ export interface ConfigResponse {
   keyword_weight: number;
   enable_rerank: boolean;
   pre_rerank_top_k: number;
+  collection_name: string;
 }
 
 export interface ConfigUpdateRequest {
@@ -41,6 +42,11 @@ export interface ConfigUpdateRequest {
   keyword_weight?: number;
   enable_rerank?: boolean;
   pre_rerank_top_k?: number;
+  collection_name?: string;
+}
+
+export interface CollectionsResponse {
+  collections: string[];
 }
 
 export interface DocumentIngestionRequest {

@@ -10,10 +10,17 @@ from chromadb.errors import NotFoundError
 from chromadb.utils import embedding_functions
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from .constants import DEFAULT_PERSIST_DIRECTORY
+from .constants import KNOWLEDGE_DB_DIRECTORY
 from .exceptions import VectorDBError
 
-__all__ = ["chunk_text", "initialize_vector_db", "get_sample_documents"]
+__all__ = [
+    "chunk_text",
+    "initialize_vector_db",
+    "get_sample_documents",
+    "is_valid_collection_name",
+    "sanitize_collection_name",
+    "list_existing_collections",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +127,7 @@ def get_sample_documents() -> List[Dict[str, str]]:
 
 def initialize_vector_db(
     documents: List[Dict[str, str]],
-    persist_dir: str = DEFAULT_PERSIST_DIRECTORY,
+    persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
     collection_name: str = "hybrid_rag_collection",
 ) -> Collection:
     """Initialize ChromaDB, embed and store the provided documents, and return the collection.
@@ -133,7 +140,7 @@ def initialize_vector_db(
     Args:
         documents: List of document dictionaries with 'id', 'source', and 'text' keys.
         persist_dir: Directory path to persist the ChromaDB collection.
-                     Defaults to DEFAULT_PERSIST_DIRECTORY.
+                     Defaults to KNOWLEDGE_DB_DIRECTORY.
         collection_name: Name of the ChromaDB collection to create or retrieve.
                         Defaults to "hybrid_rag_collection".
 
@@ -216,3 +223,85 @@ def initialize_vector_db(
     except Exception as e:
         logger.error(f"Vector DB initialization failed: {e}")
         raise VectorDBError(f"Failed to initialize vector database: {e}") from e
+
+
+def is_valid_collection_name(name: str) -> bool:
+    """Check whether a collection name meets ChromaDB naming requirements.
+
+    A valid collection name is 6–20 characters long and contains only
+    alphanumeric characters, underscores, or hyphens.
+
+    Args:
+        name: The collection name to validate.
+
+    Returns:
+        True if the name is valid, False otherwise.
+
+    Example:
+        >>> is_valid_collection_name("my_col")
+        True
+        >>> is_valid_collection_name("ab")
+        False
+        >>> is_valid_collection_name("has space")
+        False
+    """
+    import re
+
+    if not (6 <= len(name) <= 20):
+        return False
+    return bool(re.fullmatch(r"[a-zA-Z0-9_\-]+", name))
+
+
+def sanitize_collection_name(name: str) -> str:
+    """Sanitize an arbitrary string into a valid ChromaDB collection name.
+
+    Replaces disallowed characters with underscores, truncates to 20
+    characters, and pads with underscores to reach the minimum length of 6.
+
+    Args:
+        name: The raw string to sanitize.
+
+    Returns:
+        A sanitized collection name that satisfies is_valid_collection_name.
+
+    Example:
+        >>> sanitize_collection_name("hello world!")
+        'hello_world_'
+        >>> sanitize_collection_name("ab")
+        'ab____'
+    """
+    import re
+
+    sanitized = re.sub(r"[^a-zA-Z0-9_\-]", "_", name)
+    sanitized = sanitized[:20]
+    if len(sanitized) < 6:
+        sanitized = sanitized + "_" * (6 - len(sanitized))
+    return sanitized
+
+
+def list_existing_collections(persist_dir: str) -> list[str]:
+    """List all ChromaDB collection names stored in the given directory.
+
+    Args:
+        persist_dir: Path to the ChromaDB persistence directory.
+
+    Returns:
+        List of collection name strings found in the directory.
+
+    Raises:
+        VectorDBError: If the ChromaDB client cannot be created or collections
+            cannot be listed.
+
+    Example:
+        >>> names = list_existing_collections("./knowledge_db")
+        >>> isinstance(names, list)
+        True
+    """
+    try:
+        client = chromadb.PersistentClient(path=persist_dir)
+        return [c.name for c in client.list_collections()]
+    except Exception as e:
+        logger.error(f"Failed to list collections in {persist_dir}: {e}")
+        raise VectorDBError(
+            f"Failed to list collections in '{persist_dir}': {e}"
+        ) from e
