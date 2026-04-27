@@ -153,14 +153,20 @@ class ConfigUpdateRequest(BaseModel):
         None, gt=0, description="Candidates to rerank before selection"
     )
     collection_name: Optional[str] = Field(
-        None, min_length=6, max_length=20, description="ChromaDB collection name (6-20 chars, alphanumeric/underscore/hyphen)"
+        None,
+        min_length=6,
+        max_length=20,
+        description=(
+            "ChromaDB collection name (6-20 chars, "
+            "alphanumeric/underscore/hyphen)"
+        ),
     )
 
 
 class CollectionsResponse(BaseModel):
     """Response model for listing ChromaDB collections."""
 
-    collections: List[str] = Field(..., description="List of existing collection names")
+    collections: list[str] = Field(..., description="List of existing collection names")
 
 
 class DocumentIngestionRequest(BaseModel):

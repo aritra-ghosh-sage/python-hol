@@ -126,7 +126,7 @@ def get_sample_documents() -> list[dict[str, str]]:
 
 
 def initialize_vector_db(
-    documents: List[Dict[str, str]],
+    documents: list[dict[str, str]],
     persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
     collection_name: str = "hybrid_rag_collection",
 ) -> Collection:

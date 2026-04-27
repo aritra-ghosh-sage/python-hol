@@ -1,6 +1,5 @@
 """Unit tests for collection name validation and sanitization utilities."""
 
-import pytest
 from hybrid_rag.vectordb import is_valid_collection_name, sanitize_collection_name
 
 

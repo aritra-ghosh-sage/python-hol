@@ -10,7 +10,7 @@ interface ApiState<T> {
 
 export function useApi<T>(
   apiCall: () => Promise<T>
-): [ApiState, () => Promise<T | null>] {
+): [ApiState<T>, () => Promise<T | null>] {
   const [state, setState] = useState<ApiState<T>>({
     isLoading: false,
     error: null,

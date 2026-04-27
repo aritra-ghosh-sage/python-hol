@@ -59,8 +59,8 @@ Public API (17 exports) is defined in `__init__.py` with `__all__`:
 - **Core**: `HybridRetriever`, `HybridRetrieverConfig`, `CrossEncoderReranker`, `DEFAULT_CONFIG`
 - **Cache**: `CacheBackend`, `InMemoryCache`, `RedisCache`, `CacheSettings`, `create_cache_backend`
 - **Exceptions**: `HybridRAGException`, `RetrieverNotInitializedError`, `RetrievalError`, `VectorDBError`
-- **Utilities**: `chunk_text`, `initialize_vector_db`, `get_sample_documents`
-- **Constants**: `STOP_WORDS`, `MIN_RELEVANCE_SCORE`, `DEFAULT_PERSIST_DIRECTORY`, `CACHE_TELEMETRY_LABELS`
+- **Utilities**: `chunk_text`, `initialize_vector_db`, `get_sample_documents`, `is_valid_collection_name`, `sanitize_collection_name`, `list_existing_collections`
+- **Constants**: `STOP_WORDS`, `MIN_RELEVANCE_SCORE`, `KNOWLEDGE_DB_DIRECTORY`, `CACHE_TELEMETRY_LABELS`
 
 Configuration uses validated dataclasses (`config.py` with `__post_init__` validation, defaults from `constants.py`). `HybridRetrieverConfig.update(**kwargs)` returns a new instance via `dataclasses.replace` — the original is never mutated. See `main_example.py` and `hybrid_rag_flow.py` for library usage patterns.
 
