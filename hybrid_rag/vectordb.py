@@ -1,6 +1,7 @@
 """Vector database initialization and management."""
 
 import logging
+from pathlib import Path
 from typing import Any, cast
 
 import chromadb

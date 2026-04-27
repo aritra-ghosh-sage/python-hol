@@ -19,7 +19,8 @@ The following HTTP endpoints are **approved** for production use:
 | `/health` | GET | Health check and readiness probe | No |
 | `/config` | GET, PUT | Retriever configuration management | Yes (admin) |
 | `/documents` | POST | Document ingestion | Yes (admin) |
-| `/documents/sources` | GET | List document sources | Yes (admin) |
+| `/documents/sources` | GET | List document sources with chunk counts | Yes (admin) |
+| `/collections` | GET | List ChromaDB collections with document counts | Yes (admin) |
 | `/cache/stats` | GET | Cache statistics and observability | Yes (admin) |
 | `/collections` | GET | List existing ChromaDB collections | Yes (admin) |
 | `/` | GET | API information and version | No |
@@ -157,7 +158,7 @@ Beyond automated tests, the following manual checks are recommended:
 Track these metrics to detect policy violations or drift:
 
 1. **Route Count Metrics**:
-   - `http_endpoint_count`: Should stay at 10-11
+   - `http_endpoint_count`: Should stay at 11-12
    - `websocket_endpoint_count`: Should stay at 1
    - Alert on any increase
 

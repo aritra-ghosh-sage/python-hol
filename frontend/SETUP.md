@@ -341,7 +341,7 @@ wscat -c ws://localhost:8000/ws/chat
 │                           ▼                                   │
 │ ┌──────────────────────────────────────────────────────────┐ │
 │ │              Vector Database (ChromaDB)                 │ │
-│ │  Persistent: ./ai_support_kb/                          │ │
+│ │  Persistent: ./knowledge_db/                           │ │
 │ │  Embeddings: all-MiniLM-L6-v2 (SentenceTransformers)  │ │
 │ │  Always contains: 4 sample Google Maps docs           │ │
 │ └──────────────────────────────────────────────────────────┘ │
@@ -441,7 +441,7 @@ wscat -c ws://localhost:8000/ws/chat
 - [ ] Configure database persistence (ChromaDB already persists)
 - [ ] Add rate limiting on `/documents` and `/ws/chat`
 - [ ] Test file upload size limits
-- [ ] Set up backups for `./ai_support_kb/` directory
+- [ ] Set up backups for `./knowledge_db/` directory
 - [ ] Deploy frontend (Vercel, Netlify, etc.)
 - [ ] Deploy backend (Cloud Run, EC2, Railway, etc.)
 

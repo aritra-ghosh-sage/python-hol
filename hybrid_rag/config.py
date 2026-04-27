@@ -33,7 +33,9 @@ class HybridRetrieverConfig:
         keyword_weight: Weight factor for keyword search scores in fusion (0-1). Defaults to 0.35.
         enable_rerank: Whether to apply cross-encoder reranking for better ranking. Defaults to True.
         pre_rerank_top_k: Number of candidates to rerank before selecting final_top_k. Defaults to 50.
-        collection_name: Name of the ChromaDB collection to use for vector storage. Defaults to
+        collection_name: Persisted ChromaDB collection name metadata associated with this
+            configuration. This class stores and serializes the value, but does not itself
+            select or initialize the active vector store collection. Defaults to
             "hybrid_rag_collection".
 
     Raises:
@@ -73,6 +75,9 @@ class HybridRetrieverConfig:
 
         if not (0 < self.pre_rerank_top_k):
             raise ValueError("pre_rerank_top_k must be > 0")
+
+        if not isinstance(self.collection_name, str) or not self.collection_name.strip():
+            raise ValueError("collection_name must be a non-empty string")
 
     def update(self, **kwargs: Any) -> "HybridRetrieverConfig":
         """Create a new config instance with updated values.

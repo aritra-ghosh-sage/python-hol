@@ -7,6 +7,7 @@ __all__ = [
     "CACHE_TELEMETRY_LABELS",
 ]
 
+# Default directory for persisting ChromaDB collections
 KNOWLEDGE_DB_DIRECTORY = "./knowledge_db"
 
 # Minimum relevance score threshold for retrieved documents
