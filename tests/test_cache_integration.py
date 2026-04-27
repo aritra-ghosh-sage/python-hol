@@ -235,13 +235,14 @@ async def test_config_endpoint_clears_cache_on_update() -> None:
     fake_config.semantic_weight = 0.7
     fake_config.keyword_weight = 0.3
     fake_config.enable_rerank = True
+    fake_config.collection_name = "hybrid_rag_collection"
     updated_config = MagicMock()
     for attr in ("semantic_top_k", "keyword_top_k", "final_top_k", "pre_rerank_top_k"):
         setattr(updated_config, attr, 10)
     updated_config.semantic_weight = 0.8
     updated_config.keyword_weight = 0.2
     updated_config.enable_rerank = True
-    updated_config.collection_name = "test-collection"
+    updated_config.collection_name = "hybrid_rag_collection"
     fake_config.update.return_value = updated_config
 
     with (
@@ -275,6 +276,7 @@ async def test_config_endpoint_clears_cache_and_returns_200() -> None:
     fake_config.keyword_weight = 0.3
     fake_config.enable_rerank = True
     fake_config.pre_rerank_top_k = 20
+    fake_config.collection_name = "hybrid_rag_collection"
     updated_config = MagicMock()
     updated_config.semantic_top_k = 10
     updated_config.keyword_top_k = 10
@@ -283,6 +285,7 @@ async def test_config_endpoint_clears_cache_and_returns_200() -> None:
     updated_config.keyword_weight = 0.2
     updated_config.enable_rerank = True
     updated_config.pre_rerank_top_k = 20
+    updated_config.collection_name = "hybrid_rag_collection"
     fake_config.update.return_value = updated_config
 
     with (
@@ -639,12 +642,14 @@ async def test_config_clear_logs_operation() -> None:
     fake_config.semantic_weight = 0.5
     fake_config.keyword_weight = 0.5
     fake_config.enable_rerank = False
+    fake_config.collection_name = "hybrid_rag_collection"
     updated = MagicMock()
     for attr in ("semantic_top_k", "keyword_top_k", "final_top_k", "pre_rerank_top_k"):
         setattr(updated, attr, 5)
     updated.semantic_weight = 0.6
     updated.keyword_weight = 0.4
     updated.enable_rerank = False
+    updated.collection_name = "hybrid_rag_collection"
     fake_config.update.return_value = updated
 
     with (

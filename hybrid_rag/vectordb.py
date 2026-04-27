@@ -1,6 +1,7 @@
 """Vector database initialization and management."""
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,6 +18,7 @@ from .exceptions import VectorDBError
 __all__ = [
     "chunk_text",
     "initialize_vector_db",
+    "open_collection",
     "get_sample_documents",
     "is_valid_collection_name",
     "sanitize_collection_name",
@@ -226,6 +228,50 @@ def initialize_vector_db(
         raise VectorDBError(f"Failed to initialize vector database: {e}") from e
 
 
+def open_collection(
+    persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
+    collection_name: str = "hybrid_rag_collection",
+) -> Collection:
+    """Open an existing ChromaDB collection without modifying its contents.
+
+    Attaches the same SentenceTransformer embedding function used by
+    initialize_vector_db so that semantic queries work correctly.
+
+    Args:
+        persist_dir: Directory path where the ChromaDB collection is persisted.
+        collection_name: Name of the collection to open.
+
+    Returns:
+        ChromaDB Collection object ready for querying.
+
+    Raises:
+        VectorDBError: If the collection does not exist or cannot be opened.
+
+    Example:
+        >>> collection = open_collection("./knowledge_db", "my_collection")
+        >>> collection is not None
+        True
+    """
+    try:
+        client = chromadb.PersistentClient(path=persist_dir)
+        embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2"
+        )
+        typed_embedding_function = cast(EmbeddingFunction[Embeddable], embedding_function)
+        collection = client.get_collection(
+            name=collection_name,
+            embedding_function=typed_embedding_function,
+        )
+        logger.info(
+            "Opened existing collection '%s' (%d docs)", collection_name, collection.count()
+        )
+        return collection
+    except Exception as e:
+        raise VectorDBError(
+            f"Failed to open collection '{collection_name}': {e}"
+        ) from e
+
+
 def is_valid_collection_name(name: str) -> bool:
     """Check whether a collection name meets ChromaDB naming requirements.
 
@@ -246,8 +292,6 @@ def is_valid_collection_name(name: str) -> bool:
         >>> is_valid_collection_name("has space")
         False
     """
-    import re
-
     if not (6 <= len(name) <= 20):
         return False
     return bool(re.fullmatch(r"[a-zA-Z0-9_\-]+", name))
@@ -271,8 +315,6 @@ def sanitize_collection_name(name: str) -> str:
         >>> sanitize_collection_name("ab")
         'ab____'
     """
-    import re
-
     sanitized = re.sub(r"[^a-zA-Z0-9_\-]", "_", name)
     sanitized = sanitized[:20]
     if len(sanitized) < 6:
