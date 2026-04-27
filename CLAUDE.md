@@ -23,6 +23,9 @@ pytest tests/test_cache.py -v
 # Run with coverage
 pytest tests/ -v --cov=hybrid_rag --cov=api
 
+# Type checking
+mypy hybrid_rag/ api.py
+
 # Start FastAPI server
 uvicorn api:app --reload
 ```
@@ -52,7 +55,14 @@ Five-stage retrieval in `retriever.py`:
 4. Cross-encoder reranking via ms-marco model (`reranker.py`)
 5. Source deduplication
 
-Public API (17 exports) is defined in `__init__.py` with `__all__`. Configuration uses validated dataclasses (`config.py` with `__post_init__` validation, defaults from `constants.py`). See `main_example.py` and `hybrid_rag_flow.py` for library usage patterns.
+Public API (17 exports) is defined in `__init__.py` with `__all__`:
+- **Core**: `HybridRetriever`, `HybridRetrieverConfig`, `CrossEncoderReranker`, `DEFAULT_CONFIG`
+- **Cache**: `CacheBackend`, `InMemoryCache`, `RedisCache`, `CacheSettings`, `create_cache_backend`
+- **Exceptions**: `HybridRAGException`, `RetrieverNotInitializedError`, `RetrievalError`, `VectorDBError`
+- **Utilities**: `chunk_text`, `initialize_vector_db`, `get_sample_documents`
+- **Constants**: `STOP_WORDS`, `MIN_RELEVANCE_SCORE`, `DEFAULT_PERSIST_DIRECTORY`, `CACHE_TELEMETRY_LABELS`
+
+Configuration uses validated dataclasses (`config.py` with `__post_init__` validation, defaults from `constants.py`). `HybridRetrieverConfig.update(**kwargs)` returns a new instance via `dataclasses.replace` — the original is never mutated. See `main_example.py` and `hybrid_rag_flow.py` for library usage patterns.
 
 ### Caching (`cache.py`)
 
@@ -61,9 +71,14 @@ Three-layer design:
 - **L2** — LRU embedding cache inside `HybridRetriever` (session-scoped)
 - **L3** — ChromaDB persistent vector storage
 
-Cache failures are fail-open. Monitor at `GET /cache/stats`. Configure via `CACHE_BACKEND`, `REDIS_URL`, `CACHE_TTL_SECONDS`.
+Cache failures are fail-open. Monitor at `GET /cache/stats`. Configure via env vars:
+- `CACHE_BACKEND` — `memory` (default) or `redis`
+- `REDIS_URL` — e.g. `redis://localhost:6379`; production requires `rediss://` (TLS) with password
+- `CACHE_TTL_SECONDS` — entry lifespan (default: 3600)
+- `CACHE_KEY_PREFIX` — prefix for shared Redis instances (default: `hybrid_rag_cache:`)
+- `CACHE_MAX_SIZE` — max in-memory LRU entries (default: 10000)
 
-Cache invalidation is tied to corpus version (`_corpus_version` in `api.py`) — incrementing it busts the L1 cache. When adding new cache event types, register them in `CACHE_TELEMETRY_LABELS` in `constants.py`.
+Cache invalidation is tied to corpus version (`_corpus_version` in `api.py`) — derived from `_cache_generation` + live `collection.count()`. Increment `_cache_generation` to bust the L1 cache after ingestion or config changes. When adding new cache event types, register them in `CACHE_TELEMETRY_LABELS` in `constants.py`.
 
 ### API Layer (`api.py`)
 
@@ -84,10 +99,11 @@ Next.js 16.2.3 (App Router) + React 19 + Zustand + Tailwind v4. Components are f
 
 Integration tests use `fastapi.testclient.TestClient` with fixtures from `tests/conftest.py`:
 - `setup_test_environment` (session scope) — sets env vars
-- `initialized_app` (function scope) — fresh retriever + cache per test
-- `client_with_fresh_cache` — cleared-cache variant
+- `initialized_app` (function scope) — real retriever + ChromaDB, ~10–18 s setup; skip if model unavailable
+- `fake_initialized_app` (function scope) — stub retriever, no model download, <10 ms; use for tests that only check HTTP shapes
+- `client_with_fresh_cache` — cleared-cache variant (delegates to `fake_initialized_app`)
 
-Always check collection health before retrieval in integration tests. Mock Redis/external deps where needed; async tests work without decorators due to `asyncio_mode = "auto"`.
+Prefer `fake_initialized_app` for any test that doesn't exercise the retrieval pipeline. Always check collection health before retrieval in integration tests (`collection.count()` surfaces stale ChromaDB handles). Mock Redis/external deps where needed; async tests work without decorators due to `asyncio_mode = "auto"`.
 
 ## Agent Infrastructure
 
