@@ -81,10 +81,7 @@ config = HybridRetrieverConfig(
 
 ### `constants.py` - Constants and Defaults
 Centralized default values:
-- `DEFAULT_PERSIST_DIRECTORY`: ChromaDB persistence location (default: `./ai_support_kb`)
-  - Controls where ChromaDB stores vector collections on disk
-  - Can be overridden by passing `persist_dir` parameter to `initialize_vector_db()`
-  - Provides a persistent on-disk storage directory, but the current `initialize_vector_db()` flow recreates the collection during initialization, so embeddings are recomputed rather than reused across application restarts
+- `KNOWLEDGE_DB_DIRECTORY`: ChromaDB persistence location
 - `MIN_RELEVANCE_SCORE`: Score threshold for relevant documents
 - `STOP_WORDS`: Filtered keywords for keyword search
 - `CACHE_TELEMETRY_LABELS`: Structured event labels for cache observability

@@ -104,6 +104,11 @@ class HybridRetriever:
                 - semantic_top_k, keyword_top_k, final_top_k
                 - semantic_weight, keyword_weight
                 - enable_rerank, pre_rerank_top_k
+                - collection_name
+
+                Updating ``collection_name`` only changes the in-memory
+                configuration value. It does not switch, rebind, or
+                reinitialize ``self.collection`` for retrieval or storage.
 
         Returns:
             The new updated configuration object.
