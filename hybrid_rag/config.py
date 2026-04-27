@@ -76,7 +76,7 @@ class HybridRetrieverConfig:
         if not (0 < self.pre_rerank_top_k):
             raise ValueError("pre_rerank_top_k must be > 0")
 
-        if not self.collection_name or not self.collection_name.strip():
+        if not isinstance(self.collection_name, str) or not self.collection_name.strip():
             raise ValueError("collection_name must be a non-empty string")
 
     def update(self, **kwargs: Any) -> "HybridRetrieverConfig":

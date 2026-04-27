@@ -110,6 +110,11 @@ class TestHybridRetrieverConfig:
         with pytest.raises(ValueError, match="collection_name must be a non-empty string"):
             HybridRetrieverConfig(collection_name="   ")
 
+    def test_collection_name_none_raises_value_error(self):
+        """collection_name rejects None values."""
+        with pytest.raises(ValueError, match="collection_name must be a non-empty string"):
+            HybridRetrieverConfig(collection_name=None)  # type: ignore[arg-type]
+
     def test_collection_name_with_hyphens_and_underscores(self):
         """collection_name accepts hyphens and underscores."""
         config = HybridRetrieverConfig(collection_name="test_collection-v2")
