@@ -26,7 +26,10 @@ const baseConfig = {
 function setupMocks() {
   vi.mocked(apiClient.getConfig).mockResolvedValue(baseConfig);
   vi.mocked(apiClient.getCollections).mockResolvedValue({
-    collections: ["hybrid_rag_collection", "other_collection"],
+    collections: [
+      { name: "hybrid_rag_collection", count: 42 },
+      { name: "other_collection", count: 7 },
+    ],
   });
   vi.mocked(apiClient.healthCheck).mockResolvedValue({
     status: "ok",

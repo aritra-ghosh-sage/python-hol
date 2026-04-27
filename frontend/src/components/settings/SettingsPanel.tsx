@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api";
-import { ConfigResponse, ConfigUpdateRequest } from "@/lib/types";
+import { CollectionInfo, ConfigResponse, ConfigUpdateRequest } from "@/lib/types";
 import { Shimmer } from "@/components/ui/Shimmer";
 
 export function SettingsPanel() {
@@ -14,7 +14,7 @@ export function SettingsPanel() {
     text: string;
   } | null>(null);
   const [health, setHealth] = useState<"healthy" | "unhealthy" | null>(null);
-  const [collections, setCollections] = useState<string[]>([]);
+  const [collections, setCollections] = useState<CollectionInfo[]>([]);
   const [collectionsLoading, setCollectionsLoading] = useState(true);
   const [newCollectionName, setNewCollectionName] = useState("");
 
@@ -47,15 +47,14 @@ export function SettingsPanel() {
   const handleConfigChange = (key: keyof ConfigResponse, value: number | boolean | string) => {
     if (!config) return;
 
-    // Auto-adjust weights if changing one
-    if (key === "semantic_weight" && typeof value === "number" && config.semantic_weight + config.keyword_weight !== 1) {
+    if (key === "semantic_weight" && typeof value === "number") {
       const newKeywordWeight = Math.max(0, Math.min(1, 1 - value));
       setConfig({
         ...config,
         [key]: value,
         keyword_weight: parseFloat(newKeywordWeight.toFixed(2)),
       });
-    } else if (key === "keyword_weight" && typeof value === "number" && config.semantic_weight + config.keyword_weight !== 1) {
+    } else if (key === "keyword_weight" && typeof value === "number") {
       const newSemanticWeight = Math.max(0, Math.min(1, 1 - value));
       setConfig({
         ...config,
@@ -150,13 +149,16 @@ export function SettingsPanel() {
             <h3 className="font-semibold text-white">Search Parameters</h3>
 
             <div>
-              <label className="text-sm text-gray-300 mb-2 block">
+              <label htmlFor="semantic-top-k" className="text-sm text-gray-300 mb-2 block">
                 Semantic Top-K: {config.semantic_top_k}
               </label>
               <input
+                id="semantic-top-k"
+                aria-label="Semantic Top-K"
                 type="range"
                 min="1"
                 max="20"
+                step="1"
                 value={config.semantic_top_k}
                 onChange={(e) =>
                   handleConfigChange("semantic_top_k", parseInt(e.target.value))
@@ -169,13 +171,16 @@ export function SettingsPanel() {
             </div>
 
             <div>
-              <label className="text-sm text-gray-300 mb-2 block">
+              <label htmlFor="keyword-top-k" className="text-sm text-gray-300 mb-2 block">
                 Keyword Top-K: {config.keyword_top_k}
               </label>
               <input
+                id="keyword-top-k"
+                aria-label="Keyword Top-K"
                 type="range"
                 min="1"
                 max="20"
+                step="1"
                 value={config.keyword_top_k}
                 onChange={(e) =>
                   handleConfigChange("keyword_top_k", parseInt(e.target.value))
@@ -188,13 +193,16 @@ export function SettingsPanel() {
             </div>
 
             <div>
-              <label className="text-sm text-gray-300 mb-2 block">
+              <label htmlFor="final-top-k" className="text-sm text-gray-300 mb-2 block">
                 Final Top-K: {config.final_top_k}
               </label>
               <input
+                id="final-top-k"
+                aria-label="Final Top-K"
                 type="range"
                 min="1"
                 max="20"
+                step="1"
                 value={config.final_top_k}
                 onChange={(e) =>
                   handleConfigChange("final_top_k", parseInt(e.target.value))
@@ -212,10 +220,12 @@ export function SettingsPanel() {
             <h3 className="font-semibold text-white">Score Weighting</h3>
 
             <div>
-              <label className="text-sm text-gray-300 mb-2 block">
+              <label htmlFor="semantic-weight" className="text-sm text-gray-300 mb-2 block">
                 Semantic Weight: {config.semantic_weight.toFixed(2)}
               </label>
               <input
+                id="semantic-weight"
+                aria-label="Semantic Weight"
                 type="range"
                 min="0"
                 max="1"
@@ -235,10 +245,12 @@ export function SettingsPanel() {
             </div>
 
             <div>
-              <label className="text-sm text-gray-300 mb-2 block">
+              <label htmlFor="keyword-weight" className="text-sm text-gray-300 mb-2 block">
                 Keyword Weight: {config.keyword_weight.toFixed(2)}
               </label>
               <input
+                id="keyword-weight"
+                aria-label="Keyword Weight"
                 type="range"
                 min="0"
                 max="1"
@@ -249,6 +261,11 @@ export function SettingsPanel() {
                 }
                 className="w-full"
               />
+              {config.keyword_weight === 0 && (
+                <p className="text-xs text-yellow-400 mt-1">
+                  Warning: keyword search is disabled (weight is 0.00)
+                </p>
+              )}
               <p className="text-xs text-gray-400 mt-1">
                 Weight for keyword-based search results
               </p>
@@ -325,17 +342,19 @@ export function SettingsPanel() {
                 {collectionsLoading ? (
                   <option disabled value="">Loading...</option>
                 ) : (
-                  Array.from(
-                    new Set(
-                      [...collections, config.collection_name].filter(
-                        (col): col is string => Boolean(col)
-                      )
-                    )
-                  )
-                    .sort((a, b) => a.localeCompare(b))
-                    .map((col) => (
-                      <option key={col} value={col}>{col}</option>
-                    ))
+                  (() => {
+                    const collectionMap = new Map(collections.map((col) => [col.name, col]));
+                    if (config.collection_name && !collectionMap.has(config.collection_name)) {
+                      collectionMap.set(config.collection_name, { name: config.collection_name, count: 0 });
+                    }
+                    return Array.from(collectionMap.values())
+                      .sort((a, b) => a.name.localeCompare(b.name))
+                      .map((col) => (
+                        <option key={col.name} value={col.name}>
+                          {col.name} ({col.count} docs)
+                        </option>
+                      ));
+                  })()
                 )}
               </select>
             </div>

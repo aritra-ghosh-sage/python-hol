@@ -45,8 +45,13 @@ export interface ConfigUpdateRequest {
   collection_name?: string;
 }
 
+export interface CollectionInfo {
+  name: string;
+  count: number;
+}
+
 export interface CollectionsResponse {
-  collections: string[];
+  collections: CollectionInfo[];
 }
 
 export interface DocumentIngestionRequest {

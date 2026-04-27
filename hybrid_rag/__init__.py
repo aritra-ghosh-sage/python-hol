@@ -60,6 +60,7 @@ __all__ = [
     "create_cache_backend",
     "chunk_text",
     "initialize_vector_db",
+    "open_collection",
     "get_sample_documents",
     "list_existing_collections",
     "DEFAULT_CONFIG",
@@ -67,6 +68,7 @@ __all__ = [
     "MIN_RELEVANCE_SCORE",
     "KNOWLEDGE_DB_DIRECTORY",
     "CACHE_TELEMETRY_LABELS",
+    "DEFAULT_EMBEDDING_MODEL",
 ]
 
 # Public API imports
@@ -78,10 +80,11 @@ from .config import (
     create_cache_backend,
 )
 from .constants import (
+    CACHE_TELEMETRY_LABELS,
+    DEFAULT_EMBEDDING_MODEL,
     KNOWLEDGE_DB_DIRECTORY,
     MIN_RELEVANCE_SCORE,
     STOP_WORDS,
-    CACHE_TELEMETRY_LABELS,
 )
 from .exceptions import (
     HybridRAGException,
@@ -97,5 +100,6 @@ from .vectordb import (
     initialize_vector_db,
     is_valid_collection_name,
     list_existing_collections,
+    open_collection,
     sanitize_collection_name,
 )

@@ -52,6 +52,7 @@ from hybrid_rag import (
     RetrieverNotInitializedError,
     VectorDBError,
     initialize_vector_db,
+    open_collection,
     get_sample_documents,
     chunk_text,
     CACHE_TELEMETRY_LABELS,
@@ -1096,15 +1097,31 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
 
         # Re-initialize vector database when collection_name changes
         if collection_changed:
-            logger.info(f"Collection name changed to '{_config.collection_name}', re-initializing vector DB")
-            documents = get_sample_documents()
-            new_collection = initialize_vector_db(
-                documents,
-                persist_dir=KNOWLEDGE_DB_DIRECTORY,
-                collection_name=_config.collection_name,
+            logger.info(
+                "Collection name changed to '%s', re-initializing vector DB",
+                _config.collection_name,
             )
+            existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
+            if _config.collection_name in existing:
+                # Open without touching contents — user may have populated this collection
+                new_collection = open_collection(
+                    persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                    collection_name=_config.collection_name,
+                )
+                logger.info("Switched to existing collection '%s'", _config.collection_name)
+            else:
+                # New collection — seed with sample documents so retrieval works immediately
+                documents = get_sample_documents()
+                new_collection = initialize_vector_db(
+                    documents,
+                    persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                    collection_name=_config.collection_name,
+                )
+                logger.info(
+                    "Created new collection '%s' with sample documents", _config.collection_name
+                )
             _retriever = HybridRetriever(new_collection, _config)
-            logger.info("✓ Retriever re-initialized with new collection")
+            logger.info("Retriever re-initialized with collection '%s'", _config.collection_name)
 
         # Clear cache to invalidate all L1 entries (ADR-006 - Fix for blocking issue #1)
         # This ensures the new configuration is used for subsequent queries
@@ -1161,35 +1178,6 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
             detail=f"Configuration update failed: {str(e)}",
         )
 
-
-@app.get(
-    "/collections",
-    response_model=CollectionsResponse,
-    tags=["Configuration"],
-    summary="List existing ChromaDB collections",
-)
-async def get_collections() -> CollectionsResponse:
-    """List all ChromaDB collections in the knowledge database directory.
-
-    Returns:
-        CollectionsResponse containing a list of collection name strings.
-
-    Raises:
-        HTTPException: 503 if the knowledge database cannot be accessed.
-
-    Example:
-        GET /collections
-        Response: {"collections": ["hybrid_rag_collection", "my_docs"]}
-    """
-    try:
-        names = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
-        return CollectionsResponse(collections=names)
-    except VectorDBError as e:
-        logger.error(f"Failed to list collections: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Failed to list collections: {str(e)}",
-        )
 
 
 @app.get(
