@@ -26,6 +26,9 @@ pytest tests/ -v --cov=hybrid_rag --cov=api
 # Type checking
 mypy hybrid_rag/ api.py
 
+# Lint (ruff is a dev dependency; use uv run)
+uv run ruff check .
+
 # Start FastAPI server
 uvicorn api:app --reload
 ```
@@ -43,6 +46,8 @@ pnpm lint
 pnpm tsc --noEmit
 pnpm test:unit
 ```
+
+A frontend change is only complete when `pnpm lint`, `pnpm test:unit`, and `pnpm build` all pass.
 
 ## Architecture
 
@@ -62,7 +67,7 @@ Public API (17 exports) is defined in `__init__.py` with `__all__`:
 - **Utilities**: `chunk_text`, `initialize_vector_db`, `get_sample_documents`, `is_valid_collection_name`, `sanitize_collection_name`, `list_existing_collections`
 - **Constants**: `STOP_WORDS`, `MIN_RELEVANCE_SCORE`, `KNOWLEDGE_DB_DIRECTORY`, `CACHE_TELEMETRY_LABELS`
 
-Configuration uses validated dataclasses (`config.py` with `__post_init__` validation, defaults from `constants.py`). `HybridRetrieverConfig.update(**kwargs)` returns a new instance via `dataclasses.replace` — the original is never mutated. See `main_example.py` and `hybrid_rag_flow.py` for library usage patterns.
+Configuration uses validated dataclasses (`config.py` with `__post_init__` validation, defaults from `constants.py`). `HybridRetrieverConfig.update(**kwargs)` returns a new instance via `dataclasses.replace` — the original is never mutated. The default collection name is `"rag_collection"` (ChromaDB enforces 6–20 character names; `is_valid_collection_name` / `sanitize_collection_name` validate/coerce names). See `main_example.py` and `hybrid_rag_flow.py` for library usage patterns.
 
 ### Caching (`cache.py`)
 
@@ -114,7 +119,7 @@ Custom AI development agents live in `.github/agents/` (planner, orchestrator, i
 ### Python Coding Standards
 
 #### Code Quality & Formatting
-- **RUFF**: Project uses RUFF for code formatting and linting. Run `ruff check .` before committing.
+- **RUFF**: Project uses RUFF for code formatting and linting. Run `uv run ruff check .` before committing.
 - **Line Length**: Maximum 88 characters (Black-compatible)
 - **Imports**: Organize in three groups (standard library, third-party, local) separated by blank lines
   ```python
@@ -317,7 +322,7 @@ Breaking Changes:
 ## Pre-Commit Checklist
 - [ ] All tests pass (`pytest tests/ -v`)
 - [ ] Test coverage ≥80% (`pytest --cov=hybrid_rag --cov=api`)
-- [ ] RUFF checks pass (`ruff check .`) if installed
+- [ ] RUFF checks pass (`uv run ruff check .`)
 - [ ] Type hints on all new functions
 - [ ] Google-style docstrings on public functions
 - [ ] No `print()` statements (use `logger`)
