@@ -14,42 +14,48 @@ export function SettingsPanel() {
     text: string;
   } | null>(null);
   const [health, setHealth] = useState<"healthy" | "unhealthy" | null>(null);
+  const [collections, setCollections] = useState<string[]>([]);
+  const [collectionsLoading, setCollectionsLoading] = useState(true);
+  const [newCollectionName, setNewCollectionName] = useState("");
 
   useEffect(() => {
     const fetchSettings = async () => {
       try {
         setIsLoading(true);
-        const [configRes, healthRes] = await Promise.all([
+        const [configRes, healthRes, collectionsRes] = await Promise.all([
           apiClient.getConfig(),
           apiClient.healthCheck(),
+          apiClient.getCollections(),
         ]);
         setConfig(configRes);
         setHealth(healthRes.retriever_ready === "yes" ? "healthy" : "unhealthy");
-      } catch (err) {
+        setCollections(collectionsRes.collections);
+      } catch {
         setMessage({
           type: "error",
           text: "Failed to load settings",
         });
       } finally {
         setIsLoading(false);
+        setCollectionsLoading(false);
       }
     };
 
     fetchSettings();
   }, []);
 
-  const handleConfigChange = (key: keyof ConfigResponse, value: any) => {
+  const handleConfigChange = (key: keyof ConfigResponse, value: number | boolean | string) => {
     if (!config) return;
 
     // Auto-adjust weights if changing one
-    if (key === "semantic_weight" && config.semantic_weight + config.keyword_weight !== 1) {
+    if (key === "semantic_weight" && typeof value === "number" && config.semantic_weight + config.keyword_weight !== 1) {
       const newKeywordWeight = Math.max(0, Math.min(1, 1 - value));
       setConfig({
         ...config,
         [key]: value,
         keyword_weight: parseFloat(newKeywordWeight.toFixed(2)),
       });
-    } else if (key === "keyword_weight" && config.semantic_weight + config.keyword_weight !== 1) {
+    } else if (key === "keyword_weight" && typeof value === "number" && config.semantic_weight + config.keyword_weight !== 1) {
       const newSemanticWeight = Math.max(0, Math.min(1, 1 - value));
       setConfig({
         ...config,
@@ -79,6 +85,7 @@ export function SettingsPanel() {
         keyword_weight: config.keyword_weight,
         enable_rerank: config.enable_rerank,
         pre_rerank_top_k: config.pre_rerank_top_k,
+        collection_name: config.collection_name,
       };
 
       await apiClient.updateConfig(update);
@@ -297,6 +304,113 @@ export function SettingsPanel() {
                 </p>
               </div>
             )}
+          </div>
+
+          {/* Vector Database Settings */}
+          <div className="space-y-4 border-t border-gray-700 pt-6">
+            <h3 className="font-semibold text-white">Vector Database Settings</h3>
+
+            <div>
+              <label className="text-sm text-gray-300 mb-2 block" htmlFor="active-collection">
+                Active Collection
+              </label>
+              <select
+                id="active-collection"
+                aria-label="Active Collection"
+                value={config.collection_name}
+                onChange={(e) => handleConfigChange("collection_name", e.target.value)}
+                disabled={collectionsLoading}
+                className="w-full bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+              >
+                {collectionsLoading ? (
+                  <option disabled value="">Loading...</option>
+                ) : (
+                  Array.from(
+                    new Set(
+                      [...collections, config.collection_name].filter(
+                        (col): col is string => Boolean(col)
+                      )
+                    )
+                  )
+                    .sort((a, b) => a.localeCompare(b))
+                    .map((col) => (
+                      <option key={col} value={col}>{col}</option>
+                    ))
+                )}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-sm text-gray-300 mb-2 block" htmlFor="new-collection-name">
+                New Collection Name
+              </label>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <input
+                    id="new-collection-name"
+                    type="text"
+                    value={newCollectionName}
+                    onChange={(e) => setNewCollectionName(e.target.value)}
+                    placeholder="my-collection"
+                    aria-label="New Collection Name"
+                    className="w-full bg-gray-700 text-white border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 placeholder-gray-500"
+                  />
+                  {newCollectionName.length > 0 && !/^[a-zA-Z0-9_-]{6,20}$/.test(newCollectionName) && (
+                    <p className="text-xs text-red-400 mt-1">
+                      Must be 6–20 characters, alphanumeric, underscore, or hyphen only
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!config) return;
+
+                    setIsSaving(true);
+                    setMessage(null);
+
+                    try {
+                      const update: ConfigUpdateRequest = {
+                        semantic_top_k: config.semantic_top_k,
+                        keyword_top_k: config.keyword_top_k,
+                        final_top_k: config.final_top_k,
+                        semantic_weight: config.semantic_weight,
+                        keyword_weight: config.keyword_weight,
+                        enable_rerank: config.enable_rerank,
+                        pre_rerank_top_k: config.pre_rerank_top_k,
+                        collection_name: newCollectionName,
+                      };
+
+                      await apiClient.updateConfig(update);
+
+                      // Update local state
+                      setConfig({ ...config, collection_name: newCollectionName });
+
+                      // Refresh collections list to include the new collection
+                      const collectionsRes = await apiClient.getCollections();
+                      setCollections(collectionsRes.collections);
+
+                      setNewCollectionName("");
+                      setMessage({
+                        type: "success",
+                        text: `✓ Created and switched to collection "${newCollectionName}"`,
+                      });
+                    } catch (error) {
+                      setMessage({
+                        type: "error",
+                        text: error instanceof Error ? error.message : "Failed to create collection",
+                      });
+                    } finally {
+                      setIsSaving(false);
+                    }
+                  }}
+                  disabled={!/^[a-zA-Z0-9_-]{6,20}$/.test(newCollectionName) || isSaving}
+                  aria-label="Create and switch to new collection"
+                  className="bg-blue-500 hover:bg-blue-600 disabled:bg-gray-600 disabled:opacity-50 text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  {isSaving ? "Creating..." : "Create & Switch"}
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Message */}

@@ -55,6 +55,9 @@ from hybrid_rag import (
     get_sample_documents,
     chunk_text,
     CACHE_TELEMETRY_LABELS,
+    KNOWLEDGE_DB_DIRECTORY,
+    list_existing_collections,
+    is_valid_collection_name,
 )
 from hybrid_rag.cache import CacheBackend
 from hybrid_rag.config import CacheSettings, create_cache_backend
@@ -112,6 +115,7 @@ class ConfigResponse(BaseModel):
     keyword_weight: float
     enable_rerank: bool
     pre_rerank_top_k: int
+    collection_name: str
 
 
 class HealthResponse(BaseModel):
@@ -148,6 +152,21 @@ class ConfigUpdateRequest(BaseModel):
     pre_rerank_top_k: Optional[int] = Field(
         None, gt=0, description="Candidates to rerank before selection"
     )
+    collection_name: Optional[str] = Field(
+        None,
+        min_length=6,
+        max_length=20,
+        description=(
+            "ChromaDB collection name (6-20 chars, "
+            "alphanumeric/underscore/hyphen)"
+        ),
+    )
+
+
+class CollectionsResponse(BaseModel):
+    """Response model for listing ChromaDB collections."""
+
+    collections: list[str] = Field(..., description="List of existing collection names")
 
 
 class DocumentIngestionRequest(BaseModel):
@@ -496,7 +515,11 @@ def initialize_retriever() -> None:
         documents = get_sample_documents()
 
         logger.debug("Initializing vector database...")
-        collection = initialize_vector_db(documents)
+        collection = initialize_vector_db(
+            documents,
+            persist_dir=KNOWLEDGE_DB_DIRECTORY,
+            collection_name=_config.collection_name,
+        )
 
         # Create retriever
         _retriever = HybridRetriever(collection, _config)
@@ -989,6 +1012,7 @@ async def get_config() -> ConfigResponse:
         keyword_weight=_config.keyword_weight,
         enable_rerank=_config.enable_rerank,
         pre_rerank_top_k=_config.pre_rerank_top_k,
+        collection_name=_config.collection_name,
     )
 
 
@@ -1027,7 +1051,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
             ...
         }
     """
-    global _config, _cache_generation, _corpus_version
+    global _config, _cache_generation, _corpus_version, _retriever
 
     if _config is None:
         logger.error("Retriever not initialized")
@@ -1050,12 +1074,37 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
                 keyword_weight=_config.keyword_weight,
                 enable_rerank=_config.enable_rerank,
                 pre_rerank_top_k=_config.pre_rerank_top_k,
+                collection_name=_config.collection_name,
             )
 
         logger.info(f"Updating configuration with: {update_dict}")
 
+        # If collection_name is changing, validate it before applying
+        new_collection_name = update_dict.get("collection_name")
+        collection_changed = (
+            new_collection_name is not None
+            and new_collection_name != _config.collection_name
+        )
+        if new_collection_name is not None and not is_valid_collection_name(new_collection_name):
+            raise ValueError(
+                f"Invalid collection name '{new_collection_name}': must be 6-20 chars, "
+                "alphanumeric/underscore/hyphen only"
+            )
+
         # Create updated configuration (validates automatically in __post_init__)
         _config = _config.update(**update_dict)
+
+        # Re-initialize vector database when collection_name changes
+        if collection_changed:
+            logger.info(f"Collection name changed to '{_config.collection_name}', re-initializing vector DB")
+            documents = get_sample_documents()
+            new_collection = initialize_vector_db(
+                documents,
+                persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                collection_name=_config.collection_name,
+            )
+            _retriever = HybridRetriever(new_collection, _config)
+            logger.info("✓ Retriever re-initialized with new collection")
 
         # Clear cache to invalidate all L1 entries (ADR-006 - Fix for blocking issue #1)
         # This ensures the new configuration is used for subsequent queries
@@ -1090,6 +1139,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
             keyword_weight=_config.keyword_weight,
             enable_rerank=_config.enable_rerank,
             pre_rerank_top_k=_config.pre_rerank_top_k,
+            collection_name=_config.collection_name,
         )
 
     except ValueError as e:
@@ -1109,6 +1159,36 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
         raise HTTPException(
             status_code=500,
             detail=f"Configuration update failed: {str(e)}",
+        )
+
+
+@app.get(
+    "/collections",
+    response_model=CollectionsResponse,
+    tags=["Configuration"],
+    summary="List existing ChromaDB collections",
+)
+async def get_collections() -> CollectionsResponse:
+    """List all ChromaDB collections in the knowledge database directory.
+
+    Returns:
+        CollectionsResponse containing a list of collection name strings.
+
+    Raises:
+        HTTPException: 503 if the knowledge database cannot be accessed.
+
+    Example:
+        GET /collections
+        Response: {"collections": ["hybrid_rag_collection", "my_docs"]}
+    """
+    try:
+        names = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
+        return CollectionsResponse(collections=names)
+    except VectorDBError as e:
+        logger.error(f"Failed to list collections: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to list collections: {str(e)}",
         )
 
 

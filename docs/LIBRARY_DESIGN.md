@@ -69,6 +69,7 @@ Defines `HybridRetrieverConfig` dataclass with:
 - **Keyword search parameters**: `keyword_top_k`, `keyword_weight`
 - **Fusion parameters**: `final_top_k`, `pre_rerank_top_k`
 - **Reranking**: `enable_rerank` toggle
+- **Collection**: `collection_name` (default: `"hybrid_rag_collection"`)
 - **Validation**: Post-init validation of weights and ranges
 
 ```python

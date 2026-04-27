@@ -95,5 +95,7 @@ from .vectordb import (
     chunk_text,
     get_sample_documents,
     initialize_vector_db,
+    is_valid_collection_name,
     list_existing_collections,
+    sanitize_collection_name,
 )

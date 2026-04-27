@@ -3,6 +3,7 @@
  */
 
 import {
+  CollectionsResponse,
   ConfigResponse,
   ConfigUpdateRequest,
   DocumentIngestionRequest,
@@ -69,6 +70,10 @@ class ApiClient {
 
   async getDocumentSources(): Promise<SourcesResponse> {
     return this.request<SourcesResponse>("/documents/sources");
+  }
+
+  async getCollections(): Promise<CollectionsResponse> {
+    return this.request<CollectionsResponse>("/collections");
   }
 }
 

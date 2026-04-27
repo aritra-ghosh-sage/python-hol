@@ -1,7 +1,6 @@
 "use client";
 
 import { MessageCircle, Plus, Settings } from "lucide-react";
-import { IconButton } from "@/components/ui/IconButton";
 
 interface SidebarProps {
   activePanel: "query" | "data" | "settings";

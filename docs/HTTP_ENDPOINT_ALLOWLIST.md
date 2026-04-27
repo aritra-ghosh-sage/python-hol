@@ -22,6 +22,7 @@ The following HTTP endpoints are **approved** for production use:
 | `/documents/sources` | GET | List document sources with chunk counts | Yes (admin) |
 | `/collections` | GET | List ChromaDB collections with document counts | Yes (admin) |
 | `/cache/stats` | GET | Cache statistics and observability | Yes (admin) |
+| `/collections` | GET | List existing ChromaDB collections | Yes (admin) |
 | `/` | GET | API information and version | No |
 
 **Auto-generated documentation endpoints** (required for OpenAPI):
@@ -189,3 +190,4 @@ If an unauthorized endpoint is detected in production:
 | Date | Change | Author |
 |------|--------|--------|
 | 2026-04-23 | Initial policy creation (T09) | Claude Agent |
+| 2026-04-27 | Add GET /collections endpoint for collection management | Claude Agent |

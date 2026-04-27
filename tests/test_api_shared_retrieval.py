@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 from fastapi import WebSocketDisconnect
+from fastapi.testclient import TestClient
 
 import api
 from hybrid_rag import HybridRetrieverConfig
@@ -506,3 +507,8 @@ async def test_parity_ws_first_rest_second_shares_same_corpus_version_key(
     # Payloads must be equivalent (same cached results surfaced)
     assert ws2_results["total_results"] == ws1_results["total_results"]
     assert ws2_results["results"][0]["id"] == ws1_results["results"][0]["id"]
+
+
+def test_collection_name_validation_rejects_invalid(fake_initialized_app: TestClient) -> None:
+    response = fake_initialized_app.put("/config", json={"collection_name": "my.col"})
+    assert response.status_code == 400
