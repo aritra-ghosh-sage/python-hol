@@ -3,7 +3,7 @@
 import hashlib
 import logging
 import re
-from typing import Any, Dict, List
+from typing import Any
 
 import cachetools
 import numpy as np
@@ -174,7 +174,7 @@ class HybridRetriever:
 
         return embedding
 
-    def _get_embedding_cache_stats(self) -> Dict[str, Any]:
+    def _get_embedding_cache_stats(self) -> dict[str, Any]:
         """Get statistics about the L2 embedding cache.
 
         Returns cache hit/miss counts, current size, capacity, and hit rate.
@@ -208,7 +208,7 @@ class HybridRetriever:
             "hit_rate": hit_rate,
         }
 
-    def get_embedding_cache_stats(self) -> Dict[str, Any]:
+    def get_embedding_cache_stats(self) -> dict[str, Any]:
         """Public accessor for L2 embedding cache statistics.
 
         WHY: The /cache/stats endpoint needs to populate the l2_embedding_cache
@@ -229,7 +229,7 @@ class HybridRetriever:
         # the stats computation logic.
         return self._get_embedding_cache_stats()
 
-    def _dedupe_by_source(self, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _dedupe_by_source(self, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Remove duplicate documents from the same source URL.
 
         Keeps the first (highest-ranked) result per unique source and limits
@@ -272,7 +272,7 @@ class HybridRetriever:
 
         return deduped
 
-    def _semantic_search(self, query: str) -> List[Dict[str, Any]]:
+    def _semantic_search(self, query: str) -> list[dict[str, Any]]:
         """Perform semantic similarity search using embeddings.
 
         Queries the ChromaDB collection using the embedding of the input query
@@ -321,7 +321,7 @@ class HybridRetriever:
             logger.error(f"Semantic search failed: {e}")
             raise RetrievalError(f"Semantic search failed: {e}") from e
 
-    def _keyword_search(self, query: str) -> List[Dict[str, Any]]:
+    def _keyword_search(self, query: str) -> list[dict[str, Any]]:
         """Perform keyword-based search filtering stop words.
 
         Extracts keywords from the query (excluding common stop words) and performs
@@ -346,7 +346,7 @@ class HybridRetriever:
 
         try:
             logger.debug(f"Performing keyword search for keywords: {keywords}")
-            results_dict: Dict[str, Dict[str, Any]] = {}
+            results_dict: dict[str, dict[str, Any]] = {}
 
             for keyword in keywords:
                 try:
@@ -385,8 +385,8 @@ class HybridRetriever:
             raise RetrievalError(f"Keyword search failed: {e}") from e
 
     def _fusion(
-        self, semantic: List[Dict[str, Any]], keyword: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, semantic: list[dict[str, Any]], keyword: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Fuse semantic and keyword search results with configurable weights.
 
         Combines results from both search methods, aggregating scores for documents
@@ -406,7 +406,7 @@ class HybridRetriever:
             >>> fused = retriever._fusion(semantic, keyword)
             >>> # Score is weighted combination: 0.7*0.8 + 0.3*0.9
         """
-        results: List[tuple] = []
+        results: list[tuple] = []
 
         # Add semantic results with semantic weight
         for doc in semantic:
@@ -446,7 +446,7 @@ class HybridRetriever:
 
     def retrieve(
         self, query: str, enable_rerank: bool | None = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Execute hybrid retrieval pipeline to find most relevant documents.
 
         Performs semantic and keyword search, fuses results with configured weights,

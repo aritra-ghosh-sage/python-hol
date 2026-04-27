@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -122,7 +122,7 @@ class HybridRetrieverConfig:
         # __post_init__ is called automatically, so validation happens here
         return updated_config
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary.
 
         Returns:
