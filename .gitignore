@@ -20,7 +20,10 @@ implementation_docs/
 
 # ChromaDB persistent storage (development artefact — too large for git)
 knowledge_db/
+knowledge_db/chroma.sqlite3
 
 quality/code_reviews/
 quality/results/
 quality/spec_audits/
+frontend/tmp-e2e/screenshots/
+
