@@ -27,3 +27,4 @@ knowledge_db/
 quality/code_reviews/
 quality/results/
 quality/spec_audits/
+.claude/worktrees/
