@@ -1786,24 +1786,18 @@ async def get_collections() -> CollectionsResponse:
         )
 
     try:
-        collection = _retriever._collection if hasattr(_retriever, "_collection") else _retriever.collection
+        collection = _retriever.collection
         if not collection:
             raise HTTPException(
-                status_code=500, detail="Vector database collection not accessible"
+                status_code=500, detail="Vector database collection not initialized or unavailable"
             )
 
-        client = collection._client if hasattr(collection, "_client") else None
-        if client is not None:
-            raw_collections = client.list_collections()
-            collections = [
-                CollectionInfo(name=c.name, count=c.count())
-                for c in raw_collections
-            ]
-        else:
-            # Fallback: report only the active collection when client is unavailable
-            collections = [
-                CollectionInfo(name=collection.name, count=collection.count())
-            ]
+        # Report only the active collection. ChromaDB's PersistentClient.list_collections()
+        # requires direct client access which is not exposed via the public Collection API;
+        # returning the active collection avoids coupling to internal implementation details.
+        collections = [
+            CollectionInfo(name=collection.name, count=collection.count())
+        ]
 
         logger.info(f"Retrieved {len(collections)} collections")
         return CollectionsResponse(collections=collections)
