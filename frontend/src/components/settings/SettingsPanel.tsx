@@ -325,9 +325,17 @@ export function SettingsPanel() {
                 {collectionsLoading ? (
                   <option disabled value="">Loading...</option>
                 ) : (
-                  collections.map((col) => (
-                    <option key={col} value={col}>{col}</option>
-                  ))
+                  Array.from(
+                    new Set(
+                      [...collections, config.collection_name].filter(
+                        (col): col is string => Boolean(col)
+                      )
+                    )
+                  )
+                    .sort((a, b) => a.localeCompare(b))
+                    .map((col) => (
+                      <option key={col} value={col}>{col}</option>
+                    ))
                 )}
               </select>
             </div>
@@ -354,15 +362,52 @@ export function SettingsPanel() {
                   )}
                 </div>
                 <button
-                  onClick={() => {
-                    handleConfigChange("collection_name", newCollectionName);
-                    setNewCollectionName("");
+                  onClick={async () => {
+                    if (!config) return;
+
+                    setIsSaving(true);
+                    setMessage(null);
+
+                    try {
+                      const update: ConfigUpdateRequest = {
+                        semantic_top_k: config.semantic_top_k,
+                        keyword_top_k: config.keyword_top_k,
+                        final_top_k: config.final_top_k,
+                        semantic_weight: config.semantic_weight,
+                        keyword_weight: config.keyword_weight,
+                        enable_rerank: config.enable_rerank,
+                        pre_rerank_top_k: config.pre_rerank_top_k,
+                        collection_name: newCollectionName,
+                      };
+
+                      await apiClient.updateConfig(update);
+
+                      // Update local state
+                      setConfig({ ...config, collection_name: newCollectionName });
+
+                      // Refresh collections list to include the new collection
+                      const collectionsRes = await apiClient.getCollections();
+                      setCollections(collectionsRes.collections);
+
+                      setNewCollectionName("");
+                      setMessage({
+                        type: "success",
+                        text: `✓ Created and switched to collection "${newCollectionName}"`,
+                      });
+                    } catch (error) {
+                      setMessage({
+                        type: "error",
+                        text: error instanceof Error ? error.message : "Failed to create collection",
+                      });
+                    } finally {
+                      setIsSaving(false);
+                    }
                   }}
-                  disabled={!/^[a-zA-Z0-9_-]{6,20}$/.test(newCollectionName)}
+                  disabled={!/^[a-zA-Z0-9_-]{6,20}$/.test(newCollectionName) || isSaving}
                   aria-label="Create and switch to new collection"
                   className="bg-blue-500 hover:bg-blue-600 disabled:bg-gray-600 disabled:opacity-50 text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors whitespace-nowrap"
                 >
-                  Create &amp; Switch
+                  {isSaving ? "Creating..." : "Create & Switch"}
                 </button>
               </div>
             </div>
