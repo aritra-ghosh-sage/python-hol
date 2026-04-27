@@ -84,7 +84,7 @@ Centralized default values:
 - `DEFAULT_PERSIST_DIRECTORY`: ChromaDB persistence location (default: `./ai_support_kb`)
   - Controls where ChromaDB stores vector collections on disk
   - Can be overridden by passing `persist_dir` parameter to `initialize_vector_db()`
-  - Ensures persistent storage of embeddings across application restarts
+  - Provides a persistent on-disk storage directory, but the current `initialize_vector_db()` flow recreates the collection during initialization, so embeddings are recomputed rather than reused across application restarts
 - `MIN_RELEVANCE_SCORE`: Score threshold for relevant documents
 - `STOP_WORDS`: Filtered keywords for keyword search
 - `CACHE_TELEMETRY_LABELS`: Structured event labels for cache observability
@@ -117,7 +117,7 @@ Collection Management:
 Features:
 - Local sentence-transformer embeddings (no external APIs)
 - Cosine distance metric for similarity
-- Persistent storage across application restarts
+- On-disk storage directory (collection is recreated on each initialization)
 - Comprehensive error handling with `VectorDBError` exceptions
 
 ### `reranker.py` - Cross-Encoder Reranking
@@ -277,11 +277,18 @@ def test_hybrid_retriever():
 ## Configuration Management
 
 ### Environment-based Configuration
+
+The following snippet illustrates **consumer-side** configuration. The `api.py`
+entrypoint does not currently read `PERSIST_DIRECTORY` from the environment (it
+calls `initialize_vector_db(documents)` with the library default); the pattern
+below is intended for library consumers who want to build their own entry point
+with environment-driven persistence paths.
+
 ```python
 import os
 from hybrid_rag.constants import DEFAULT_PERSIST_DIRECTORY
 
-# Override default persist directory via environment variable
+# Consumer-controlled: override default persist directory via environment variable
 persist_dir = os.getenv("PERSIST_DIRECTORY", DEFAULT_PERSIST_DIRECTORY)
 
 batch_size = int(os.getenv("BATCH_SIZE", 32))
@@ -299,13 +306,13 @@ collection = initialize_vector_db(
 ```
 
 ### Collection Persistence
-The vector database uses ChromaDB's persistent storage to maintain embeddings across application restarts:
+The vector database uses ChromaDB's persistent storage to keep its files on disk between application restarts, but the current initialization flow recreates the collection each time:
 
 - **Default Location**: `./ai_support_kb` (configurable via `persist_dir` parameter)
 - **Collection Lifecycle**:
   - `initialize_vector_db()` creates or recreates the collection
   - Existing collections at the same path are deleted before recreation
-  - This ensures clean state for each initialization
+  - This ensures a clean state for each initialization, so previously stored embeddings are not reused by this flow
 - **Storage Format**: ChromaDB internal format (SQLite + HNSW index)
 - **Access Pattern**: Collections are accessed via the retriever's `collection` property
 

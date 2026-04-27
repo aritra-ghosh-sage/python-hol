@@ -212,6 +212,21 @@ class SourcesResponse(BaseModel):
     )
 
 
+class CollectionInfo(BaseModel):
+    """Model representing a ChromaDB collection."""
+
+    name: str = Field(..., description="Collection name")
+    count: int = Field(..., description="Number of documents in the collection")
+
+
+class CollectionsResponse(BaseModel):
+    """Response model for listing ChromaDB collections."""
+
+    collections: list[CollectionInfo] = Field(
+        ..., description="List of available ChromaDB collections"
+    )
+
+
 class CacheStatsResponse(BaseModel):
     """Response model for cache statistics.
     
@@ -1745,6 +1760,61 @@ async def get_document_sources() -> SourcesResponse:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve sources: {str(e)}",
+        )
+
+
+@app.get(
+    "/collections",
+    response_model=CollectionsResponse,
+    tags=["Documents"],
+    summary="List ChromaDB collections",
+)
+async def get_collections() -> CollectionsResponse:
+    """Get list of all ChromaDB collections in the vector database.
+
+    Returns:
+        CollectionsResponse with list of collections and their document counts.
+
+    Raises:
+        HTTPException: 503 if retriever not initialized, 500 on failure.
+    """
+    if _retriever is None:
+        logger.error("Retriever not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail="Retriever service not initialized. Try again later.",
+        )
+
+    try:
+        collection = _retriever._collection if hasattr(_retriever, "_collection") else _retriever.collection
+        if not collection:
+            raise HTTPException(
+                status_code=500, detail="Vector database collection not accessible"
+            )
+
+        client = collection._client if hasattr(collection, "_client") else None
+        if client is not None:
+            raw_collections = client.list_collections()
+            collections = [
+                CollectionInfo(name=c.name, count=c.count())
+                for c in raw_collections
+            ]
+        else:
+            # Fallback: report only the active collection when client is unavailable
+            collections = [
+                CollectionInfo(name=collection.name, count=collection.count())
+            ]
+
+        logger.info(f"Retrieved {len(collections)} collections")
+        return CollectionsResponse(collections=collections)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to retrieve collections: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve collections: {str(e)}",
         )
 
 
