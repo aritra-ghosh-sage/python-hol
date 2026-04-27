@@ -1,5 +1,5 @@
-const { test, expect } = require('@playwright/test');
-const fs = require('fs');
+import { test, expect } from '@playwright/test';
+import fs from 'fs';
 
 test('chat persistence scenarios A-D', async ({ page }) => {
   const out = {

@@ -241,6 +241,7 @@ async def test_config_endpoint_clears_cache_on_update() -> None:
     updated_config.semantic_weight = 0.8
     updated_config.keyword_weight = 0.2
     updated_config.enable_rerank = True
+    updated_config.collection_name = "test-collection"
     fake_config.update.return_value = updated_config
 
     with (
