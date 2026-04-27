@@ -103,7 +103,7 @@ export function FileUpload({ onDataAdded }: FileUploadProps) {
       };
 
       reader.readAsDataURL(selectedFile);
-    } catch (error) {
+    } catch {
       setMessage({
         type: "error",
         text: "Failed to read file",

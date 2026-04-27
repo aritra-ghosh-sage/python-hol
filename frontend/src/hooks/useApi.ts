@@ -2,16 +2,16 @@
 
 import { useState, useCallback } from "react";
 
-interface ApiState {
+interface ApiState<T> {
   isLoading: boolean;
   error: string | null;
-  data: any | null;
+  data: T | null;
 }
 
-export function useApi<T = any>(
+export function useApi<T>(
   apiCall: () => Promise<T>
 ): [ApiState, () => Promise<T | null>] {
-  const [state, setState] = useState<ApiState>({
+  const [state, setState] = useState<ApiState<T>>({
     isLoading: false,
     error: null,
     data: null,

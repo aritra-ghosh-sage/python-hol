@@ -50,7 +50,7 @@ export function ChatInput({ onSendQuery, isConnected }: ChatInputProps) {
   };
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    let value = e.target.value;
+    const value = e.target.value;
 
     // Enforce word limit
     if (isFull && value.length > input.length) {

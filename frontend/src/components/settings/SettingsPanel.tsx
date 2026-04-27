@@ -30,7 +30,7 @@ export function SettingsPanel() {
         setConfig(configRes);
         setHealth(healthRes.retriever_ready === "yes" ? "healthy" : "unhealthy");
         setCollections(collectionsRes.collections);
-      } catch (err) {
+      } catch {
         setMessage({
           type: "error",
           text: "Failed to load settings",
