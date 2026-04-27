@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api";
-import { CollectionInfo, ConfigResponse, ConfigUpdateRequest } from "@/lib/types";
+import { ConfigResponse, ConfigUpdateRequest } from "@/lib/types";
 import { Shimmer } from "@/components/ui/Shimmer";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 export function SettingsPanel() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -14,7 +15,7 @@ export function SettingsPanel() {
     text: string;
   } | null>(null);
   const [health, setHealth] = useState<"healthy" | "unhealthy" | null>(null);
-  const [collections, setCollections] = useState<CollectionInfo[]>([]);
+  const { knownCollections, mergeCollections } = useSettingsStore();
   const [collectionsLoading, setCollectionsLoading] = useState(true);
   const [newCollectionName, setNewCollectionName] = useState("");
 
@@ -29,7 +30,7 @@ export function SettingsPanel() {
         ]);
         setConfig(configRes);
         setHealth(healthRes.retriever_ready === "yes" ? "healthy" : "unhealthy");
-        setCollections(collectionsRes.collections);
+        mergeCollections(collectionsRes.collections);
       } catch {
         setMessage({
           type: "error",
@@ -42,7 +43,7 @@ export function SettingsPanel() {
     };
 
     fetchSettings();
-  }, []);
+  }, [mergeCollections]);
 
   const handleConfigChange = (key: keyof ConfigResponse, value: number | boolean | string) => {
     if (!config) return;
@@ -343,7 +344,7 @@ export function SettingsPanel() {
                   <option disabled value="">Loading...</option>
                 ) : (
                   (() => {
-                    const collectionMap = new Map(collections.map((col) => [col.name, col]));
+                    const collectionMap = new Map(knownCollections.map((col) => [col.name, col]));
                     if (config.collection_name && !collectionMap.has(config.collection_name)) {
                       collectionMap.set(config.collection_name, { name: config.collection_name, count: 0 });
                     }
@@ -404,9 +405,10 @@ export function SettingsPanel() {
                       // Update local state
                       setConfig({ ...config, collection_name: newCollectionName });
 
-                      // Refresh collections list to include the new collection
+                      // Merge fresh list into the store — the store retains any
+                      // previously known collections the API omits (e.g. empty ones).
                       const collectionsRes = await apiClient.getCollections();
-                      setCollections(collectionsRes.collections);
+                      mergeCollections(collectionsRes.collections);
 
                       setNewCollectionName("");
                       setMessage({

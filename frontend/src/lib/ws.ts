@@ -144,14 +144,20 @@ export class WebSocketClient {
         }
       };
 
-      this.ws.onerror = (error) => {
-        console.error("[WS] WebSocket error:", error);
+      this.ws.onerror = () => {
+        // Browser WebSocket API gives an opaque Event on error (no message/code).
+        // The real cause is always reported in the subsequent onclose event.
+        console.error(
+          `[WS] Connection error (url: ${this.url}) — check that the backend is reachable`
+        );
         this.notifyStatusChange("error");
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event) => {
         if (process.env.NODE_ENV !== "production") {
-          console.log("[WS] onclose event fired");
+          console.log(
+            `[WS] Closed — code: ${event.code}, reason: "${event.reason || "none"}", clean: ${event.wasClean}`
+          );
         }
         this.ws = null;
         if (this.connectionState !== "disconnected") {
