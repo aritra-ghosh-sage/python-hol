@@ -100,16 +100,20 @@ class TestHybridRetrieverConfig:
         config = HybridRetrieverConfig()
         assert isinstance(config.collection_name, str)
 
-    def test_collection_name_can_be_empty_string(self):
-        """collection_name accepts empty string (validation may be added later)."""
-        # No validation currently, but test the behavior
-        config = HybridRetrieverConfig(collection_name="")
-        assert config.collection_name == ""
+    def test_collection_name_empty_string_raises_value_error(self):
+        """collection_name rejects empty strings."""
+        with pytest.raises(ValueError, match="collection_name must be a non-empty string"):
+            HybridRetrieverConfig(collection_name="")
 
-    def test_collection_name_with_special_characters(self):
-        """collection_name accepts special characters."""
-        config = HybridRetrieverConfig(collection_name="test_collection-v2.0")
-        assert config.collection_name == "test_collection-v2.0"
+    def test_collection_name_whitespace_only_raises_value_error(self):
+        """collection_name rejects whitespace-only strings."""
+        with pytest.raises(ValueError, match="collection_name must be a non-empty string"):
+            HybridRetrieverConfig(collection_name="   ")
+
+    def test_collection_name_with_hyphens_and_underscores(self):
+        """collection_name accepts hyphens and underscores."""
+        config = HybridRetrieverConfig(collection_name="test_collection-v2")
+        assert config.collection_name == "test_collection-v2"
 
     def test_default_config_all_fields_match_expected_values(self):
         """DEFAULT_CONFIG has all expected field values including collection_name."""
