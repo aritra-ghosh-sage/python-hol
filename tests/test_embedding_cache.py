@@ -158,7 +158,7 @@ class TestRetrieveWithEmbeddingCache:
         # Second retrieve with same query: cache hit
         results2 = retriever.retrieve(query)
         hits_after_second = retriever._embedding_cache_hits
-        misses_after_second = retriever._embedding_cache_misses
+        _misses_after_second = retriever._embedding_cache_misses
 
         # First call should have a miss
         assert misses_after_first >= 1

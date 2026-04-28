@@ -36,7 +36,7 @@ class HybridRetrieverConfig:
         collection_name: Persisted ChromaDB collection name metadata associated with this
             configuration. This class stores and serializes the value, but does not itself
             select or initialize the active vector store collection. Defaults to
-            "hybrid_rag_collection".
+            "rag_collection".
 
     Raises:
         ValueError: If weights don't sum to approximately 1.0 or are not in valid range.
@@ -51,7 +51,7 @@ class HybridRetrieverConfig:
 
     enable_rerank: bool = True
     pre_rerank_top_k: int = 50
-    collection_name: str = "hybrid_rag_collection"
+    collection_name: str = "rag_collection"
 
     def __post_init__(self) -> None:
         """Validate configuration parameters after initialization."""
@@ -156,7 +156,7 @@ DEFAULT_CONFIG = HybridRetrieverConfig(
     semantic_weight=0.7,
     keyword_weight=0.3,
     enable_rerank=True,
-    collection_name="hybrid_rag_collection",
+    collection_name="rag_collection",
 )
 
 
@@ -341,7 +341,7 @@ def create_cache_backend(settings: CacheSettings) -> CacheBackend:
         >>> cache = create_cache_backend(settings)
         >>> cache.set("key", {"value": 123})
     """
-    from .cache import CacheBackend, InMemoryCache, RedisCache
+    from .cache import InMemoryCache, RedisCache
 
     if settings.backend == "memory":
         return InMemoryCache(

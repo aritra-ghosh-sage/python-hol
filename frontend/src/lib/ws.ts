@@ -119,7 +119,9 @@ export class WebSocketClient {
 
     try {
       this.ws = new WebSocket(this.url);
-      console.log("[WS] WebSocket object created");
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[WS] WebSocket object created");
+      }
 
       this.ws.onopen = () => {
         if (process.env.NODE_ENV !== "production") {
@@ -144,14 +146,23 @@ export class WebSocketClient {
         }
       };
 
-      this.ws.onerror = (error) => {
-        console.error("[WS] WebSocket error:", error);
-        this.notifyStatusChange("error");
+      this.ws.onerror = () => {
+        // Browser WebSocket API gives an opaque Event on error (no message/code).
+        // The real cause is always reported in the subsequent onclose event,
+        // which also drives reconnection — so we only log here and let onclose
+        // handle the state transition to avoid a spurious error→disconnected flip.
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(
+            `[WS] Connection error (url: ${this.url}) — check that the backend is reachable`
+          );
+        }
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event) => {
         if (process.env.NODE_ENV !== "production") {
-          console.log("[WS] onclose event fired");
+          console.log(
+            `[WS] Closed — code: ${event.code}, reason: "${event.reason || "none"}", clean: ${event.wasClean}`
+          );
         }
         this.ws = null;
         if (this.connectionState !== "disconnected") {

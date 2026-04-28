@@ -79,27 +79,34 @@ class ErrorRetriever:
 # ---------------------------------------------------------------------------
 
 
+class DeterministicRetriever:
+    """Retriever double that returns configurable canned results."""
+
+    def __init__(self, results: Optional[List[Dict[str, Any]]] = None) -> None:
+        from types import SimpleNamespace
+
+        self.collection = SimpleNamespace(count=lambda: 1)
+        self._results = results or [
+            {
+                "id": "doc-alpha",
+                "text": "relevant document",
+                "metadata": {"source": "test-src"},
+                "score": 0.92,
+            }
+        ]
+
+    def retrieve(self, query: str, enable_rerank: Optional[bool] = None) -> List[Dict[str, Any]]:
+        return list(self._results)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
 @pytest.fixture
-def ws_harness(monkeypatch: pytest.MonkeyPatch) -> "DeterministicRetriever":
+def ws_harness(monkeypatch: pytest.MonkeyPatch) -> DeterministicRetriever:
     """Install a deterministic retriever/config/cache for WS critical-path tests."""
-
-    class DeterministicRetriever:
-        def __init__(self, results: Optional[List[Dict[str, Any]]] = None) -> None:
-            from types import SimpleNamespace
-
-            self.collection = SimpleNamespace(count=lambda: 1)
-            self._results = results or [
-                {
-                    "id": "doc-alpha",
-                    "text": "relevant document",
-                    "metadata": {"source": "test-src"},
-                    "score": 0.92,
-                }
-            ]
-
-        def retrieve(self, query: str, enable_rerank: Optional[bool] = None) -> List[Dict[str, Any]]:
-            return list(self._results)
-
     retriever = DeterministicRetriever()
     monkeypatch.setattr(api, "_retriever", retriever)
     monkeypatch.setattr(

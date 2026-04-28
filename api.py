@@ -164,12 +164,6 @@ class ConfigUpdateRequest(BaseModel):
     )
 
 
-class CollectionsResponse(BaseModel):
-    """Response model for listing ChromaDB collections."""
-
-    collections: list[str] = Field(..., description="List of existing collection names")
-
-
 class DocumentIngestionRequest(BaseModel):
     """Request model for adding custom documents.
 
@@ -200,7 +194,7 @@ class DocumentIngestionRequest(BaseModel):
         None, description="User-friendly label for the data source"
     )
     ingest_type: Literal["add", "update"] = Field(
-        default="update",
+        "update",
         description=(
             "Ingest type override.  Omit to let the backend derive add/update from "
             "the collection state.  Provide explicitly to force a specific path."
@@ -512,15 +506,25 @@ def initialize_retriever() -> None:
         )
 
         # Initialize vector database
-        logger.debug("Loading sample documents...")
-        documents = get_sample_documents()
-
-        logger.debug("Initializing vector database...")
-        collection = initialize_vector_db(
-            documents,
-            persist_dir=KNOWLEDGE_DB_DIRECTORY,
-            collection_name=_config.collection_name,
-        )
+        existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
+        if _config.collection_name in existing:
+            collection = open_collection(
+                persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                collection_name=_config.collection_name,
+            )
+            logger.info("Loaded existing collection '%s'", _config.collection_name)
+        else:
+            documents = get_sample_documents()
+            collection = initialize_vector_db(
+                documents,
+                persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                collection_name=_config.collection_name,
+            )
+            logger.info(
+                "Created new collection '%s' with %d sample documents",
+                _config.collection_name,
+                len(documents),
+            )
 
         # Create retriever
         _retriever = HybridRetriever(collection, _config)

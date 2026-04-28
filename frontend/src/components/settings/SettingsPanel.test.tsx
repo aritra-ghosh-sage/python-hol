@@ -20,14 +20,14 @@ const baseConfig = {
   keyword_weight: 0.3,
   enable_rerank: false,
   pre_rerank_top_k: 20,
-  collection_name: "hybrid_rag_collection",
+  collection_name: "rag_collection",
 };
 
 function setupMocks() {
   vi.mocked(apiClient.getConfig).mockResolvedValue(baseConfig);
   vi.mocked(apiClient.getCollections).mockResolvedValue({
     collections: [
-      { name: "hybrid_rag_collection", count: 42 },
+      { name: "rag_collection", count: 42 },
       { name: "other_collection", count: 7 },
     ],
   });

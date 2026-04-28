@@ -6,7 +6,6 @@ cache stats endpoint, and response headers.
 """
 
 from datetime import datetime
-from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -95,7 +94,6 @@ def test_create_cache_backend_validates_settings() -> None:
 async def test_cache_stats_response_model() -> None:
     """Test CacheStatsResponse Pydantic model validation."""
     from pydantic import BaseModel, Field
-    from datetime import datetime
 
     class CacheStatsResponse(BaseModel):
         """Response model for cache statistics."""
@@ -168,11 +166,13 @@ async def test_ingest_request_with_type() -> None:
         source_type: Literal["text", "url", "file"] = Field(
             ..., description="Type of data source"
         )
-        content: str = Field(..., min_length=1, description="Text content, URL, or base64-encoded file")
+        content: str = Field(
+            ..., min_length=1, description="Text content, URL, or base64-encoded file"
+        )
         filename: Optional[str] = Field(None, description="Original filename")
         source_label: Optional[str] = Field(None, description="User-friendly label")
         ingest_type: Literal["add", "update"] = Field(
-            default="update",
+            "update",
             description="Ingest type: 'add' preserves cache, 'update' clears cache",
         )
 
@@ -235,14 +235,14 @@ async def test_config_endpoint_clears_cache_on_update() -> None:
     fake_config.semantic_weight = 0.7
     fake_config.keyword_weight = 0.3
     fake_config.enable_rerank = True
-    fake_config.collection_name = "hybrid_rag_collection"
+    fake_config.collection_name = "rag_collection"
     updated_config = MagicMock()
     for attr in ("semantic_top_k", "keyword_top_k", "final_top_k", "pre_rerank_top_k"):
         setattr(updated_config, attr, 10)
     updated_config.semantic_weight = 0.8
     updated_config.keyword_weight = 0.2
     updated_config.enable_rerank = True
-    updated_config.collection_name = "hybrid_rag_collection"
+    updated_config.collection_name = "rag_collection"
     fake_config.update.return_value = updated_config
 
     with (
@@ -276,7 +276,7 @@ async def test_config_endpoint_clears_cache_and_returns_200() -> None:
     fake_config.keyword_weight = 0.3
     fake_config.enable_rerank = True
     fake_config.pre_rerank_top_k = 20
-    fake_config.collection_name = "hybrid_rag_collection"
+    fake_config.collection_name = "rag_collection"
     updated_config = MagicMock()
     updated_config.semantic_top_k = 10
     updated_config.keyword_top_k = 10
@@ -285,7 +285,7 @@ async def test_config_endpoint_clears_cache_and_returns_200() -> None:
     updated_config.keyword_weight = 0.2
     updated_config.enable_rerank = True
     updated_config.pre_rerank_top_k = 20
-    updated_config.collection_name = "hybrid_rag_collection"
+    updated_config.collection_name = "rag_collection"
     fake_config.update.return_value = updated_config
 
     with (
@@ -642,14 +642,14 @@ async def test_config_clear_logs_operation() -> None:
     fake_config.semantic_weight = 0.5
     fake_config.keyword_weight = 0.5
     fake_config.enable_rerank = False
-    fake_config.collection_name = "hybrid_rag_collection"
+    fake_config.collection_name = "rag_collection"
     updated = MagicMock()
     for attr in ("semantic_top_k", "keyword_top_k", "final_top_k", "pre_rerank_top_k"):
         setattr(updated, attr, 5)
     updated.semantic_weight = 0.6
     updated.keyword_weight = 0.4
     updated.enable_rerank = False
-    updated.collection_name = "hybrid_rag_collection"
+    updated.collection_name = "rag_collection"
     fake_config.update.return_value = updated
 
     with (

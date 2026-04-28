@@ -83,7 +83,7 @@ def main() -> int:
                 keyword_weight=0.2,
                 enable_rerank=False,
             )
-            logger.info(f"✓ Configuration updated successfully")
+            logger.info("✓ Configuration updated successfully")
             logger.info(
                 f"New config: semantic_weight={updated_config.semantic_weight}, "
                 f"keyword_weight={updated_config.keyword_weight}, "

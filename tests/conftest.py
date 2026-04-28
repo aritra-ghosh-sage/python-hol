@@ -16,10 +16,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import api
-from hybrid_rag import HybridRetriever, HybridRetrieverConfig, initialize_vector_db, get_sample_documents
-from hybrid_rag.cache import InMemoryCache
-from hybrid_rag.config import CacheSettings, create_cache_backend
+import api  # noqa: E402
+from hybrid_rag import HybridRetriever, HybridRetrieverConfig, initialize_vector_db, get_sample_documents  # noqa: E402
+from hybrid_rag.cache import InMemoryCache  # noqa: E402
+from hybrid_rag.config import CacheSettings, create_cache_backend  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

@@ -384,7 +384,7 @@ async def test_parity_corpus_version_bumps_on_add_both_transports_see_miss(
         incoming_messages=[{"query": "version bump add parity", "enable_rerank": False}]
     )
     await api.websocket_chat(ws_before)
-    ws_before_results = _assert_ws_results_message(ws_before)
+    _assert_ws_results_message(ws_before)
     assert len(parity_harness.calls) == 1
 
     # Step 2: 'add' ingest - collection count grows, corpus_version token changes

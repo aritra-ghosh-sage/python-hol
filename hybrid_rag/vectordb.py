@@ -2,8 +2,7 @@
 
 import logging
 import re
-from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import chromadb
 from chromadb.api.models.Collection import Collection
@@ -131,7 +130,7 @@ def get_sample_documents() -> list[dict[str, str]]:
 def initialize_vector_db(
     documents: list[dict[str, str]],
     persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
-    collection_name: str = "hybrid_rag_collection",
+    collection_name: str = "rag_collection",
 ) -> Collection:
     """Initialize ChromaDB, embed and store the provided documents, and return the collection.
 
@@ -145,7 +144,7 @@ def initialize_vector_db(
         persist_dir: Directory path to persist the ChromaDB collection.
                      Defaults to KNOWLEDGE_DB_DIRECTORY.
         collection_name: Name of the ChromaDB collection to create or retrieve.
-                        Defaults to "hybrid_rag_collection".
+                        Defaults to "rag_collection".
 
     Returns:
         ChromaDB Collection object with embedded documents ready for querying.
@@ -230,7 +229,7 @@ def initialize_vector_db(
 
 def open_collection(
     persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
-    collection_name: str = "hybrid_rag_collection",
+    collection_name: str = "rag_collection",
 ) -> Collection:
     """Open an existing ChromaDB collection without modifying its contents.
 
