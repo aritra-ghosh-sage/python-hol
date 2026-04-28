@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api";
 import { ConfigResponse, ConfigUpdateRequest } from "@/lib/types";
 import { Shimmer } from "@/components/ui/Shimmer";
-import { useSettingsStore } from "@/stores/settingsStore";
+import { useSettingsStore, STALE_THRESHOLD } from "@/stores/settingsStore";
 
 export function SettingsPanel() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -72,6 +72,17 @@ export function SettingsPanel() {
 
   const handleSave = async () => {
     if (!config) return;
+
+    const staleEntry = knownCollections.find(
+      (c) => c.name === config.collection_name && (c.missCount ?? 0) >= STALE_THRESHOLD
+    );
+    if (staleEntry) {
+      setMessage({
+        type: "error",
+        text: `Collection "${config.collection_name}" is no longer available. Please select a different collection.`,
+      });
+      return;
+    }
 
     setIsSaving(true);
     setMessage(null);
@@ -348,7 +359,11 @@ export function SettingsPanel() {
                     if (config.collection_name && !collectionMap.has(config.collection_name)) {
                       collectionMap.set(config.collection_name, { name: config.collection_name, count: 0 });
                     }
-                    return Array.from(collectionMap.values())
+                    // Only show collections that are not stale
+                    const visibleCollections = Array.from(collectionMap.values()).filter(
+                      (c) => (c.missCount ?? 0) < STALE_THRESHOLD
+                    );
+                    return visibleCollections
                       .sort((a, b) => a.name.localeCompare(b.name))
                       .map((col) => (
                         <option key={col.name} value={col.name}>

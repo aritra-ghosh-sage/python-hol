@@ -48,6 +48,7 @@ export interface ConfigUpdateRequest {
 export interface CollectionInfo {
   name: string;
   count: number;
+  missCount?: number;
 }
 
 export interface CollectionsResponse {
