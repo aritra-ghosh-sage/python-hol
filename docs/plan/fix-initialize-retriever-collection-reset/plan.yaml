@@ -1,0 +1,301 @@
+plan_id: fix-initialize-retriever-collection-reset
+objective: >
+  Fix initialize_retriever() in api.py so it preserves existing on-disk ChromaDB
+  collections instead of unconditionally re-seeding them with sample documents on
+  every startup. Add test coverage for both startup paths (existing collection vs
+  new collection). No frontend changes are required.
+created_at: "2026-04-28"
+created_by: gem-planner
+status: pending
+research_confidence: high
+
+plan_metrics:
+  wave_1_task_count: 1
+  total_dependencies: 1
+  risk_score: low
+
+tldr: |
+  initialize_retriever() at api.py:513-517 always calls initialize_vector_db()
+  with sample documents, which destroys user-ingested data on every process restart.
+  The fix mirrors the pattern already implemented correctly in update_config()
+  (api.py:1098-1116): call list_existing_collections(), open existing collections
+  with open_collection(), and only seed with sample docs when the collection does
+  not yet exist. One new test file adds coverage for both startup paths.
+
+open_questions: []
+
+gaps: []
+
+pre_mortem:
+  overall_risk_level: low
+  critical_failure_modes:
+    - scenario: >
+        open_collection() raises VectorDBError for a corrupt or partially written
+        ChromaDB directory (e.g. disk full during previous write).
+      likelihood: low
+      impact: medium
+      mitigation: >
+        Catch VectorDBError from open_collection() inside initialize_retriever(),
+        log a warning, and fall back to re-seeding (identical to the existing
+        except VectorDBError block behaviour). The fallback is identical to the
+        current unsafe path so no regression occurs.
+    - scenario: >
+        Tests in conftest.py that call initialize_vector_db() directly still work
+        because they bypass initialize_retriever(); however a new test for the
+        startup path must use a temp directory to avoid polluting the real
+        KNOWLEDGE_DB_DIRECTORY.
+      likelihood: low
+      impact: low
+      mitigation: >
+        New tests use pytest tmp_path / tempfile.TemporaryDirectory and mock or
+        patch KNOWLEDGE_DB_DIRECTORY so the real on-disk state is never touched.
+  assumptions:
+    - open_collection() and list_existing_collections() are already imported in api.py (confirmed at lines 55, 60).
+    - The startup path in initialize_retriever() is the only remaining call-site that unconditionally seeds (update_config() is already correct).
+    - No frontend changes are needed because the fix makes the API behaviour correct transparently.
+    - conftest.py fixtures bypass initialize_retriever() and wire api._retriever directly, so no fixture changes are needed.
+
+implementation_specification:
+  code_structure: >
+    Single targeted edit to initialize_retriever() in api.py replacing the
+    unconditional initialize_vector_db() call with the same list/open/seed
+    conditional already used in update_config(). A single new test file
+    tests/test_initialize_retriever_startup.py covers both branches.
+  affected_areas:
+    - api.py (initialize_retriever function, lines ~500-534)
+    - tests/test_initialize_retriever_startup.py (new file)
+  component_details:
+    - component: initialize_retriever()
+      responsibility: >
+        Check KNOWLEDGE_DB_DIRECTORY for an existing collection matching
+        _config.collection_name; open it without modification when found;
+        seed with get_sample_documents() only when absent.
+      interfaces:
+        - list_existing_collections(persist_dir) -> list[str]
+        - open_collection(persist_dir, collection_name) -> Collection
+        - initialize_vector_db(docs, persist_dir, collection_name) -> Collection
+        - HybridRetriever(collection, config)
+      dependencies:
+        - component: hybrid_rag
+          relationship: imports already present in api.py
+      integration_points:
+        - Called by startup_event() at application boot
+        - _corpus_version token rebuilt after initialization (unchanged)
+    - component: test_initialize_retriever_startup.py
+      responsibility: >
+        Unit-test initialize_retriever() in isolation using monkeypatching to
+        confirm (a) existing collection uses open_collection() and never calls
+        initialize_vector_db(), and (b) absent collection calls
+        initialize_vector_db() once.
+      interfaces:
+        - pytest monkeypatch / unittest.mock.patch
+        - api.initialize_retriever()
+      dependencies:
+        - component: api.py
+          relationship: imports api module
+      integration_points:
+        - Uses monkeypatch to replace api.KNOWLEDGE_DB_DIRECTORY with a temp path
+        - Patches list_existing_collections, open_collection, initialize_vector_db
+
+contracts:
+  - from_task: T1-fix-initialize-retriever
+    to_task: T2-test-startup-paths
+    interface: >
+      After T1 lands, initialize_retriever() exposes two branches:
+      (existing) calls open_collection() exactly once, never initialize_vector_db();
+      (new) calls initialize_vector_db() exactly once, never open_collection().
+      T2 tests must assert those exact call counts.
+    format: >
+      Mocked callables injected via monkeypatch; assert call_count == 1 / 0.
+
+tasks:
+  - id: T1-fix-initialize-retriever
+    title: Fix initialize_retriever() to preserve existing collections on startup
+    description: |
+      Edit initialize_retriever() in api.py (~lines 500-535) to mirror the
+      conditional logic in update_config() (lines 1098-1116):
+
+        existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
+        if _config.collection_name in existing:
+            collection = open_collection(
+                persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                collection_name=_config.collection_name,
+            )
+            logger.info("Loaded existing collection '%s'", _config.collection_name)
+        else:
+            documents = get_sample_documents()
+            collection = initialize_vector_db(
+                documents,
+                persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                collection_name=_config.collection_name,
+            )
+            logger.info(
+                "Created new collection '%s' with %d sample documents",
+                _config.collection_name,
+                len(documents),
+            )
+
+      Remove the unconditional get_sample_documents() + initialize_vector_db()
+      block that precedes this. Keep everything after the collection assignment
+      (HybridRetriever instantiation, _corpus_version rebuild, logging) unchanged.
+
+      The two logger.info lines must clearly distinguish "loaded existing" from
+      "created new" to aid operator debugging (per clarification).
+
+      Do NOT touch update_config(), conftest.py, or any other file.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - api.py initialize_retriever function
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: /home/aritraghosh/projects/python-hol/api.py
+        description: >
+          Target file. initialize_retriever() is at lines ~488-534. The correct
+          reference pattern is update_config() at lines ~1098-1116.
+    diagnosis:
+      root_cause: >
+        initialize_retriever() calls initialize_vector_db() unconditionally,
+        which re-creates the collection and overwrites user-ingested data.
+      fix_recommendations: >
+        Replace the unconditional seed block with the same
+        list_existing_collections / open_collection / initialize_vector_db
+        conditional already used in update_config().
+      injected_at: "2026-04-28"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial plan
+        timestamp: "2026-04-28"
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 20
+    focus_area: api.py initialize_retriever
+    verification:
+      - Run `uv run ruff check .` — zero violations
+      - Run `pytest tests/ -v` — 100% pass
+      - Confirm initialize_retriever() no longer calls get_sample_documents() unconditionally
+      - Confirm log output on startup says either "Loaded existing collection" or "Created new collection"
+      - Confirm the existing except VectorDBError handler at the bottom of initialize_retriever() is not removed or bypassed
+    acceptance_criteria:
+      - initialize_retriever() calls list_existing_collections() before deciding path
+      - If collection_name is in existing list, open_collection() is used; initialize_vector_db() is NOT called
+      - If collection_name is absent, initialize_vector_db() seeds with sample docs
+      - Both paths emit a distinct logger.info message
+      - No other files are modified
+      - If open_collection() raises VectorDBError, the exception propagates unchanged to the existing except VectorDBError handler at the bottom of initialize_retriever() (no regression in error behaviour)
+    failure_modes:
+      - scenario: Indentation or logic error in the new conditional block
+        likelihood: low
+        impact: medium
+        mitigation: Covered by ruff check and pytest run in verification step
+      - scenario: open_collection raises VectorDBError on a corrupt persist_dir
+        likelihood: low
+        impact: medium
+        mitigation: Existing except VectorDBError handler at bottom of initialize_retriever() already re-raises; behaviour is the same as today (startup fails)
+    tech_stack:
+      - Python 3.13
+      - FastAPI
+      - ChromaDB
+    test_coverage: "Covered by T2"
+
+  - id: T2-test-startup-paths
+    title: Add tests for initialize_retriever() existing-collection and new-collection startup paths
+    description: |
+      Create tests/test_initialize_retriever_startup.py with two test classes:
+
+      TestInitializeRetrieverExistingCollection
+        - Monkeypatch list_existing_collections to return [_config.collection_name]
+        - Monkeypatch open_collection to return a MagicMock collection
+        - Monkeypatch initialize_vector_db to a MagicMock
+        - Call api.initialize_retriever()
+        - Assert open_collection called exactly once with correct args
+        - Assert initialize_vector_db never called
+        - Assert api._retriever is not None
+
+      TestInitializeRetrieverNewCollection
+        - Monkeypatch list_existing_collections to return []
+        - Monkeypatch open_collection to a MagicMock
+        - Monkeypatch initialize_vector_db to return a MagicMock collection
+        - Monkeypatch get_sample_documents to return a small list
+        - Call api.initialize_retriever()
+        - Assert initialize_vector_db called exactly once with correct args
+        - Assert open_collection never called
+        - Assert api._retriever is not None
+
+      Use monkeypatch (pytest) to patch the names as they appear in api.py
+      (i.e. patch "api.list_existing_collections", "api.open_collection", etc.).
+      Reset api._retriever = None and api._config = None before each test, then
+      patch HybridRetrieverConfig or set api._config to a known HybridRetrieverConfig()
+      so the expected collection_name is deterministic. Use tmp_path fixture for
+      KNOWLEDGE_DB_DIRECTORY to avoid touching the real DB.
+
+      TestInitializeRetrieverOpenCollectionError
+        - Monkeypatch list_existing_collections to return [_config.collection_name]
+          (so the existing-collection branch is taken)
+        - Monkeypatch open_collection to raise VectorDBError
+        - Call api.initialize_retriever() inside pytest.raises(VectorDBError)
+        - Assert the exception propagates
+
+      No real ChromaDB or sentence-transformer model should be loaded by these tests.
+      Setup time must remain <10 ms.
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - tests/test_initialize_retriever_startup.py (new)
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - T1-fix-initialize-retriever
+    conflicts_with: []
+    context_files:
+      - path: /home/aritraghosh/projects/python-hol/api.py
+        description: Module under test; initialize_retriever() definition after T1 edit
+      - path: /home/aritraghosh/projects/python-hol/tests/conftest.py
+        description: Existing fixture patterns and _make_fake_retriever() helper for reference
+      - path: /home/aritraghosh/projects/python-hol/tests/test_collection_utilities.py
+        description: Example of monkeypatching and pytest patterns used in this project
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Initial plan
+        timestamp: "2026-04-28"
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 90
+    focus_area: tests/test_initialize_retriever_startup.py
+    verification:
+      - Run `uv run ruff check .` — zero violations
+      - Run `pytest tests/test_initialize_retriever_startup.py -v` — 100% pass
+      - Confirm no real ChromaDB or model is loaded (test duration <5 s)
+    acceptance_criteria:
+      - TestInitializeRetrieverExistingCollection verifies open_collection called, initialize_vector_db not called
+      - TestInitializeRetrieverNewCollection verifies initialize_vector_db called, open_collection not called
+      - Both tests assert api._retriever is not None after call
+      - Tests run without network access or model downloads
+      - TestInitializeRetrieverOpenCollectionError verifies that VectorDBError from open_collection() propagates out of initialize_retriever() unchanged
+      - Each test resets both api._retriever and api._config before calling initialize_retriever() to prevent state carryover between tests
+    failure_modes:
+      - scenario: Patch target strings are wrong (e.g. patching hybrid_rag.vectordb instead of api)
+        likelihood: low
+        impact: low
+        mitigation: Use "api.<name>" as patch target since api.py imports the symbols into its own namespace
+    tech_stack:
+      - Python 3.13
+      - pytest
+      - unittest.mock
+    test_coverage: "Unit coverage of both branches of initialize_retriever()"
+    requires_review: false
+    review_depth: null
+    review_security_sensitive: false
