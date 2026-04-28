@@ -1,0 +1,89 @@
+{
+  "title": "Architect Overview: Python Hybrid RAG Monorepo",
+  "ref": "main",
+  "isPrimary": true,
+  "description": "A structured walkthrough of module boundaries, design tradeoffs, and key system decisions across the library, API, and frontend layers. Intended for architects and senior contributors who need to reason about the system as a whole.",
+  "steps": [
+    {
+      "title": "1. Public API Surface — the library's contract",
+      "file": "hybrid_rag/__init__.py",
+      "line": 1,
+      "description": "**Situation**: Every library consumer imports from `hybrid_rag`; this module is the sole stable boundary.\n\n**Mechanism**: `__all__` enumerates 17 exports across five categories: core retrieval (`HybridRetriever`, `HybridRetrieverConfig`, `CrossEncoderReranker`, `DEFAULT_CONFIG`), caching (`CacheBackend`, `InMemoryCache`, `RedisCache`, `CacheSettings`, `create_cache_backend`), exceptions, utilities, and constants. The module docstring also functions as the Quick Start guide.\n\n**Implication**: Any rename or removal here is a breaking change. Additions require updating `__all__` or they are invisible to `from hybrid_rag import *` consumers.\n\n**Gotcha**: `create_cache_backend` lives in `config.py`, not `cache.py` — its presence here reflects the public factory function pattern, not file co-location."
+    },
+    {
+      "title": "2. Repository Layout — three-layer monorepo",
+      "directory": "hybrid_rag",
+      "description": "**Situation**: The repo has three independent deployable layers with no cross-layer imports.\n\n**Mechanism**:\n- `hybrid_rag/` — pure Python library; zero knowledge of FastAPI or React\n- `api.py` — FastAPI app that imports and orchestrates the library; exposes HTTP + WebSocket interfaces\n- `frontend/` — Next.js 16 (App Router) client; communicates exclusively via WebSocket to `api.py`\n\n**Implication**: The library can be published and used outside this repo unchanged. The API can be swapped for a different server framework without touching the library. The frontend can target any compliant WebSocket server.\n\n**Gotcha**: `api.py` is a single 1600-line module, not a package — refactoring to a proper `api/` package is the most likely architectural pressure as the codebase grows."
+    },
+    {
+      "title": "3. Configuration Dataclass — immutable, validated, centralized",
+      "file": "hybrid_rag/config.py",
+      "line": 22,
+      "description": "**Situation**: Every retrieval decision — candidate counts, fusion weights, reranking toggle — flows through a single config object.\n\n**Mechanism**: `HybridRetrieverConfig` is a `@dataclass` with `__post_init__` validation that asserts `semantic_weight + keyword_weight ≈ 1.0` and enforces legal ranges. All defaults are centralized in `constants.py` and referenced here. `HybridRetrieverConfig.update(**kwargs)` returns a new instance via `dataclasses.replace`; the original is never mutated.\n\n**Implication**: The immutability guarantee means API request handlers can safely pass config snapshots to concurrent coroutines without defensive copying.\n\n**Gotcha**: ChromaDB enforces collection names of 6–20 characters. `is_valid_collection_name` / `sanitize_collection_name` validate and coerce names before they reach `HybridRetrieverConfig`; skipping this step causes a runtime error at collection creation, not at config construction."
+    },
+    {
+      "title": "4. HybridRetriever — owns model, cache, and collection handle",
+      "file": "hybrid_rag/retriever.py",
+      "line": 23,
+      "description": "**Situation**: This class is the single stateful object that coordinates all retrieval logic.\n\n**Mechanism**: On construction it loads the sentence-transformer embedding model (downloading on first use), attaches to a ChromaDB collection, and optionally loads the cross-encoder reranker. It holds three pieces of mutable state: the collection handle, the config, and the L2 embedding LRU cache.\n\n**Implication**: Construction is expensive (~10–18 s for model download). The API layer instantiates exactly one `HybridRetriever` at startup and reuses it for all requests — model loading is amortized.\n\n**Gotcha**: The collection handle can become stale if ChromaDB is restarted without restarting the API process. Integration tests guard against this by calling `collection.count()` to detect stale handles before retrieval."
+    },
+    {
+      "title": "5. L2 Embedding Cache — LRU(5000) inside the retriever",
+      "file": "hybrid_rag/retriever.py",
+      "line": 88,
+      "description": "**Situation**: Embedding inference is the latency bottleneck in the retrieval pipeline; semantically identical queries (e.g., repeated questions) would re-run inference unnecessarily.\n\n**Mechanism**: `self._embedding_cache` is a `cachetools.LRUCache` with `maxsize=5000`. The cache key is the raw query string. On a hit the cached `np.ndarray` vector is returned; on a miss the model encodes the query and stores the result. Hit/miss counters drive the `GET /cache/stats` observability endpoint.\n\n**Implication**: This is the L2 in the three-layer caching architecture. It is session-scoped (in-process memory), so it does not survive API restarts and cannot be shared across multiple API worker processes.\n\n**Gotcha**: The 5000-entry capacity is hard-coded here — it is not exposed in `HybridRetrieverConfig`. Changing it requires a code change, not a config change."
+    },
+    {
+      "title": "6. Five-Stage retrieve() — the core pipeline",
+      "file": "hybrid_rag/retriever.py",
+      "line": 452,
+      "description": "**Situation**: Hybrid retrieval needs to combine two signals (semantic similarity and keyword overlap) without either dominating.\n\n**Mechanism**: The pipeline runs in sequence:\n1. **Clean query** — strip special characters\n2. **Semantic search** — ChromaDB ANN query using the embedding model\n3. **Keyword search** — stop-word-filtered term overlap against stored documents\n4. **Score fusion** — weighted combination: `semantic_weight × semantic_score + keyword_weight × keyword_score`\n5. **Optional reranking** — ms-marco cross-encoder rescores the top-`pre_rerank_top_k` candidates\n6. **Deduplication** — one result per source document, returning `final_top_k`\n\n**Implication**: The `enable_rerank` parameter can be overridden per-request, allowing callers to trade latency for ranking quality.\n\n**Gotcha**: Keyword search is BM25-style but implemented without a dedicated index — it scores against in-memory document text. This works for the current corpus size but will not scale to hundreds of thousands of documents without an external keyword index."
+    },
+    {
+      "title": "7. Cache Hierarchy — three layers, fail-open",
+      "file": "hybrid_rag/cache.py",
+      "line": 55,
+      "description": "**Situation**: The system must remain available if any cache layer fails; cache misses are acceptable but cache errors must not surface to users.\n\n**Mechanism**: `CacheBackend` is an ABC defining `get`, `set`, `delete`, `clear`, and `stats`. `InMemoryCache` (LRU dict) is the default; `RedisCache` is the production backend, switchable via `CACHE_BACKEND=redis` env var. All cache operations are wrapped in try/except that logs the failure and falls through to the uncached path.\n\n**Three-layer design**:\n- **L1** — full query-response cache in `api.py` (`_shared_retrieve_documents`), keyed by `(query, config, corpus_version)`\n- **L2** — embedding LRU inside `HybridRetriever` (see step 5)\n- **L3** — ChromaDB persistent vector store\n\n**Implication**: New cache event types must be registered in `CACHE_TELEMETRY_LABELS` in `constants.py` or they will be invisible to the stats endpoint.\n\n**Gotcha**: The `RedisCache` backend requires `rediss://` (TLS) URLs in production. A plain `redis://` URL in production is a security misconfiguration that silently works but transmits cache payloads unencrypted."
+    },
+    {
+      "title": "8. API Global State — single process-global retriever, cache, corpus version",
+      "file": "api.py",
+      "line": 81,
+      "description": "**Situation**: FastAPI workers share process memory; the retriever and cache must be accessible to all request handlers without being re-created per request.\n\n**Mechanism**: Four module-level globals: `_retriever` (the `HybridRetriever` instance), `_config` (current `HybridRetrieverConfig`), `_cache` (the active `CacheBackend`), and `_corpus_version` (a string token derived from `_cache_generation + live collection.count()`). The `_corpus_version` is included in the L1 cache key so that a post-ingestion cache bust is automatic.\n\n**Implication**: This design is correct for single-process deployments. Horizontal scaling requires an external shared cache (Redis) for L1 and a separate ChromaDB service for L3; the current L2 embedding cache cannot be shared and will diverge across replicas.\n\n**Gotcha**: `_corpus_version` is DB-grounded (uses `collection.count()`) to survive process restarts — the prior approach used `str(_cache_generation)`, which reset to `0` on restart and could serve stale L1 cache hits after a redeploy. See OPTB-007 in the source comment for rationale."
+    },
+    {
+      "title": "9. WebSocket Handler — the sole retrieval entrypoint",
+      "file": "api.py",
+      "line": 1374,
+      "description": "**Situation**: All retrieval flows through a single WebSocket route; there is no HTTP POST retrieval endpoint.\n\n**Mechanism**: `WS /ws/chat` accepts `{\"query\": str, \"enable_rerank\": bool?}` messages. The handler calls `_shared_retrieve_documents` which checks the L1 cache before calling `_retriever.retrieve()`. Responses are streamed back as a `status` frame followed by a `results` frame (or `error` frame on failure). The connection stays open for multiple query turns within a session.\n\n**Implication**: The frontend has no fallback HTTP path for retrieval — if the WebSocket upgrade fails (e.g., behind a proxy that strips `Upgrade` headers), the entire chat feature is unavailable.\n\n**Gotcha**: CORS middleware is configured at the FastAPI app level but CORS headers are not relevant to WebSocket handshakes — the relevant protection is the `Origin` header check, which is not currently enforced. This is a security consideration before adding authentication."
+    },
+    {
+      "title": "10. WebSocketClient — reconnection and handler registry",
+      "file": "frontend/src/lib/ws.ts",
+      "line": 26,
+      "description": "**Situation**: Browser WebSocket connections drop on network blips; the client must transparently reconnect without losing the user's session state.\n\n**Mechanism**: `WebSocketClient` wraps the native `WebSocket` API. It maintains a `Set<WsMessageHandler>` and a `Set<ConnectionStatusHandler>` that survive reconnections. On disconnect, it schedules a retry with exponential backoff controlled by `retryCount`. The `connectionState` field (`connecting | connected | disconnected | error`) is broadcast to all registered status handlers so the UI can reflect connection health.\n\n**Implication**: Message handlers and status handlers registered before a disconnect are automatically re-applied after reconnection, so Zustand store subscriptions do not need to re-register.\n\n**Gotcha**: The `retryTimeout` is a `NodeJS.Timeout` handle — this works in both browser and Node test environments, but if the component tree unmounts without calling `disconnect()`, the retry loop continues in the background and leaks memory."
+    },
+    {
+      "title": "11. getWSClient Singleton — one connection per browser tab",
+      "file": "frontend/src/lib/ws.ts",
+      "line": 246,
+      "description": "**Situation**: React's component lifecycle and strict-mode double-invocation can instantiate multiple `WebSocketClient` objects, opening duplicate connections.\n\n**Mechanism**: `getWSClient()` is a module-level lazy singleton: the `wsClientInstance` variable is initialised to `null` and assigned exactly once on first call. Subsequent calls return the cached instance. A `window.__wsDebug` handle is also set for browser console inspection.\n\n**Implication**: Because the singleton lives at module scope (outside React), it persists across hot-module replacements in development. This can cause stale connections during HMR — developers should reload the page, not just the component, if WebSocket behaviour looks inconsistent.\n\n**Gotcha**: The singleton cannot be reset programmatically in tests. Unit tests that need a fresh `WebSocketClient` must import the class directly and instantiate it rather than calling `getWSClient()`."
+    },
+    {
+      "title": "12. useChatStore — Zustand + localStorage persistence",
+      "file": "frontend/src/stores/chatStore.ts",
+      "line": 51,
+      "description": "**Situation**: Chat messages must survive page refreshes without a backend session store.\n\n**Mechanism**: `useChatStore` is created with Zustand's `persist` middleware backed by `localStorage`. The store holds `messages[]` and a `messageCounter` for stable keying. `appendMessages` calls `capHistory()` which trims the array to 200 entries before persisting — this bounds localStorage usage regardless of session length. `updateLastLoadingContent` provides an in-place mutation path for streaming partial responses.\n\n**Implication**: The 200-message cap is a UX and storage budget decision. If conversation context needs to be longer for model quality reasons, this cap and the localStorage strategy must be revisited together.\n\n**Gotcha**: `localStorage` is unavailable in SSR (Next.js server rendering). The store includes a `fallbackStorage` shim (visible in lines above 51) to avoid crashes during server-side passes — check that shim if you add new persisted fields."
+    },
+    {
+      "title": "13. Test Fixture Design — two tiers of test isolation",
+      "file": "tests/conftest.py",
+      "line": 1,
+      "description": "**Situation**: Some tests require a real ChromaDB collection and embedding model; others only verify HTTP response shapes and do not need model inference.\n\n**Mechanism**: `conftest.py` provides two main fixture tiers:\n- `fake_initialized_app` (function scope) — injects a `MagicMock` retriever with stubbed `retrieve()`. No model download. Setup time < 10 ms. Use for all tests that only inspect HTTP status codes, response schemas, or error paths.\n- `initialized_app` (function scope) — constructs a real `HybridRetriever` with a live ChromaDB collection. Requires the sentence-transformer model on disk. Setup time 10–18 s. Use only when the retrieval pipeline itself is under test.\n\nA `client_with_fresh_cache` fixture delegates to `fake_initialized_app` with the L1 cache cleared, for cache-isolation tests.\n\n**Implication**: New tests should default to `fake_initialized_app`. Using `initialized_app` when not needed inflates CI time by 10–18 s per test and will fail if the model is not pre-downloaded in the CI environment.\n\n**Gotcha**: `asyncio_mode = \"auto\"` is set in `pyproject.toml`, so async test functions do not need `@pytest.mark.asyncio` decorators. Adding them manually is harmless but creates a style inconsistency."
+    },
+    {
+      "title": "14. Architect Synthesis — decisions, tradeoffs, and next steps",
+      "description": "**What you now understand**:\n\n1. **Module boundaries are clean**: `hybrid_rag/` is a pure library, `api.py` is the orchestration layer, `frontend/` is the client. No cross-layer imports exist.\n2. **Single retrieval path**: All queries flow through `WS /ws/chat` → `_shared_retrieve_documents` → `HybridRetriever.retrieve()`. There is no HTTP retrieval fallback.\n3. **Three-layer cache**: L1 (query-response, process-global), L2 (embedding vectors, in-retriever LRU), L3 (ChromaDB vectors). All fail-open.\n4. **Config immutability**: `HybridRetrieverConfig` uses `dataclasses.replace` for updates; configs can be safely shared across coroutines.\n5. **Scaling constraints**: The current architecture is single-process. L2 cache cannot be shared across replicas; horizontal scaling requires Redis for L1 and a standalone ChromaDB service.\n\n**Key files to read next**:\n- `hybrid_rag/vectordb.py` — document chunking strategy and ChromaDB initialization\n- `hybrid_rag/reranker.py` — cross-encoder model loading and scoring\n- `hybrid_rag/constants.py` — all tuneable defaults in one place\n- `frontend/src/components/chat/` — how `useChatStore` and `getWSClient` are wired into the UI\n- `.env.local.example` — full list of runtime configuration knobs"
+    }
+  ]
+}
