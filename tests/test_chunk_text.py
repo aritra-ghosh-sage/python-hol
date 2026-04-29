@@ -15,8 +15,8 @@ class TestChunkTextDefaultChunkSize:
         """Default chunk_size of 400 ensures no chunk exceeds 400 characters.
 
         ADR-0001 T1: chunk_size default must be 400 (reduced from 500) so that
-        chunks fit within the effective token window of BAAI/bge-small-en-v1.5
-        (~512 tokens, ~400 characters of technical English prose).
+        chunks stay conservatively below the effective sequence length of
+        BAAI/bge-small-en-v1.5 and avoid truncation in practice.
         """
         # 800 characters of text — forces multiple chunks at 400 char default
         long_text = "x" * 800
