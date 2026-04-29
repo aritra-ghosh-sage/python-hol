@@ -11,43 +11,27 @@ Full-stack monorepo: a **Python Hybrid RAG library** (`hybrid_rag/`) with a **Fa
 ### Python Backend
 
 ```bash
-# Install (uv preferred)
-uv sync
-
-# Run tests
-pytest tests/ -v
-
-# Run a single test file
-pytest tests/test_cache.py -v
-
-# Run with coverage
-pytest tests/ -v --cov=hybrid_rag --cov=api
-
-# Type checking
-mypy hybrid_rag/ api.py
-
-# Lint (ruff is a dev dependency; use uv run)
-uv run ruff check .
-
-# Start FastAPI server
-uvicorn api:app --reload
+uv sync                                          # install
+pytest tests/ -v                                 # run tests
+pytest tests/ -v --cov=hybrid_rag --cov=api      # with coverage
+mypy hybrid_rag/ api.py                          # type check
+uv run ruff check .                              # lint
+uvicorn api:app --reload                         # start server
 ```
 
 pytest is configured with `asyncio_mode = "auto"` in `pyproject.toml` — no per-test async decorators needed.
 
+A **Python change is only complete** when `uv run ruff check .` and `pytest tests/ -v` (100% pass) both succeed.
+
 ### Frontend
 
 ```bash
-cd frontend
-pnpm install
+cd frontend && pnpm install
 pnpm dev          # http://localhost:3000
-pnpm build
-pnpm lint
-pnpm tsc --noEmit
-pnpm test:unit
+pnpm build && pnpm lint && pnpm test:unit
 ```
 
-A frontend change is only complete when `pnpm lint`, `pnpm test:unit`, and `pnpm build` all pass.
+A **frontend change is only complete** when `pnpm lint`, `pnpm test:unit`, and `pnpm build` all pass.
 
 ## Architecture
 
@@ -57,17 +41,17 @@ Five-stage retrieval in `retriever.py`:
 1. Semantic search via ChromaDB (`vectordb.py`)
 2. Keyword search (stop-word filtered, `constants.py`)
 3. Score fusion (weighted combination, configurable in `config.py`)
-4. Cross-encoder reranking via ms-marco model (`reranker.py`)
+4. Cross-encoder reranking — model `cross-encoder/ms-marco-MiniLM-L-6-v2` (`reranker.py`)
 5. Source deduplication
 
-Public API (17 exports) is defined in `__init__.py` with `__all__`:
+Public API (17 exports) in `__init__.py` with `__all__`:
 - **Core**: `HybridRetriever`, `HybridRetrieverConfig`, `CrossEncoderReranker`, `DEFAULT_CONFIG`
 - **Cache**: `CacheBackend`, `InMemoryCache`, `RedisCache`, `CacheSettings`, `create_cache_backend`
 - **Exceptions**: `HybridRAGException`, `RetrieverNotInitializedError`, `RetrievalError`, `VectorDBError`
 - **Utilities**: `chunk_text`, `initialize_vector_db`, `get_sample_documents`, `is_valid_collection_name`, `sanitize_collection_name`, `list_existing_collections`
 - **Constants**: `STOP_WORDS`, `MIN_RELEVANCE_SCORE`, `KNOWLEDGE_DB_DIRECTORY`, `CACHE_TELEMETRY_LABELS`
 
-Configuration uses validated dataclasses (`config.py` with `__post_init__` validation, defaults from `constants.py`). `HybridRetrieverConfig.update(**kwargs)` returns a new instance via `dataclasses.replace` — the original is never mutated. The default collection name is `"rag_collection"` (ChromaDB enforces 6–20 character names; `is_valid_collection_name` / `sanitize_collection_name` validate/coerce names). See `main_example.py` and `hybrid_rag_flow.py` for library usage patterns.
+Config uses validated dataclasses (`config.py`, `__post_init__` validation, defaults from `constants.py`). `HybridRetrieverConfig.update(**kwargs)` returns a new instance via `dataclasses.replace` — never mutates. Default collection name is `"rag_collection"` (ChromaDB enforces 6–20 chars; `is_valid_collection_name` / `sanitize_collection_name` validate/coerce).
 
 ### Caching (`cache.py`)
 
@@ -83,266 +67,75 @@ Cache failures are fail-open. Monitor at `GET /cache/stats`. Configure via env v
 - `CACHE_KEY_PREFIX` — prefix for shared Redis instances (default: `hybrid_rag_cache:`)
 - `CACHE_MAX_SIZE` — max in-memory LRU entries (default: 10000)
 
-Cache invalidation is tied to corpus version (`_corpus_version` in `api.py`) — derived from `_cache_generation` + live `collection.count()`. Increment `_cache_generation` to bust the L1 cache after ingestion or config changes. When adding new cache event types, register them in `CACHE_TELEMETRY_LABELS` in `constants.py`.
+**Cache invalidation**: L1 cache keys embed a `corpus_version` token built from `_cache_generation` + live `collection.count()` (format: `gen{N}.n{count}`). Increment the global `_cache_generation` int in `api.py` to bust the L1 cache after ingestion or config changes. Register new cache event types in `CACHE_TELEMETRY_LABELS` in `constants.py`.
 
 ### API Layer (`api.py`)
 
-FastAPI app (~1600 lines) with:
-- `WS /ws/chat` — real-time streaming chat (primary retrieval path)
-- `GET /cache/stats` — cache observability
-- `GET /health` — health check
-- Configuration management endpoints
+FastAPI app (~1600 lines). Routes:
+- `WS /ws/chat` — real-time streaming chat (primary retrieval path; `POST /retrieve` was removed)
+- `GET /health`, `GET /config`, `PUT /config` (also invalidates L1 cache)
+- `GET /cache/stats`, `POST /documents`, `GET /documents/sources`
 - CORS middleware enabled
 
 ### Frontend (`frontend/`)
 
-Next.js 16.2.3 (App Router) + React 19 + Zustand + Tailwind v4. Components are feature-organized under `src/components/{chat,data,layout,settings,ui}/`. WebSocket client lives in `src/lib/ws.ts`. State management via Zustand stores in `src/stores/`.
+Next.js 16.2.3 (App Router) + React 19 + Zustand + Tailwind v4. Components under `src/components/{chat,data,layout,settings,ui}/`. WebSocket client in `src/lib/ws.ts`. State in `src/stores/`.
 
-**Next.js 16 has breaking changes from 13/14.** Before writing frontend code, check `frontend/AGENTS.md` for documented breaking changes and check current API patterns in `node_modules/next/dist/docs/`.
+**Next.js 16 has breaking changes from 13/14.** Before writing frontend code, check `frontend/AGENTS.md` and current API patterns in `node_modules/next/dist/docs/`.
 
 ## Testing
 
-Integration tests use `fastapi.testclient.TestClient` with fixtures from `tests/conftest.py`:
-- `setup_test_environment` (session scope) — sets env vars
-- `initialized_app` (function scope) — real retriever + ChromaDB, ~10–18 s setup; skip if model unavailable
-- `fake_initialized_app` (function scope) — stub retriever, no model download, <10 ms; use for tests that only check HTTP shapes
+Fixtures from `tests/conftest.py`:
+- `initialized_app` — real retriever + ChromaDB, ~10–18 s; skip if model unavailable
+- `fake_initialized_app` — stub retriever, no model download, <10 ms; use for HTTP shape tests
 - `client_with_fresh_cache` — cleared-cache variant (delegates to `fake_initialized_app`)
 
-Prefer `fake_initialized_app` for any test that doesn't exercise the retrieval pipeline. Always check collection health before retrieval in integration tests (`collection.count()` surfaces stale ChromaDB handles). Mock Redis/external deps where needed; async tests work without decorators due to `asyncio_mode = "auto"`.
+Prefer `fake_initialized_app` for tests that don't exercise the retrieval pipeline. Always check `collection.count()` before retrieval in integration tests. Async tests work without decorators (`asyncio_mode = "auto"`).
 
 ## Agent Infrastructure
 
-Custom AI development agents live in `.github/agents/` (planner, orchestrator, implementer, debugger, reviewer, designer, researcher). The catalog and usage guidance is in `.github/AGENTS.md`. For complex multi-step tasks, consult that file before starting.
+Custom AI agents in `.github/agents/` (planner, orchestrator, implementer, debugger, reviewer, designer, researcher). Catalog and usage in `.github/AGENTS.md`. **For complex multi-step tasks, consult that file before starting.**
+
+## Planning Discipline
+
+**Use `/plan` before implementing any non-trivial feature or refactor.** The 3:1 fix-to-feature commit ratio in this repo comes from implementing before the approach is aligned. Plan first — it costs ~1k tokens; rework costs 5–10x that.
 
 ## File Read Discipline
 
-High file-read token cost degrades every session. Follow these rules strictly:
+High file-read token cost degrades every session. Required sequence for any symbol lookup:
 
-### Before reading any file
-1. **Grep first** — use `grep` or `Bash` to locate the exact symbol, line range, or pattern before opening a file.
-2. **Broad exploration → Explore subagent** — if you need to understand which files are relevant at all, spawn an `Explore` agent (`subagent_type: "Explore"`) rather than reading files directly.
-
-### When you must read
-3. **Range reads only** — always pass `offset` + `limit` to `Read`. Never read a file from line 1 when you only need a specific function or block. Target ±20 lines around what `grep` found.
-4. **No re-reads** — if a file's content is already in your context window (you read it earlier in this session), do not read it again. Reference what you already have.
-
-### Enforcement
-- `grep` → inspect line numbers → `Read` with `offset`/`limit` is the required sequence for any symbol lookup.
-- Full-file reads are only permitted for files under ~80 lines where a range read would save nothing.
-- If tempted to read a file "to understand the project", use the `Explore` subagent instead.
+1. **`grep` first** — locate exact line numbers before opening any file
+2. **Explore subagent for broad questions** — `subagent_type: "Explore"` rather than reading files directly
+3. **Range reads only** — always pass `offset` + `limit` to `Read` (±20 lines around grep result)
+4. **No re-reads** — if a file is already in context, reference it; don't read again
+5. Full-file reads only for files under ~80 lines
 
 ## Key Conventions
 
-### Python Coding Standards
+### Python
 
-#### Code Quality & Formatting
-- **RUFF**: Project uses RUFF for code formatting and linting. Run `uv run ruff check .` before committing.
-- **Line Length**: Maximum 88 characters (Black-compatible)
-- **Imports**: Organize in three groups (standard library, third-party, local) separated by blank lines
-  ```python
-  # Standard library
-  import logging
-  from typing import Any, Optional
+- **Formatting/lint**: RUFF, max 88 chars (Black-compatible). Run `uv run ruff check .` before committing.
+- **Imports**: Three groups — stdlib, third-party, local — separated by blank lines
+- **Type hints**: Required on all functions. Modern syntax: `list[str]`, `dict[str, Any]`. Use `Optional[T]` or `T | None`. `py.typed` marker present (PEP 561).
+- **Naming**: `snake_case` functions, `PascalCase` classes, `UPPER_SNAKE_CASE` constants, `_single_underscore` private members
+- **Docstrings**: Google style on all public functions, classes, modules
+- **Errors**: Custom exceptions from `hybrid_rag.exceptions`. No bare `except Exception` except at fail-open boundaries. Module-level loggers only — no `print()`.
+- **Config**: `@dataclass` with `__post_init__` validation. `replace()` for updates (immutable).
+- **Tests**: 80% coverage minimum, 100% pass rate. `test_<method>_<condition>_<outcome>` naming. One test class per module.
 
-  # Third-party
-  import numpy as np
-  from fastapi import FastAPI
+### Git
 
-  # Local
-  from hybrid_rag.config import HybridRetrieverConfig
-  from .exceptions import RetrievalError
-  ```
+Branch: `<type>/<name>` (types: `feature/`, `epic/`, `bugfix/`, `hotfix/`, `patch/`, `docs/`, `refactor/`, `test/`)
 
-#### Type Hints
-- **Required on ALL functions**: Parameters, return types, and class attributes
-- **Use modern syntax**: `list[str]`, `dict[str, Any]` (not `List[str]`, `Dict[str, Any]`)
-- **Optional types**: Use `Optional[T]` or `T | None` for nullable values
-- **TYPE_CHECKING**: Use for circular imports
-- **py.typed marker**: Library includes `py.typed` marker for PEP 561 compliance
-  ```python
-  from __future__ import annotations
-  from typing import TYPE_CHECKING, Optional
-
-  if TYPE_CHECKING:
-      from .cache import CacheBackend
-
-  def process_data(data: list[str], cache: Optional[CacheBackend] = None) -> dict[str, Any]:
-      ...
-  ```
-
-#### Naming Conventions
-- **Functions**: `snake_case` — descriptive verb phrases (`retrieve_documents`, `validate_config`, `create_cache_backend`)
-- **Classes**: `PascalCase` — nouns (`HybridRetriever`, `CacheBackend`, `DocumentResult`)
-- **Constants**: `UPPER_SNAKE_CASE` — descriptive names (`DEFAULT_CONFIG`, `STOP_WORDS`, `MIN_RELEVANCE_SCORE`)
-- **Private members**: Single underscore prefix (`_retriever`, `_cache_generation`, `_embedding_cache`)
-- **Module exports**: Define `__all__` list at top of module for public API
-- **Test names**: `test_<action>_<expected_outcome>` (e.g., `test_cache_returns_none_for_missing_key`)
-
-#### Docstrings (Google Style)
-Required on all public functions, classes, and modules:
-
-```python
-def retrieve_documents(
-    query: str,
-    config: HybridRetrieverConfig,
-    enable_cache: bool = True
-) -> list[dict[str, Any]]:
-    """Retrieve relevant documents using hybrid search.
-
-    Combines semantic and keyword search with optional cross-encoder reranking
-    to find the most relevant documents for the given query.
-
-    Args:
-        query: Search query string from the user.
-        config: Configuration parameters controlling retrieval behavior.
-        enable_cache: Whether to use cached results. Defaults to True.
-
-    Returns:
-        List of document dictionaries, each containing:
-            - id (str): Document identifier
-            - text (str): Document content
-            - score (float): Relevance score (0-1)
-            - source (str): Document source label
-
-    Raises:
-        RetrievalError: If retrieval fails due to database or model errors.
-        ValueError: If query is empty or config is invalid.
-
-    Example:
-        >>> config = HybridRetrieverConfig(semantic_weight=0.7)
-        >>> results = retrieve_documents("How do I reset password?", config)
-        >>> for doc in results:
-        ...     print(f"Score: {doc['score']:.3f} - {doc['text'][:50]}")
-    """
-```
-
-#### Error Handling
-- **Use custom exceptions**: Import from `hybrid_rag.exceptions` — do not raise bare `Exception`; raise specific built-in exceptions (e.g., `ValueError`, `TypeError`) or project exceptions instead
-- **Broad exception catches**: Avoid `except Exception` in normal application logic; only use it at clear boundary layers when intentionally failing open (e.g., cache backends) or when wrapping unexpected errors into a domain-specific exception
-- **Exception hierarchy**: All inherit from `HybridRAGException`
-  - `RetrieverNotInitializedError`: Retriever accessed before initialization
-  - `RetrievalError`: Document retrieval failures
-  - `VectorDBError`: Vector database operation failures
-- **Logging**: Module-level loggers only — `logger = logging.getLogger(__name__)`, NO `print()`
-- **Fail-open caching**: Cache failures should never break requests; log the failure and return the uncached result instead
-
-#### Configuration & Validation
-- **Dataclasses**: Use `@dataclass` for configuration models
-- **Validation**: Implement `__post_init__` for parameter validation (all config validated in `__post_init__`)
-- **Defaults**: Centralize in `constants.py`, reference in config classes (defaults centralized in `constants.py`)
-- **Immutability**: Use `replace()` for config updates (returns new instance)
-  ```python
-  @dataclass
-  class HybridRetrieverConfig:
-      semantic_weight: float = 0.65
-      keyword_weight: float = 0.35
-
-      def __post_init__(self) -> None:
-          weight_sum = self.semantic_weight + self.keyword_weight
-          if not (0.99 <= weight_sum <= 1.01):
-              raise ValueError(f"Weights must sum to 1.0, got {weight_sum}")
-  ```
-
-#### Testing Standards
-- **Test Coverage**: Minimum **80%** overall coverage (check with `pytest --cov`)
-- **Test Pass Requirement**: **100%** of executed tests must pass before check-in; CI and local validation should be fully green
-- **Flaky Tests**: Do not rely on an allowed failure rate — fix, quarantine, or track flaky tests separately from the required passing test suite
-- **Test Organization**:
-  - One test class per module/class being tested
-  - Descriptive test names: `test_<method>_<condition>_<expected_outcome>`
-  - Use fixtures from `tests/conftest.py` for setup
-- **Async Tests**: No decorators needed — `asyncio_mode = "auto"` in `pyproject.toml`
-- **Test Structure**:
-  ```python
-  class TestHybridRetriever:
-      """Test the HybridRetriever class."""
-
-      def test_retrieve_returns_results_for_valid_query(self, initialized_app):
-          """retrieve() returns non-empty results for valid queries."""
-          results = retriever.retrieve("test query")
-          assert len(results) > 0
-          assert all("score" in r for r in results)
-  ```
-
-#### File Organization
-- **Module structure**: One class per file (exceptions: small related classes)
-- **Public API**: Define in `__init__.py` with `__all__` list
-- **Constants**: Centralize in `constants.py`
-- **Config**: All configuration in `config.py`
-- **Tests**: Mirror source structure in `tests/` directory
-
-#### Common Patterns
-- **Context managers**: Use for resource management (files, connections)
-- **LRU Cache**: Use `cachetools.LRUCache` for in-memory caching
-- **Type guards**: Validate inputs at public API boundaries
-- **Logging levels**: DEBUG for detailed traces, INFO for significant events, WARNING for issues, ERROR for failures
-- **Async/await**: Use for I/O operations (database, network, file operations)
-
-## Git Workflow
-
-### Branch Naming Convention
-```
-<type>/<descriptive-name>
-
-Types:
-  feature/   - New features or enhancements
-  epic/      - Large multi-feature initiatives
-  bugfix/    - Bug fixes
-  hotfix/    - Critical production fixes (branch from main)
-  patch/     - Small fixes or improvements
-  docs/      - Documentation updates
-  refactor/  - Code refactoring
-  test/      - Test additions or updates
-
-Examples:
-  feature/add-redis-caching
-  epic/multi-agent-retrieval
-  bugfix/fix-embedding-cache-key
-  hotfix/critical-memory-leak
-  patch/update-dependencies
-  docs/update-api-documentation
-```
-
-### Commit Message Convention
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-
-Types:
-  feat     - New feature
-  fix      - Bug fix
-  docs     - Documentation changes
-  style    - Code style/formatting (no logic change)
-  refactor - Code refactoring
-  test     - Test additions/changes
-  chore    - Build/tooling changes
-  perf     - Performance improvements
-
-Examples:
-  feat(cache): add Redis backend support with TLS
-  fix(retriever): correct embedding cache key generation
-  docs(readme): update installation instructions
-  test(cache): add integration tests for Redis failover
-  refactor(api): extract WebSocket handler to separate module
-  perf(embedding): optimize batch embedding computation
-
-Breaking Changes:
-  feat(config)!: change cache TTL parameter name
-
-  BREAKING CHANGE: Renamed CacheSettings.ttl to ttl_seconds
-  Migration: Update all CacheSettings(ttl=...) to CacheSettings(ttl_seconds=...)
-```
+Commit: `<type>(<scope>): <subject>` (types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `perf`). Breaking changes: `feat(scope)!:` + `BREAKING CHANGE:` footer.
 
 ## Pre-Commit Checklist
-- [ ] All tests pass (`pytest tests/ -v`)
-- [ ] Test coverage ≥80% (`pytest --cov=hybrid_rag --cov=api`)
-- [ ] RUFF checks pass (`uv run ruff check .`)
+- [ ] `pytest tests/ -v` — 100% pass
+- [ ] `pytest --cov=hybrid_rag --cov=api` — ≥80% coverage
+- [ ] `uv run ruff check .` — zero errors
 - [ ] Type hints on all new functions
 - [ ] Google-style docstrings on public functions
-- [ ] No `print()` statements (use `logger`)
+- [ ] No `print()` (use `logger`)
 - [ ] Custom exceptions (no bare `Exception`)
 - [ ] Updated `__all__` if adding public APIs
 
