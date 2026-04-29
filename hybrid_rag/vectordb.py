@@ -593,16 +593,18 @@ def initialize_vector_db(
             # sentinel value (CON-005).
             url_meta: dict[str, str] = {"source_url": doc["source"]} if is_url else {}
 
-            chunks = chunk_text(doc["text"].strip())
+            chunk_dicts = chunk_document(doc["text"].strip(), source_hint=doc.get("source", ""),
+                                          chunk_size=400, chunk_overlap=50)
             # Note 41: chunk_idx is reset to 0 for each document (defined
             # inside the outer loop). This was the T2 bug: the old code used
             # id_counter as chunk_index, which was a global counter across all
             # documents. Document 2's first chunk would get chunk_index=N
             # instead of 0, making per-document chunk ordering impossible.
-            chunk_idx = 0
-            for chunk in chunks:
+            for chunk_idx, cd in enumerate(chunk_dicts):
+                heading_meta = {k: v for k, v in cd["metadata"].items()
+                                if k in ("section_h1", "section_h2") and v is not None}
                 doc_ids.append(f"doc_{id_counter}")
-                doc_texts.append(chunk)
+                doc_texts.append(cd["text"])
                 # Note 42: The ** (double-star) operator unpacks url_meta into
                 # the literal dict, merging its key-value pairs in. If url_meta
                 # is empty {}, the result has no extra keys. This is the
@@ -614,10 +616,10 @@ def initialize_vector_db(
                         "text": doc["text"].strip(),
                         "chunk_index": chunk_idx,
                         **url_meta,
+                        **heading_meta,
                     }
                 )
                 id_counter += 1
-                chunk_idx += 1
 
         # Add all documents to collection
         collection.add(documents=doc_texts, metadatas=doc_metadatas, ids=doc_ids)

@@ -36,7 +36,6 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
-from html.parser import HTMLParser
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 
@@ -54,7 +53,8 @@ from hybrid_rag import (
     initialize_vector_db,
     open_collection,
     get_sample_documents,
-    chunk_text,
+    chunk_text,  # noqa: F401 - retained for future callers (ADR-0001 T4)
+    chunk_document,
     CACHE_TELEMETRY_LABELS,
     KNOWLEDGE_DB_DIRECTORY,
     list_existing_collections,
@@ -1560,37 +1560,7 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                     status_code=502, detail=f"Failed to fetch URL: {str(e)}"
                 )
 
-            class _TextExtractor(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self._parts: list[str] = []
-                    self._skip = False
-                def handle_starttag(self, tag, attrs):
-                    if tag in {"script", "style", "nav", "footer", "header"}:
-                        self._skip = True
-                def handle_endtag(self, tag):
-                    if tag in {"script", "style", "nav", "footer", "header"}:
-                        self._skip = False
-                def handle_data(self, data):
-                    if not self._skip:
-                        s = data.strip()
-                        if s:
-                            self._parts.append(s)
-                def get_text(self) -> str:
-                    return " ".join(self._parts)
-
-            extractor = _TextExtractor()
-            extractor.feed(response.text)
-            text_content = extractor.get_text()
-            if not text_content:
-                logger.error(f"No extractable text from URL: {request.content}")
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"No readable text could be extracted from {request.content}. "
-                        "The page may require JavaScript, a login, or bot verification."
-                    ),
-                )
+            text_content = response.text
             source_label = request.source_label or request.content
 
         elif request.source_type == "file":
@@ -1631,11 +1601,19 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
         # 400 characters to improve retrieval precision and provide more headroom
         # under BAAI/bge-small-en-v1.5's 512-token max sequence length
         # (ADR-0001 EMB-006), avoiding the observed risk of silent tail truncation.
-        chunks = chunk_text(text_content, chunk_size=400, chunk_overlap=50)
-        if not chunks:
+        _source_hint = request.content if request.source_type == "url" else (request.filename or "")
+        chunk_dicts = chunk_document(text_content, source_hint=_source_hint,
+                                      chunk_size=400, chunk_overlap=50)
+        if not chunk_dicts:
+            logger.error(f"No content to chunk from source: {source_label}")
             raise HTTPException(
-                status_code=400, detail="No content to chunk from source"
+                status_code=422,
+                detail=(
+                    f"No readable text could be extracted from {request.content}. "
+                    "The page may require JavaScript, a login, or bot verification."
+                ),
             )
+        chunks = [cd["text"] for cd in chunk_dicts]
 
         logger.info(f"Created {len(chunks)} chunks from source: {source_label}")
 
@@ -1655,7 +1633,9 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
             source_url = request.content if is_http_url else None
             url_meta: dict[str, str] = {"source_url": source_url} if source_url else {}
             metadatas = [
-                {"source": source_label, "chunk_index": i, **url_meta}
+                {"source": source_label, "chunk_index": i, **url_meta,
+                 **{k: v for k, v in chunk_dicts[i]["metadata"].items()
+                    if k in ("section_h1", "section_h2") and v is not None}}
                 for i in range(len(chunks))
             ]
 
