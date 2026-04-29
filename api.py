@@ -1627,7 +1627,11 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
             )
 
         # Chunk the text content
-        chunks = chunk_text(text_content, chunk_size=500, chunk_overlap=50)
+        # Note A1: chunk_size=400 aligns with ADR-0001 T1 — reduced from 500 to
+        # 400 characters to improve retrieval precision. At ~300 tokens per
+        # chunk, this fits comfortably within BAAI/bge-small-en-v1.5's 512-token
+        # window (ADR-0001 EMB-006), eliminating silent tail truncation.
+        chunks = chunk_text(text_content, chunk_size=400, chunk_overlap=50)
         if not chunks:
             raise HTTPException(
                 status_code=400, detail="No content to chunk from source"
