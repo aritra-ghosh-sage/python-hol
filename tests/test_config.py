@@ -142,3 +142,27 @@ class TestHybridRetrieverConfig:
         # Other fields should remain unchanged
         assert updated.semantic_weight == original_semantic_weight
 
+
+class TestDefaultEmbeddingModel:
+    """Tests for ADR-0001 T5: DEFAULT_EMBEDDING_MODEL constant upgrade.
+
+    Verifies that the constant has been updated from all-MiniLM-L6-v2 to
+    BAAI/bge-small-en-v1.5 (EMB-006 recommendation from the ADR).
+    """
+
+    def test_default_embedding_model_is_bge_small(self) -> None:
+        """DEFAULT_EMBEDDING_MODEL must be BAAI/bge-small-en-v1.5 (ADR-0001 T5).
+
+        The upgrade from all-MiniLM-L6-v2 raises MTEB retrieval from ~41 to 51.68
+        and widens the effective token window from ~128 to 512 tokens, eliminating
+        silent tail truncation in chunk embeddings.
+        """
+        from hybrid_rag import DEFAULT_EMBEDDING_MODEL
+
+        assert DEFAULT_EMBEDDING_MODEL == "BAAI/bge-small-en-v1.5"
+
+    def test_default_embedding_model_exported_from_constants(self) -> None:
+        """DEFAULT_EMBEDDING_MODEL is directly importable from hybrid_rag.constants."""
+        from hybrid_rag.constants import DEFAULT_EMBEDDING_MODEL
+
+        assert DEFAULT_EMBEDDING_MODEL == "BAAI/bge-small-en-v1.5"
