@@ -31,13 +31,19 @@ KNOWLEDGE_DB_DIRECTORY = "./knowledge_db"
 #   - Effective token window: 512 tokens vs ~128 tokens — eliminates silent
 #     tail truncation that degraded embedding quality for long chunks.
 #   - Output dimensionality is identical (384-dim), so no ChromaDB HNSW index
-#     migration or collection recreation is required — a "drop-in upgrade".
+#     schema migration is required when switching models.
+# Important: persisted collections embedded with a previous model will still
+# load because the dimensionality matches, but their vectors are not
+# semantically comparable to query embeddings produced by the new model.
+# Re-embed or rebuild existing collections after changing
+# DEFAULT_EMBEDDING_MODEL to avoid silent retrieval quality regressions.
 # Note 5: The model name follows the Hugging Face Hub convention
 # "organisation/model-name". sentence-transformers downloads the model weights
 # from the Hub on first use and caches them locally (~130 MB for bge-small).
 # Default sentence-transformer model for embeddings.
 # Upgraded from all-MiniLM-L6-v2: MTEB retrieval 51.68 vs 41-42, 512-token window.
-# Output dimensionality is 384-dim (identical to predecessor — no collection migration required).
+# Output dimensionality remains 384-dim, but existing persisted collections
+# must be re-embedded/rebuilt after changing the embedding model.
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
 # Note 6: MIN_RELEVANCE_SCORE acts as a quality gate. The retriever discards
