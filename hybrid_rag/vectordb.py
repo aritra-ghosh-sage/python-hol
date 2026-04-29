@@ -12,7 +12,7 @@ keeping the rest of the library free of direct database calls.
 # are built into Python.
 import logging
 import re
-from typing import cast
+from typing import Any, cast
 
 # Note 3: urlparse is added in ADR-0001 T2 to detect whether a document's
 # "source" field is a real HTTP/HTTPS URL. This drives the conditional
@@ -33,7 +33,11 @@ from chromadb.utils import embedding_functions
 # language boundaries (paragraphs, sentences, words) before falling back to
 # raw character splits. This preserves more semantic context per chunk than
 # a naive fixed-width character split.
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import (
+    HTMLSectionSplitter,
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
 
 from .constants import KNOWLEDGE_DB_DIRECTORY, DEFAULT_EMBEDDING_MODEL
 from .exceptions import VectorDBError
@@ -42,6 +46,7 @@ from .exceptions import VectorDBError
 # Any name NOT listed here is considered an implementation detail and
 # should not be relied upon by external callers.
 __all__ = [
+    "chunk_document",
     "chunk_text",
     "initialize_vector_db",
     "open_collection",
@@ -121,6 +126,174 @@ def chunk_text(
         # origin with this line number, making debugging harder.
         logger.error(f"Text chunking failed: {e}")
         raise
+
+
+def chunk_document(
+    text: str,
+    source_hint: str,
+    chunk_size: int = 400,
+    chunk_overlap: int = 50,
+) -> list[dict[str, Any]]:
+    """Split a document into chunks, enriching metadata by detected format.
+
+    Routes the input text through one of three splitting paths based on the
+    ``source_hint`` value:
+
+    * **Markdown** (``source_hint`` ends with ``.md``) — uses
+      ``MarkdownHeaderTextSplitter`` to extract heading context (H1/H2) before
+      applying a ``RecursiveCharacterTextSplitter`` size pass.
+    * **HTML/URL** (``source_hint`` starts with ``http://`` or ``https://``) —
+      uses ``HTMLSectionSplitter`` for section-aware splitting, falling back to
+      plain splitting if the HTML parser raises.  Short chunks (< 20 chars)
+      are discarded.
+    * **Plain** (everything else) — uses ``RecursiveCharacterTextSplitter``
+      directly; metadata is always ``{}``.
+
+    Every returned dict contains ``"text"`` (str) and ``"metadata"`` (dict).
+    Metadata values are *never* ``None`` — ChromaDB rejects ``None`` values
+    (CON-001).  Heading keys (``section_h1``, ``section_h2``) are included
+    only when the splitter found a non-empty value for them.
+
+    Args:
+        text: Raw document text to split.
+        source_hint: File path or URL used to detect the document format.
+            Examples: ``"guide.md"``, ``"https://docs.example.com/page"``,
+            ``"notes.txt"``.
+        chunk_size: Target chunk length in characters.  Defaults to 400.
+        chunk_overlap: Overlap between consecutive chunks in characters.
+            Defaults to 50.
+
+    Returns:
+        List of dicts, each with the shape::
+
+            {
+                "text": str,       # chunk content
+                "metadata": dict,  # heading keys when available; {} for plain
+            }
+
+    Raises:
+        ValueError: Propagated from ``RecursiveCharacterTextSplitter`` when
+            ``chunk_size`` or ``chunk_overlap`` are invalid.
+
+    Example:
+        >>> chunks = chunk_document("# Hello\\n\\nWorld.", source_hint="doc.md")
+        >>> chunks[0]["metadata"].get("section_h1")
+        'Hello'
+    """
+    size_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap
+    )
+    hint_lower = source_hint.lower()
+    if hint_lower.endswith(".md"):
+        return _chunk_markdown(text, size_splitter)
+    if hint_lower.startswith(("http://", "https://")):
+        return _chunk_html(text, size_splitter)
+    return _chunk_plain(text, size_splitter)
+
+
+def _chunk_markdown(
+    text: str,
+    size_splitter: RecursiveCharacterTextSplitter,
+) -> list[dict[str, Any]]:
+    """Split Markdown text using heading-aware then size-based splitting.
+
+    MarkdownHeaderTextSplitter divides text at H1 and H2 headings, storing
+    the heading text in doc.metadata.  A second pass with
+    RecursiveCharacterTextSplitter ensures no resulting chunk exceeds the
+    caller-configured size.
+
+    Args:
+        text: Raw Markdown string.
+        size_splitter: Pre-configured RecursiveCharacterTextSplitter to apply
+            after heading-based splitting.
+
+    Returns:
+        List of {text, metadata} dicts with optional section_h1/section_h2
+        keys.
+    """
+    headers_to_split_on = [("#", "section_h1"), ("##", "section_h2")]
+    md_splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=headers_to_split_on, strip_headers=False
+    )
+    md_docs = md_splitter.split_text(text)
+    result: list[dict[str, Any]] = []
+    for doc in md_docs:
+        sub_chunks = size_splitter.split_text(doc.page_content)
+        # Build heading metadata, excluding any key whose value is falsy (None
+        # or empty string) — CON-001 forbids None values in ChromaDB metadata.
+        heading_meta: dict[str, Any] = {
+            k: v
+            for k, v in (doc.metadata or {}).items()
+            if k in ("section_h1", "section_h2") and v
+        }
+        for chunk in sub_chunks:
+            result.append({"text": chunk, "metadata": heading_meta})
+    return result
+
+
+def _chunk_html(
+    text: str,
+    size_splitter: RecursiveCharacterTextSplitter,
+) -> list[dict[str, Any]]:
+    """Split HTML text using section-aware splitting with plain-path fallback.
+
+    HTMLSectionSplitter divides text at H1/H2 tags. If the HTML parser raises
+    (REQ-008), the function logs a warning and delegates to _chunk_plain().
+    After the size pass, chunks shorter than 20 characters are discarded
+    (GUD-001) because they are typically navigation artefacts or whitespace.
+
+    Args:
+        text: Raw HTML or URL-sourced text.
+        size_splitter: Pre-configured RecursiveCharacterTextSplitter to apply
+            after section splitting.
+
+    Returns:
+        List of {text, metadata} dicts.  Short chunks (< 20 stripped chars)
+        are excluded.
+    """
+    headers_to_split_on = [("h1", "section_h1"), ("h2", "section_h2")]
+    html_splitter = HTMLSectionSplitter(headers_to_split_on=headers_to_split_on)
+    try:
+        html_docs = html_splitter.split_text(text)
+    except Exception as exc:
+        logger.warning(
+            "HTMLSectionSplitter failed (%s); falling back to plain path", exc
+        )
+        return _chunk_plain(text, size_splitter)
+    result: list[dict[str, Any]] = []
+    for doc in html_docs:
+        sub_chunks = size_splitter.split_text(doc.page_content)
+        heading_meta: dict[str, Any] = {
+            k: v
+            for k, v in (doc.metadata or {}).items()
+            if k in ("section_h1", "section_h2") and v
+        }
+        for chunk in sub_chunks:
+            # GUD-001: discard very short chunks — they are usually HTML
+            # navigation labels or whitespace left over by the parser.
+            if len(chunk.strip()) >= 20:
+                result.append({"text": chunk, "metadata": heading_meta})
+    return result
+
+
+def _chunk_plain(
+    text: str,
+    size_splitter: RecursiveCharacterTextSplitter,
+) -> list[dict[str, Any]]:
+    """Split plain text using only RecursiveCharacterTextSplitter.
+
+    No structural metadata is available for plain files (txt, pdf, csv, …),
+    so metadata is always the empty dict.  An empty dict satisfies CON-001
+    (ChromaDB accepts it) while clearly signalling "no heading context".
+
+    Args:
+        text: Any plain text string.
+        size_splitter: Pre-configured RecursiveCharacterTextSplitter.
+
+    Returns:
+        List of {text, metadata: {}} dicts.
+    """
+    return [{"text": c, "metadata": {}} for c in size_splitter.split_text(text)]
 
 
 def get_sample_documents() -> list[dict[str, str]]:
