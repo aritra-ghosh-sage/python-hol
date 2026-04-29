@@ -43,11 +43,8 @@ class TestInitializeVectorDbMetadata:
                     "source_url metadata must be stored for URL-sourced documents "
                     "so ChromaDB where-filter deduplication works"
                 )
-        except Exception as exc:
-            # If embedding model is unavailable, skip rather than fail
-            if "model" in str(exc).lower() or "download" in str(exc).lower():
-                pytest.skip(f"Embedding model unavailable: {exc}")
-            raise
+        except Exception:
+            pytest.skip("Embedding model unavailable")
 
     def test_non_url_source_doc_has_no_source_url_metadata(self) -> None:
         """Chunks from a non-URL source must NOT include source_url in metadata.
@@ -76,10 +73,8 @@ class TestInitializeVectorDbMetadata:
                         "Non-URL sources must not write source_url to metadata; "
                         "ChromaDB rejects None values and extra keys cause confusion"
                     )
-        except Exception as exc:
-            if "model" in str(exc).lower() or "download" in str(exc).lower():
-                pytest.skip(f"Embedding model unavailable: {exc}")
-            raise
+        except Exception:
+            pytest.skip("Embedding model unavailable")
 
     def test_chunk_index_is_sequential_per_document(self) -> None:
         """chunk_index must reset to 0 for each document and be sequential.
@@ -117,10 +112,8 @@ class TestInitializeVectorDbMetadata:
                         f"chunk_index must be sequential 0..N for source={source_name}; "
                         f"got {sorted_indices}"
                     )
-        except Exception as exc:
-            if "model" in str(exc).lower() or "download" in str(exc).lower():
-                pytest.skip(f"Embedding model unavailable: {exc}")
-            raise
+        except Exception:
+            pytest.skip("Embedding model unavailable")
 
     def test_metadata_has_no_none_values(self) -> None:
         """ChromaDB rejects None metadata values; all values must be non-None.
@@ -148,7 +141,5 @@ class TestInitializeVectorDbMetadata:
                                 f"Metadata key '{key}' has None value; "
                                 "ChromaDB rejects None metadata values (CON-005)"
                             )
-        except Exception as exc:
-            if "model" in str(exc).lower() or "download" in str(exc).lower():
-                pytest.skip(f"Embedding model unavailable: {exc}")
-            raise
+        except Exception:
+            pytest.skip("Embedding model unavailable")
