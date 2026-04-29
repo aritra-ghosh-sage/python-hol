@@ -38,7 +38,7 @@ Query
 Results: list[dict] with id, text, metadata, score
 ```
 
-**Embedding model**: `all-MiniLM-L6-v2` (sentence-transformers, local) — produces 384-dim vectors.
+**Embedding model**: `BAAI/bge-small-en-v1.5` (sentence-transformers, local) — produces 384-dim vectors.
 **Reranker model**: `cross-encoder/ms-marco-MiniLM-L-6-v2` (sentence-transformers, local) — logits normalized via sigmoid.
 
 ## Three-Layer Cache Architecture
@@ -119,6 +119,21 @@ On startup (`initialize_retriever`):
 3. If no: `initialize_vector_db(sample_documents, ...)` — seeds with Google Maps support docs.
 
 Collection names are validated: 6–20 characters, `is_valid_collection_name` and `sanitize_collection_name` utilities are exported from the library.
+
+## Document Chunking
+
+Documents are split using `chunk_document()`, a routing function that dispatches
+to a format-appropriate splitter based on the document's source hint:
+
+| Source hint | Splitter | Heading metadata |
+|---|---|---|
+| Ends with `.md` | `MarkdownHeaderTextSplitter` + `RecursiveCharacterTextSplitter` | `section_h1`, `section_h2` |
+| HTTP/HTTPS URL | `HTMLSectionSplitter` + `RecursiveCharacterTextSplitter` | `section_h1`, `section_h2` |
+| All others | `RecursiveCharacterTextSplitter` | None |
+
+The default `chunk_size` is 400 characters, matching the effective token window of
+`BAAI/bge-small-en-v1.5`. Plain-text splitting is available via the backward-compatible
+`chunk_text()` function.
 
 ## Document Ingestion
 

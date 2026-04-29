@@ -44,12 +44,15 @@ Five-stage retrieval in `retriever.py`:
 4. Cross-encoder reranking — model `cross-encoder/ms-marco-MiniLM-L-6-v2` (`reranker.py`)
 5. Source deduplication
 
-Public API (18 exports) in `__init__.py` with `__all__`:
+Public API (26 exports) in `__init__.py` with `__all__`:
 - **Core**: `HybridRetriever`, `HybridRetrieverConfig`, `CrossEncoderReranker`, `DEFAULT_CONFIG`
 - **Cache**: `CacheBackend`, `InMemoryCache`, `RedisCache`, `CacheSettings`, `create_cache_backend`
 - **Exceptions**: `HybridRAGException`, `RetrieverNotInitializedError`, `RetrievalError`, `VectorDBError`
-- **Utilities**: `chunk_text`, `chunk_document`, `initialize_vector_db`, `get_sample_documents`, `is_valid_collection_name`, `sanitize_collection_name`, `list_existing_collections`
-- **Constants**: `STOP_WORDS`, `MIN_RELEVANCE_SCORE`, `KNOWLEDGE_DB_DIRECTORY`, `CACHE_TELEMETRY_LABELS`
+- **Utilities**: `chunk_text`, `chunk_document`, `initialize_vector_db`, `open_collection`,
+  `get_sample_documents`, `is_valid_collection_name`, `sanitize_collection_name`,
+  `list_existing_collections`
+- **Constants**: `STOP_WORDS`, `MIN_RELEVANCE_SCORE`, `KNOWLEDGE_DB_DIRECTORY`,
+  `CACHE_TELEMETRY_LABELS`, `DEFAULT_EMBEDDING_MODEL`
 
 Config uses validated dataclasses (`config.py`, `__post_init__` validation, defaults from `constants.py`). `HybridRetrieverConfig.update(**kwargs)` returns a new instance via `dataclasses.replace` — never mutates. Default collection name is `"rag_collection"` (ChromaDB enforces 6–20 chars; `is_valid_collection_name` / `sanitize_collection_name` validate/coerce).
 
