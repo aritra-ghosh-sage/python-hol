@@ -114,6 +114,23 @@ Prefer `fake_initialized_app` for any test that doesn't exercise the retrieval p
 
 Custom AI development agents live in `.github/agents/` (planner, orchestrator, implementer, debugger, reviewer, designer, researcher). The catalog and usage guidance is in `.github/AGENTS.md`. For complex multi-step tasks, consult that file before starting.
 
+## File Read Discipline
+
+High file-read token cost degrades every session. Follow these rules strictly:
+
+### Before reading any file
+1. **Grep first** — use `grep` or `Bash` to locate the exact symbol, line range, or pattern before opening a file.
+2. **Broad exploration → Explore subagent** — if you need to understand which files are relevant at all, spawn an `Explore` agent (`subagent_type: "Explore"`) rather than reading files directly.
+
+### When you must read
+3. **Range reads only** — always pass `offset` + `limit` to `Read`. Never read a file from line 1 when you only need a specific function or block. Target ±20 lines around what `grep` found.
+4. **No re-reads** — if a file's content is already in your context window (you read it earlier in this session), do not read it again. Reference what you already have.
+
+### Enforcement
+- `grep` → inspect line numbers → `Read` with `offset`/`limit` is the required sequence for any symbol lookup.
+- Full-file reads are only permitted for files under ~80 lines where a range read would save nothing.
+- If tempted to read a file "to understand the project", use the `Explore` subagent instead.
+
 ## Key Conventions
 
 ### Python Coding Standards
