@@ -59,6 +59,7 @@ __all__ = [
     "CacheSettings",
     "create_cache_backend",
     "chunk_text",
+    "chunk_document",
     "initialize_vector_db",
     "open_collection",
     "get_sample_documents",
@@ -97,6 +98,7 @@ from .exceptions import (
 from .reranker import CrossEncoderReranker
 from .retriever import HybridRetriever
 from .vectordb import (
+    chunk_document,
     chunk_text,
     get_sample_documents,
     initialize_vector_db,
