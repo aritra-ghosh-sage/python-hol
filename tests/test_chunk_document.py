@@ -8,9 +8,18 @@ Tests verify the public contract of chunk_document():
   - GUD-001: HTML path discards short chunks
   - REQ-008: HTML path falls back on parse failure
 """
+# Note 1: Importing only chunk_document (not the whole module) follows the
+# principle of testing the public API surface rather than internal details.
+# If the test imported everything, a refactor that moves chunk_document to a
+# different internal module would still pass even if the public export broke.
 from hybrid_rag.vectordb import chunk_document
 
 
+# Note 2: Grouping all tests for a single unit under one class is a pytest
+# best practice.  The class acts as a namespace — test names do not need to
+# be globally unique, and the class docstring documents the overall purpose
+# of the test suite for this unit.  pytest discovers classes whose names
+# start with "Test" automatically, no base class or decorator required.
 class TestChunkDocument:
     """Tests for the chunk_document() format-aware routing function.
 
@@ -34,13 +43,27 @@ class TestChunkDocument:
         Raises:
             AssertionError: if no chunk carries section_h1 == "Installation".
         """
+        # Note 3: The multi-line string is built with implicit concatenation
+        # (adjacent string literals joined at parse time, PEP 3120).  This is
+        # preferable to a single very long string literal or triple-quoted
+        # strings when the content needs to stay within the 88-character line
+        # limit while remaining readable.
         md_text = (
             "# Installation\n\nInstall the package with pip.\n\n"
             "## Quick Start\n\nRun the server."
         )
         result = chunk_document(md_text, source_hint="guide.md")
+        # Note 4: `assert result` (without a comparison) is a truthiness check
+        # — it fails if result is an empty list, None, or any other falsy value.
+        # Always assert non-emptiness BEFORE asserting properties of elements,
+        # so the failure message ("assert []") is more informative than an
+        # IndexError from iterating an empty list.
         assert result
         h1_values = [d["metadata"].get("section_h1") for d in result]
+        # Note 5: any() with a generator expression short-circuits — it stops
+        # iterating as soon as it finds a True value.  This is more efficient
+        # than building a full list and checking if any element matches,
+        # especially for large result sets.
         assert any(v == "Installation" for v in h1_values)
 
     def test_md_path_extracts_h2_heading_metadata(self) -> None:
@@ -88,6 +111,10 @@ class TestChunkDocument:
         result = chunk_document(html_text, source_hint="https://example.com/page")
         assert result
         h1_values = [d["metadata"].get("section_h1") for d in result]
+        # Note 6: `is not None` is used rather than a truthiness check here
+        # because an empty string ("") is falsy but is a valid (if unusual)
+        # heading value.  The contract only forbids None — it does not forbid
+        # empty strings.  Using `is not None` makes the intent explicit.
         assert any(v is not None for v in h1_values)
 
     def test_html_path_fallback_on_non_html_input(self) -> None:
@@ -131,6 +158,11 @@ class TestChunkDocument:
         result = chunk_document("Some plain text content " * 30, source_hint="notes.txt")
         assert result
         for d in result:
+            # Note 7: `== {}` (equality to empty dict) is stricter than
+            # `not d["metadata"]` (truthiness check).  Both would pass for an
+            # empty dict, but `== {}` also rejects dicts with keys mapped to
+            # falsy values such as {"section_h1": ""}.  The plain path contract
+            # is that metadata is EXACTLY empty, not merely falsy.
             assert d["metadata"] == {}
 
     def test_plain_path_pdf_returns_empty_metadata(self) -> None:
@@ -188,6 +220,12 @@ class TestChunkDocument:
         Raises:
             AssertionError: if any result does not have the required shape.
         """
+        # Note 8: Iterating over multiple source_hint values in a single test
+        # method is a lightweight form of parameterisation.  A more idiomatic
+        # pytest approach would use @pytest.mark.parametrize to get a separate
+        # test ID and failure report per hint, but a plain loop is acceptable
+        # here because all hints exercise the same contract (return shape) and
+        # a single failure message is sufficient.
         for hint in ["guide.md", "https://example.com", "notes.txt", ""]:
             result = chunk_document("Sample content " * 30, source_hint=hint)
             assert isinstance(result, list)
@@ -222,6 +260,11 @@ class TestChunkDocument:
             chunk_overlap=chunk_overlap,
         )
         for d in result:
+            # Note 9: chunk_size + chunk_overlap is the maximum theoretical
+            # length because RecursiveCharacterTextSplitter may carry over up
+            # to chunk_overlap characters from the previous chunk boundary.
+            # Using a generous upper bound rather than asserting exactly
+            # chunk_size avoids false failures caused by boundary rounding.
             assert len(d["text"]) <= chunk_size + chunk_overlap
 
     def test_no_none_values_in_metadata(self) -> None:
@@ -239,6 +282,11 @@ class TestChunkDocument:
         Raises:
             AssertionError: if any metadata value is None.
         """
+        # Note 10: Iterating over three representative hints (md, url, plain)
+        # covers each dispatch branch.  The nested loop (chunks -> metadata
+        # values) uses dict.values() which returns a view over all values
+        # regardless of which keys are present — this future-proofs the test
+        # against new heading keys (e.g. section_h3) being added later.
         for hint in ["guide.md", "https://example.com/page", "notes.txt"]:
             result = chunk_document("content " * 50, source_hint=hint)
             for d in result:
@@ -260,7 +308,18 @@ class TestChunkDocument:
         Raises:
             AssertionError: if chunk_text signature or return type has changed.
         """
+        # Note 11: Importing inside the test method (rather than at module
+        # level) is used deliberately here.  This test is specifically checking
+        # that chunk_text is importable and unchanged — putting the import at
+        # the top would silently pass even if chunk_text were accidentally
+        # removed from __all__ (the module-level import would still succeed).
         from hybrid_rag.vectordb import chunk_text
+        # Note 12: The `inspect` standard-library module lets tests introspect
+        # function signatures at runtime.  inspect.signature() returns a
+        # Signature object whose .parameters dict maps each parameter name to a
+        # Parameter object.  Accessing .default gives the declared default value.
+        # This is more robust than reading the source code: it works even if the
+        # function is implemented in C or loaded from a compiled extension.
         import inspect
 
         sig = inspect.signature(chunk_text)
