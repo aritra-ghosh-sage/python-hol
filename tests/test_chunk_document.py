@@ -313,8 +313,8 @@ class TestChunkDocument:
         # removed, this test would fail at the import line with a clear
         # ImportError rather than a silent AttributeError elsewhere.
         # Note: `from module import name` does NOT consult __all__; __all__ only
-        # governs `from module import *`.  To check __all__ membership we assert
-        # directly against hybrid_rag.vectordb.__all__ below.
+        # governs `from module import *`.  To verify __all__ membership explicitly,
+        # we assert directly against hybrid_rag.vectordb.__all__ below.
         from hybrid_rag.vectordb import chunk_text
         import hybrid_rag.vectordb as _vdb_module
 
@@ -355,7 +355,7 @@ class TestChunkDocument:
         """
         # Note 13: Importing the top-level package (not just the submodule)
         # exercises the __init__.py re-export path.  A failure here means the
-        # public install contract is broken for users who import from hybrid_rag
+        # public API contract is broken for users who import from hybrid_rag
         # directly — even if the underlying vectordb module still works fine.
         import hybrid_rag
 

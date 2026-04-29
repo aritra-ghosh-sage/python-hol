@@ -181,10 +181,10 @@ def chunk_document(
         'Hello'
     """
     # Note 12: Guard clauses mirror the validation in chunk_text() so that
-    # both public functions raise the same ValueError types and messages for
-    # invalid parameters.  Without these guards, invalid values would surface
-    # as opaque errors deep inside RecursiveCharacterTextSplitter, making
-    # debugging harder for callers.
+    # both public functions raise consistent ValueError messages for invalid
+    # parameters.  Without these guards, invalid values would surface as opaque
+    # errors deep inside RecursiveCharacterTextSplitter, making debugging harder
+    # for callers.
     if chunk_size <= 0:
         raise ValueError("chunk_size must be > 0")
     if chunk_overlap < 0:
