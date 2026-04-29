@@ -1606,13 +1606,14 @@ async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionR
                                       chunk_size=400, chunk_overlap=50)
         if not chunk_dicts:
             logger.error(f"No content to chunk from source: {source_label}")
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"No readable text could be extracted from {request.content}. "
+            if request.source_type == "url":
+                detail = (
+                    f"No readable text could be extracted from {source_label}. "
                     "The page may require JavaScript, a login, or bot verification."
-                ),
-            )
+                )
+            else:
+                detail = f"No content to chunk from source: {source_label}"
+            raise HTTPException(status_code=400, detail=detail)
         chunks = [cd["text"] for cd in chunk_dicts]
 
         logger.info(f"Created {len(chunks)} chunks from source: {source_label}")

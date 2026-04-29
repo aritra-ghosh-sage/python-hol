@@ -5,9 +5,12 @@ Tests validate that:
 2. chunk_document() is callable from hybrid_rag
 3. initialize_vector_db() stores section metadata for Markdown sources
 4. initialize_vector_db() does not store section metadata for plain text sources
+5. URL/HTML ingestion stores section_h1/h2 heading metadata
 """
 
+import inspect
 import tempfile
+
 import pytest
 
 
@@ -15,9 +18,9 @@ class TestIngestionPathWiring:
     """Test the wiring of chunk_document() into both ingestion paths."""
 
     def test_textextractor_class_removed_from_api_module(self) -> None:
-        """Verify _TextExtractor class no longer exists in api module."""
+        """Verify _TextExtractor class no longer exists anywhere in api.py source."""
         import api
-        assert not hasattr(api, "_TextExtractor")
+        assert "_TextExtractor" not in inspect.getsource(api)
 
     def test_chunk_document_callable_from_hybrid_rag(self) -> None:
         """Verify chunk_document is exported from hybrid_rag."""
@@ -56,3 +59,79 @@ class TestIngestionPathWiring:
             for meta in results["metadatas"]:
                 assert "section_h1" not in meta
                 assert "section_h2" not in meta
+
+    def test_url_html_ingestion_stores_heading_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """URL ingestion of HTML with <h1>/<h2> stores section_h1/h2 in ChromaDB metadata."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        import api
+        from fastapi.testclient import TestClient
+
+        html_content = (
+            "<html><body>"
+            "<h1>Overview</h1><p>Introduction paragraph with enough text to chunk.</p>"
+            "<h2>Details</h2><p>More detail text here for chunking purposes indeed.</p>"
+            "</body></html>"
+        )
+
+        mock_http_response = MagicMock()
+        mock_http_response.status_code = 200
+        mock_http_response.text = html_content
+
+        captured_metadatas: list = []
+
+        class _CapturingCollection:
+            def count(self) -> int:
+                return 0
+
+            def get(self, where=None, limit=None, include=None):  # noqa: ANN001
+                return {"ids": []}
+
+            def add(self, ids, documents, metadatas=None) -> None:  # noqa: ANN001
+                if metadatas:
+                    captured_metadatas.extend(metadatas)
+
+            def delete(self, ids) -> None:  # noqa: ANN001
+                pass
+
+        class _FakeRetriever:
+            collection = _CapturingCollection()
+
+            def retrieve(self, query, enable_rerank=None):  # noqa: ANN001
+                return []
+
+            def get_embedding_cache_stats(self):  # noqa: ANN201
+                return {"hits": 0, "misses": 0, "hit_rate": 0.0, "size": 0, "capacity": 0}
+
+        monkeypatch.setattr(api, "_retriever", _FakeRetriever())
+        monkeypatch.setattr(
+            api,
+            "_config",
+            SimpleNamespace(
+                semantic_top_k=5,
+                keyword_top_k=5,
+                final_top_k=5,
+                semantic_weight=0.5,
+                keyword_weight=0.5,
+                enable_rerank=False,
+                pre_rerank_top_k=10,
+            ),
+        )
+        monkeypatch.setattr(api, "_corpus_version", "gen0.n0")
+        monkeypatch.setattr(api, "_cache_generation", 0)
+        monkeypatch.setattr("api.requests.get", lambda *a, **kw: mock_http_response)
+
+        client = TestClient(api.app)
+        resp = client.post(
+            "/documents",
+            json={"source_type": "url", "content": "https://example.com/overview"},
+        )
+
+        assert resp.status_code in (200, 201), resp.text
+        # At least one chunk should carry section_h1 = "Overview"
+        assert any(
+            m.get("section_h1") == "Overview" for m in captured_metadatas
+        ), f"No section_h1='Overview' found in {captured_metadatas}"
