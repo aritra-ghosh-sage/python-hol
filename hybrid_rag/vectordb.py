@@ -68,9 +68,10 @@ def chunk_text(
     Args:
         text: The text string to split into chunks.
         chunk_size: Target size of each chunk in characters. Defaults to 400.
-                    Values above ~400 risk exceeding the embedding model's effective
-                    token window (~256 tokens for BAAI/bge-small-en-v1.5 and
-                    all-MiniLM-L6-v2), causing silent tail truncation.
+                    Values above ~400 risk exceeding the embedding model's max
+                    sequence length (512 tokens for BAAI/bge-small-en-v1.5;
+                    ~256 tokens for all-MiniLM-L6-v2), causing silent tail
+                    truncation.
         chunk_overlap: Number of overlapping characters between consecutive chunks. Defaults to 50.
 
     Returns:
