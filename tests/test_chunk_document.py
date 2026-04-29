@@ -308,12 +308,19 @@ class TestChunkDocument:
         Raises:
             AssertionError: if chunk_text signature or return type has changed.
         """
-        # Note 11: Importing inside the test method (rather than at module
-        # level) is used deliberately here.  This test is specifically checking
-        # that chunk_text is importable and unchanged — putting the import at
-        # the top would silently pass even if chunk_text were accidentally
-        # removed from __all__ (the module-level import would still succeed).
+        # Note 11: The import is placed inside the test body to make it explicit
+        # that we are testing importability — if chunk_text were moved or
+        # removed, this test would fail at the import line with a clear
+        # ImportError rather than a silent AttributeError elsewhere.
+        # Note: `from module import name` does NOT consult __all__; __all__ only
+        # governs `from module import *`.  To check __all__ membership we assert
+        # directly against hybrid_rag.vectordb.__all__ below.
         from hybrid_rag.vectordb import chunk_text
+        import hybrid_rag.vectordb as _vdb_module
+
+        assert "chunk_text" in _vdb_module.__all__, (
+            "chunk_text must remain in hybrid_rag.vectordb.__all__"
+        )
         # Note 12: The `inspect` standard-library module lets tests introspect
         # function signatures at runtime.  inspect.signature() returns a
         # Signature object whose .parameters dict maps each parameter name to a
@@ -327,3 +334,102 @@ class TestChunkDocument:
         result = chunk_text("sample text " * 20)
         assert isinstance(result, list)
         assert all(isinstance(c, str) for c in result)
+
+    def test_chunk_document_exported_from_hybrid_rag_package(self) -> None:
+        """chunk_document must be importable from the top-level hybrid_rag package.
+
+        hybrid_rag/__init__.py re-exports chunk_document so that callers can
+        use ``from hybrid_rag import chunk_document`` without knowing the
+        internal module layout.  This test verifies both that the symbol is
+        importable and that it is declared in hybrid_rag.__all__.
+
+        Args:
+            (none)
+
+        Returns:
+            None
+
+        Raises:
+            ImportError: if chunk_document is not accessible from hybrid_rag.
+            AssertionError: if chunk_document is absent from hybrid_rag.__all__.
+        """
+        # Note 13: Importing the top-level package (not just the submodule)
+        # exercises the __init__.py re-export path.  A failure here means the
+        # public install contract is broken for users who import from hybrid_rag
+        # directly — even if the underlying vectordb module still works fine.
+        import hybrid_rag
+
+        assert "chunk_document" in hybrid_rag.__all__, (
+            "chunk_document must appear in hybrid_rag.__all__"
+        )
+        # Note 14: Verify the exported name is the actual callable, not a
+        # shadowed or mis-pointed reference.
+        from hybrid_rag import chunk_document as top_level_fn
+        from hybrid_rag.vectordb import chunk_document as vdb_fn
+
+        assert top_level_fn is vdb_fn, (
+            "hybrid_rag.chunk_document must be the same object as "
+            "hybrid_rag.vectordb.chunk_document"
+        )
+
+    def test_chunk_document_raises_on_invalid_chunk_size(self) -> None:
+        """chunk_document() raises ValueError for chunk_size <= 0.
+
+        chunk_document() must apply the same parameter guards as chunk_text()
+        so that callers receive a consistent, descriptive error for invalid
+        inputs regardless of which public function they call.
+
+        Args:
+            (none)
+
+        Returns:
+            None
+
+        Raises:
+            AssertionError: if ValueError is not raised for chunk_size=0.
+        """
+        import pytest
+
+        with pytest.raises(ValueError, match="chunk_size must be > 0"):
+            chunk_document("some text", source_hint="notes.txt", chunk_size=0)
+
+    def test_chunk_document_raises_on_negative_chunk_overlap(self) -> None:
+        """chunk_document() raises ValueError for chunk_overlap < 0.
+
+        Args:
+            (none)
+
+        Returns:
+            None
+
+        Raises:
+            AssertionError: if ValueError is not raised for chunk_overlap=-1.
+        """
+        import pytest
+
+        with pytest.raises(ValueError, match="chunk_overlap must be >= 0"):
+            chunk_document(
+                "some text", source_hint="notes.txt", chunk_size=100, chunk_overlap=-1
+            )
+
+    def test_chunk_document_raises_when_overlap_gte_size(self) -> None:
+        """chunk_document() raises ValueError when chunk_overlap >= chunk_size.
+
+        Args:
+            (none)
+
+        Returns:
+            None
+
+        Raises:
+            AssertionError: if ValueError is not raised when overlap == size.
+        """
+        import pytest
+
+        with pytest.raises(ValueError, match="chunk_overlap must be < chunk_size"):
+            chunk_document(
+                "some text",
+                source_hint="notes.txt",
+                chunk_size=100,
+                chunk_overlap=100,
+            )

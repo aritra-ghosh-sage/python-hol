@@ -172,15 +172,26 @@ def chunk_document(
             }
 
     Raises:
-        ValueError: Propagated from ``RecursiveCharacterTextSplitter`` when
-            ``chunk_size`` or ``chunk_overlap`` are invalid.
+        ValueError: If ``chunk_size`` <= 0, ``chunk_overlap`` < 0, or
+            ``chunk_overlap`` >= ``chunk_size``.
 
     Example:
         >>> chunks = chunk_document("# Hello\\n\\nWorld.", source_hint="doc.md")
         >>> chunks[0]["metadata"].get("section_h1")
         'Hello'
     """
-    # Note 12: The size_splitter is created ONCE here and passed down to every
+    # Note 12: Guard clauses mirror the validation in chunk_text() so that
+    # both public functions raise the same ValueError types and messages for
+    # invalid parameters.  Without these guards, invalid values would surface
+    # as opaque errors deep inside RecursiveCharacterTextSplitter, making
+    # debugging harder for callers.
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be > 0")
+    if chunk_overlap < 0:
+        raise ValueError("chunk_overlap must be >= 0")
+    if chunk_overlap >= chunk_size:
+        raise ValueError("chunk_overlap must be < chunk_size")
+    # Note 13: The size_splitter is created ONCE here and passed down to every
     # private helper.  This is the "shared resource" pattern: all three paths
     # need identical size-cap behaviour, so building the splitter in one place
     # guarantees consistent chunk_size and chunk_overlap across paths.
@@ -188,30 +199,30 @@ def chunk_document(
     size_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size, chunk_overlap=chunk_overlap
     )
-    # Note 13: Normalising to lower-case before comparison is defensive
+    # Note 14: Normalising to lower-case before comparison is defensive
     # programming — it ensures "README.MD", "guide.Md", and "guide.md" all
     # match the Markdown branch.  Without this, users who pass mixed-case
     # paths would silently fall through to the plain path and lose heading
     # metadata, which would be a subtle, hard-to-diagnose bug.
     hint_lower = source_hint.lower()
-    # Note 14: The dispatch table is a series of simple string checks rather
+    # Note 15: The dispatch table is a series of simple string checks rather
     # than a match/case statement or a dict of callables.  This keeps the
     # routing logic readable and easy to extend: adding a new format (e.g.
     # ".rst" for reStructuredText) only requires inserting one more `if`
     # block without touching existing branches.
     if hint_lower.endswith(".md"):
-        # Note 15: endswith(".md") is used instead of a regex because file
+        # Note 16: endswith(".md") is used instead of a regex because file
         # extension checks are a simple suffix comparison — regex would add
         # overhead and complexity for no gain here.
         return _chunk_markdown(text, size_splitter)
     if hint_lower.startswith(("http://", "https://")):
-        # Note 16: startswith() accepts a TUPLE of prefixes as a single
+        # Note 17: startswith() accepts a TUPLE of prefixes as a single
         # argument, which is more readable than `or` chaining:
         #   hint_lower.startswith("http://") or hint_lower.startswith("https://")
         # Both forms compile to the same bytecode, so the tuple form is
         # purely a style choice that scales better if more schemes are added.
         return _chunk_html(text, size_splitter)
-    # Note 17: The plain path is the "catch-all" — anything that is not a
+    # Note 18: The plain path is the "catch-all" — anything that is not a
     # Markdown file and not a URL lands here.  This includes .txt, .pdf,
     # .csv, and even an empty string hint.  The function never raises for
     # an unrecognised format; it simply applies the least-structured path.
@@ -238,14 +249,14 @@ def _chunk_markdown(
         List of {text, metadata} dicts with optional section_h1/section_h2
         keys.
     """
-    # Note 18: headers_to_split_on maps Markdown heading syntax to metadata key
+    # Note 19: headers_to_split_on maps Markdown heading syntax to metadata key
     # names.  The LangChain convention is a list of (marker, metadata_key)
     # tuples.  "#" is an H1 and "##" is an H2.  These keys ("section_h1",
     # "section_h2") become the keys in doc.metadata after splitting — they are
     # project-defined names, not LangChain-defined, so they must be consistent
     # across all code that reads or writes them.
     headers_to_split_on = [("#", "section_h1"), ("##", "section_h2")]
-    # Note 19: strip_headers=False keeps the heading line inside doc.page_content
+    # Note 20: strip_headers=False keeps the heading line inside doc.page_content
     # (e.g., "# Installation\n\nInstall the package …").  Setting it to True
     # would remove the heading text from the content and put it only in metadata,
     # which can result in orphaned metadata with no textual context in the chunk.
@@ -253,7 +264,7 @@ def _chunk_markdown(
     md_splitter = MarkdownHeaderTextSplitter(
         headers_to_split_on=headers_to_split_on, strip_headers=False
     )
-    # Note 20: md_splitter.split_text() returns a list of LangChain Document
+    # Note 21: md_splitter.split_text() returns a list of LangChain Document
     # objects.  Each Document has two fields:
     #   - page_content (str): the text section under the heading
     #   - metadata (dict): the heading keys that apply to this section
@@ -262,14 +273,14 @@ def _chunk_markdown(
     md_docs = md_splitter.split_text(text)
     result: list[dict[str, Any]] = []
     for doc in md_docs:
-        # Note 21: A two-pass split strategy is used here.  The first pass
+        # Note 22: A two-pass split strategy is used here.  The first pass
         # (MarkdownHeaderTextSplitter) creates semantically meaningful sections
         # by heading boundaries.  The second pass (size_splitter) ensures no
         # single section exceeds the model's context window.  Without the second
         # pass, a very long section under one heading would be ingested as a
         # single oversized chunk and risk silent truncation by the embedder.
         sub_chunks = size_splitter.split_text(doc.page_content)
-        # Note 22: The dict comprehension filters doc.metadata to include only
+        # Note 23: The dict comprehension filters doc.metadata to include only
         # recognised heading keys with truthy values.  The `doc.metadata or {}`
         # guard handles the edge case where MarkdownHeaderTextSplitter returns
         # a Document whose metadata is None (which can happen for text before
@@ -285,11 +296,12 @@ def _chunk_markdown(
             if k in ("section_h1", "section_h2") and v
         }
         for chunk in sub_chunks:
-            # Note 23: Each chunk shares the SAME heading_meta reference.
-            # This is intentional and safe because heading_meta is never
-            # mutated after it is built — all sub-chunks under the same
-            # heading section carry identical metadata.
-            result.append({"text": chunk, "metadata": heading_meta})
+            # Note 24: A shallow copy of heading_meta is returned for each
+            # chunk so that a downstream caller mutating one chunk's metadata
+            # dict cannot affect sibling chunks from the same heading section.
+            # heading_meta only contains string key–value pairs, so a shallow
+            # copy is sufficient — no nested mutable objects are present.
+            result.append({"text": chunk, "metadata": heading_meta.copy()})
     return result
 
 
@@ -313,14 +325,14 @@ def _chunk_html(
         List of {text, metadata} dicts.  Short chunks (< 20 stripped chars)
         are excluded.
     """
-    # Note 24: HTMLSectionSplitter uses ("h1", "section_h1") tuples — the HTML
+    # Note 25: HTMLSectionSplitter uses ("h1", "section_h1") tuples — the HTML
     # tag name ("h1") on the left, the metadata key ("section_h1") on the right.
     # Note the difference from the Markdown path where the marker is "#".
     # The metadata key names are intentionally IDENTICAL between paths so that
     # callers (e.g., API filters) need no format-specific logic to read headings.
     headers_to_split_on = [("h1", "section_h1"), ("h2", "section_h2")]
     html_splitter = HTMLSectionSplitter(headers_to_split_on=headers_to_split_on)
-    # Note 25: REQ-008 mandates wrapping HTMLSectionSplitter.split_text() in a
+    # Note 26: REQ-008 mandates wrapping HTMLSectionSplitter.split_text() in a
     # broad try/except.  HTMLSectionSplitter depends on the `lxml` and
     # `beautifulsoup4` libraries at runtime.  If either is missing, or if the
     # input is malformed XML/HTML, the parser raises.  The fallback to
@@ -329,7 +341,7 @@ def _chunk_html(
     try:
         html_docs = html_splitter.split_text(text)
     except Exception as exc:
-        # Note 26: logger.warning() (not error) is appropriate here because the
+        # Note 27: logger.warning() (not error) is appropriate here because the
         # situation is handled gracefully by the fallback.  `error` implies an
         # unrecoverable problem; `warning` signals a degraded code path that
         # callers should be aware of but that does not break the request.
@@ -343,8 +355,8 @@ def _chunk_html(
     result: list[dict[str, Any]] = []
     for doc in html_docs:
         sub_chunks = size_splitter.split_text(doc.page_content)
-        # Note 27: The heading_meta construction here is identical to the
-        # Markdown path (see Note 22).  The same CON-001 constraint applies:
+        # Note 28: The heading_meta construction here is identical to the
+        # Markdown path (see Note 23).  The same CON-001 constraint applies:
         # ChromaDB rejects None metadata values, so the `and v` filter is
         # essential.  Sharing this pattern across both format-aware paths
         # means the ChromaDB insertion code never needs format-specific checks.
@@ -354,7 +366,7 @@ def _chunk_html(
             if k in ("section_h1", "section_h2") and v
         }
         for chunk in sub_chunks:
-            # Note 28: GUD-001 — chunks shorter than 20 stripped characters
+            # Note 29: GUD-001 — chunks shorter than 20 stripped characters
             # are discarded.  HTML parsers often produce Document objects whose
             # page_content is a heading label alone (e.g., "Overview") after
             # the size-cap pass splits it off from its body text.  These micro-
@@ -363,7 +375,10 @@ def _chunk_html(
             # characters is a heuristic chosen to eliminate single words and
             # short phrases while keeping all substantive content.
             if len(chunk.strip()) >= 20:
-                result.append({"text": chunk, "metadata": heading_meta})
+                # Note 30: A shallow copy is passed per chunk for the same
+                # reason as in the Markdown path (see Note 24): this prevents
+                # one chunk's metadata mutation from affecting siblings.
+                result.append({"text": chunk, "metadata": heading_meta.copy()})
     return result
 
 
@@ -384,7 +399,7 @@ def _chunk_plain(
     Returns:
         List of {text, metadata: {}} dicts.
     """
-    # Note 29: The list comprehension `[{"text": c, "metadata": {}} for c …]`
+    # Note 31: The list comprehension `[{"text": c, "metadata": {}} for c …]`
     # builds the output in a single expression.  It is equivalent to the loop:
     #
     #   result = []
@@ -496,13 +511,13 @@ def initialize_vector_db(
 
     try:
         logger.debug(f"Initializing ChromaDB client at {persist_dir}")
-        # Note 30: PersistentClient writes the HNSW index and metadata to disk
+        # Note 32: PersistentClient writes the HNSW index and metadata to disk
         # at persist_dir, so the collection survives process restarts. In
         # contrast, chromadb.Client() (in-memory) is only suitable for
         # short-lived tests because all data is lost when the process exits.
         client = chromadb.PersistentClient(path=persist_dir)
 
-        # Note 31: Deleting and recreating the collection on each call ensures
+        # Note 33: Deleting and recreating the collection on each call ensures
         # a clean slate — no stale embeddings from a previous run. The
         # NotFoundError catch handles the first-run case where no collection
         # exists yet. This is a "drop-and-recreate" strategy, appropriate for
@@ -514,7 +529,7 @@ def initialize_vector_db(
         except NotFoundError:
             logger.debug(f"Collection {collection_name} did not exist, creating new one")
 
-        # Note 32: SentenceTransformerEmbeddingFunction is a ChromaDB-provided
+        # Note 34: SentenceTransformerEmbeddingFunction is a ChromaDB-provided
         # wrapper that calls the sentence-transformers library to produce dense
         # vector embeddings. By passing DEFAULT_EMBEDDING_MODEL here, all
         # embeddings in the collection use the same model — a requirement for
@@ -525,7 +540,7 @@ def initialize_vector_db(
         embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name=DEFAULT_EMBEDDING_MODEL
         )
-        # Note 33: cast() is a type-annotation-only operation — it has no
+        # Note 35: cast() is a type-annotation-only operation — it has no
         # runtime effect. It is used here to satisfy mypy, which cannot infer
         # the generic type parameter of EmbeddingFunction automatically from
         # the concrete subclass returned by SentenceTransformerEmbeddingFunction.
@@ -533,7 +548,7 @@ def initialize_vector_db(
             EmbeddingFunction[Embeddable], embedding_function
         )
 
-        # Note 34: "hnsw:space": "cosine" configures the HNSW index to use
+        # Note 36: "hnsw:space": "cosine" configures the HNSW index to use
         # cosine distance. Sentence-transformer models output L2-normalised
         # vectors, so cosine distance is equivalent to Euclidean distance in
         # that space. Using cosine ensures similarity scores are directly
@@ -547,14 +562,14 @@ def initialize_vector_db(
         )
         logger.debug(f"Created collection: {collection_name}")
 
-        # Note 35: Accumulating all IDs, texts, and metadata into lists before
+        # Note 37: Accumulating all IDs, texts, and metadata into lists before
         # calling collection.add() in a single batch is more efficient than
         # adding one chunk at a time. ChromaDB can embed the entire batch in
         # one model forward pass, which is faster than N separate calls.
         # Process and add documents to collection
         doc_ids: list[str] = []
         doc_texts: list[str] = []
-        # Note 36: dict[str, str | int] is used instead of dict[str, str]
+        # Note 38: dict[str, str | int] is used instead of dict[str, str]
         # because chunk_index is an integer. Union types (str | int, available
         # since Python 3.10) express this without importing Optional or Union.
         doc_metadatas: list[dict[str, str | int]] = []
@@ -564,13 +579,13 @@ def initialize_vector_db(
             if "text" not in doc or "source" not in doc:
                 raise ValueError("Each document must have 'text' and 'source' fields")
 
-            # Note 37: urlparse() parses a URL string into its components
+            # Note 39: urlparse() parses a URL string into its components
             # (scheme, netloc, path, etc.). Checking both scheme ("http"/"https")
             # AND netloc (non-empty hostname) guards against strings like
             # "http://" or "https:" that parse as HTTP but lack a real host.
             parsed = urlparse(doc["source"])
             is_url = parsed.scheme in ("http", "https") and bool(parsed.netloc)
-            # Note 38: url_meta is either {"source_url": <url>} or {} (empty
+            # Note 40: url_meta is either {"source_url": <url>} or {} (empty
             # dict). Using a conditional expression here avoids setting
             # source_url to None, which ChromaDB silently rejects or stores
             # incorrectly. The empty dict fallback means the key is simply
@@ -579,7 +594,7 @@ def initialize_vector_db(
             url_meta: dict[str, str] = {"source_url": doc["source"]} if is_url else {}
 
             chunks = chunk_text(doc["text"].strip())
-            # Note 39: chunk_idx is reset to 0 for each document (defined
+            # Note 41: chunk_idx is reset to 0 for each document (defined
             # inside the outer loop). This was the T2 bug: the old code used
             # id_counter as chunk_index, which was a global counter across all
             # documents. Document 2's first chunk would get chunk_index=N
@@ -588,7 +603,7 @@ def initialize_vector_db(
             for chunk in chunks:
                 doc_ids.append(f"doc_{id_counter}")
                 doc_texts.append(chunk)
-                # Note 40: The ** (double-star) operator unpacks url_meta into
+                # Note 42: The ** (double-star) operator unpacks url_meta into
                 # the literal dict, merging its key-value pairs in. If url_meta
                 # is empty {}, the result has no extra keys. This is the
                 # idiomatic Python way to conditionally include fields in a dict
@@ -650,7 +665,7 @@ def open_collection(
             model_name=DEFAULT_EMBEDDING_MODEL
         )
         typed_embedding_function = cast(EmbeddingFunction[Embeddable], embedding_function)
-        # Note 41: get_collection (not get_or_create_collection) is used here
+        # Note 43: get_collection (not get_or_create_collection) is used here
         # deliberately. open_collection should fail fast if the collection does
         # not exist — silently creating an empty collection would mask the real
         # error (caller passed a wrong name or the data was not ingested yet).
@@ -663,7 +678,7 @@ def open_collection(
         )
         return collection
     except Exception as e:
-        # Note 42: `raise VectorDBError(...) from e` preserves the original
+        # Note 44: `raise VectorDBError(...) from e` preserves the original
         # exception as the __cause__ attribute of the new exception. This
         # means the full original traceback is displayed when the VectorDBError
         # propagates, while callers see a clean domain-specific error type.
@@ -692,7 +707,7 @@ def is_valid_collection_name(name: str) -> bool:
         >>> is_valid_collection_name("has space")
         False
     """
-    # Note 43: re.fullmatch() anchors the pattern to the *entire* string,
+    # Note 45: re.fullmatch() anchors the pattern to the *entire* string,
     # ensuring no invalid characters appear anywhere in the name. Without
     # fullmatch, re.match("pattern", "valid!extra") would succeed because
     # match() only requires the pattern to match at the beginning.
@@ -719,18 +734,18 @@ def sanitize_collection_name(name: str) -> str:
         >>> sanitize_collection_name("ab")
         'ab____'
     """
-    # Note 44: re.sub() replaces every character NOT in the allowed set
+    # Note 46: re.sub() replaces every character NOT in the allowed set
     # [a-zA-Z0-9_-] with an underscore. The negated character class [^...]
     # matches any character that is not listed. This covers spaces, dots,
     # forward slashes, and any Unicode characters that appear in real-world
     # document IDs or file paths.
     sanitized = re.sub(r"[^a-zA-Z0-9_\-]", "_", name)
-    # Note 45: Slice syntax [:20] truncates to at most 20 characters. In Python,
+    # Note 47: Slice syntax [:20] truncates to at most 20 characters. In Python,
     # slicing beyond the string length does not raise an error — it simply
     # returns the full string if it is shorter than the requested length.
     sanitized = sanitized[:20]
     if len(sanitized) < 6:
-        # Note 46: String multiplication ("_" * n) creates a padding string
+        # Note 48: String multiplication ("_" * n) creates a padding string
         # of n underscores. This ensures the final name meets ChromaDB's
         # minimum length requirement of 6 characters without introducing
         # semantically meaningful padding characters.
@@ -758,7 +773,7 @@ def list_existing_collections(persist_dir: str) -> list[str]:
     """
     try:
         client = chromadb.PersistentClient(path=persist_dir)
-        # Note 47: List comprehension [c.name for c in ...] extracts only the
+        # Note 49: List comprehension [c.name for c in ...] extracts only the
         # name attribute from each Collection object. Returning only names
         # (strings) keeps the return type simple and avoids leaking ChromaDB
         # internal Collection objects into the caller's domain.
