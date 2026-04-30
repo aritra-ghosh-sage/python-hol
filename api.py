@@ -1422,7 +1422,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     _out_cache_status=ws_cache_status_out,
                 )
                 doc_results = _to_filtered_document_results(
-                    results, min_score_threshold=0.80
+                    results, min_score_threshold=0.40
                 )
 
                 # T03 WS cache-status contract: include retrieval-layer cache
