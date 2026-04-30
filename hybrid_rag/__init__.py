@@ -18,7 +18,7 @@ Modules:
     exceptions: Custom exception classes
     reranker: Cross-encoder based document reranking
     retriever: Core hybrid retrieval engine
-    vectordb: Vector database initialization and document chunking
+    vectordb: Vector database initialization and chunking (chunk_document, chunk_text)
 
 Quick Start:
     >>> from hybrid_rag import HybridRetriever, HybridRetrieverConfig
