@@ -21,8 +21,7 @@ python-hol/
 ├── tests/                    # All backend test files
 ├── frontend/                 # Next.js frontend application
 ├── docs/                     # Documentation (architecture, caching, etc.)
-├── knowledge_db/             # ChromaDB persistent storage (git-ignored)
-├── ai_support_kb/            # Source documents for ingestion (~1972 entries)
+├── ai_support_kb/            # Source documents for ingestion (~1972 entries) **NEVER CHECKED-IN**
 ├── quality/                  # Code review artifacts, spec audits (partially git-ignored)
 ├── jupyter-playground.ipynb  # Exploration notebook
 └── .github/agents/           # Custom AI agent definitions
