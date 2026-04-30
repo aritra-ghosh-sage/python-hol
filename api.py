@@ -39,6 +39,7 @@ from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 
+import chromadb
 import requests
 from fastapi import FastAPI, HTTPException, WebSocketDisconnect, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -1842,23 +1843,39 @@ async def get_collections() -> CollectionsResponse:
             detail="Retriever service not initialized. Try again later.",
         )
 
-    try:
-        collection = _retriever.collection
-        if not collection:
-            raise HTTPException(
-                status_code=500, detail="Vector database collection not initialized or unavailable"
-            )
+    # Validate that the retriever's collection handle is accessible
+    if _retriever.collection is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Vector database collection not initialized.",
+        )
 
-        # Report only the active collection. ChromaDB's PersistentClient.list_collections()
-        # requires direct client access which is not exposed via the public Collection API;
-        # returning the active collection avoids coupling to internal implementation details.
-        collections = [
-            CollectionInfo(name=collection.name, count=collection.count())
-        ]
+    try:
+        # Create single client to enumerate all collections and fetch counts
+        client = chromadb.PersistentClient(path=KNOWLEDGE_DB_DIRECTORY)
+        all_collections = client.list_collections()
+        active_name = _retriever.collection.name
+
+        collections: list[CollectionInfo] = []
+        for chroma_collection in all_collections:
+            name = chroma_collection.name
+            if name == active_name:
+                # Use already-open active collection handle
+                count = _retriever.collection.count()
+            else:
+                # Fetch count from disk for non-active collection
+                count = client.get_collection(name).count()
+            collections.append(CollectionInfo(name=name, count=count))
 
         logger.info(f"Retrieved {len(collections)} collections")
         return CollectionsResponse(collections=collections)
 
+    except VectorDBError as e:
+        logger.error(f"Failed to list collections: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list collections: {str(e)}",
+        )
     except HTTPException:
         raise
     except Exception as e:
