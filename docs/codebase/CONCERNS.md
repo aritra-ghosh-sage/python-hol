@@ -35,12 +35,6 @@ Based on `git log --name-only --since=2025-01-01 | sort | uniq -c | sort -rn`:
 ### Score Filtering Threshold Hardcoded in WS Handler
 `min_score_threshold=0.80` is hardcoded in `api.py:1425` inside the WebSocket handler. The constant `MIN_RELEVANCE_SCORE = 0.80` exists in `hybrid_rag/constants.py` but is not referenced by the WebSocket path — it is a silent divergence risk if the constant is ever changed.
 
-### `langchain` / `langgraph` / `boto3` Unused in Core Pipeline
-`langchain`, `langchain-chroma`, `langchain-huggingface`, `langchain-openai`, `langchain-community`, `langgraph`, and `boto3` are listed in production dependencies but are not used in `api.py` or the `hybrid_rag/` library. They are present presumably from earlier experiments (the Jupyter notebook references them). This adds ~200–400 MB to the installed environment unnecessarily. **Decision**: These will remain as they may be used in supplementary tools or future extensions.
-
-### `deepagents` Dependency
-`deepagents` >=0.5.1 is listed in production dependencies; no usage was found in `api.py`, `hybrid_rag/`, or any core pipeline. **Status**: Not currently used; retention pending future requirements.
-
 ## Security Concerns
 
 ### Redis URL Logged at INFO Level
