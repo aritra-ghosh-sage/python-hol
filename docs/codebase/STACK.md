@@ -19,7 +19,6 @@
 | `sentence-transformers` | >=5.3.0 | Embedding model (`all-MiniLM-L6-v2`) and cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`) |
 | `langchain-text-splitters` | >=1.1.1 | `RecursiveCharacterTextSplitter` for chunking |
 | `langchain` / `langchain-*` | various >=1.x | LangChain ecosystem (core, chroma, huggingface, openai, community) |
-| `langgraph` | >=1.1.6 | Graph-based agent workflows (present, not yet exercised in main pipeline) |
 | `numpy` | >=2.4.4 | Embedding array arithmetic |
 | `cachetools` | >=5.3.0 | `TTLCache` (L1 in-memory) and `LRUCache` (L2 embedding) |
 | `redis` | >=5.0.0 | Optional distributed cache backend |
@@ -27,8 +26,6 @@
 | `pypdf` | >=4.0.0 | PDF text extraction (optional at runtime; import guarded in `api.py`) |
 | `python-dotenv` | >=1.0.0 | `.env` loading |
 | `huggingface-hub` | >=1.9.2 | Model download from HuggingFace |
-| `boto3` | >=1.42.86 | AWS SDK (present in deps; not used in core pipeline) |
-| `deepagents` | >=0.5.1 | [TODO: usage not found in core pipeline] |
 | `ipykernel`, `ipywidgets` | >=7.x/8.x | Jupyter notebook support |
 
 ## Backend Dev Dependencies
