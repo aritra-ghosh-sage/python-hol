@@ -1843,16 +1843,27 @@ async def get_collections() -> CollectionsResponse:
             detail="Retriever service not initialized. Try again later.",
         )
 
+    # Validate that the retriever's collection handle is accessible
+    if _retriever.collection is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Vector database collection not initialized.",
+        )
+
     try:
-        all_names = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
+        # Create single client to enumerate all collections and fetch counts
         client = chromadb.PersistentClient(path=KNOWLEDGE_DB_DIRECTORY)
+        all_collections = client.list_collections()
         active_name = _retriever.collection.name
 
         collections: list[CollectionInfo] = []
-        for name in all_names:
+        for chroma_collection in all_collections:
+            name = chroma_collection.name
             if name == active_name:
+                # Use already-open active collection handle
                 count = _retriever.collection.count()
             else:
+                # Fetch count from disk for non-active collection
                 count = client.get_collection(name).count()
             collections.append(CollectionInfo(name=name, count=count))
 

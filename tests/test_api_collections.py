@@ -25,8 +25,14 @@ class TestGetCollections:
     ) -> None:
         """Active collection appears in the response."""
         api._retriever.collection.name = ACTIVE_COLLECTION_NAME  # type: ignore[union-attr]
+        api._retriever.collection.count.return_value = 5  # type: ignore[union-attr]
 
-        monkeypatch.setattr(api, "list_existing_collections", lambda _: [ACTIVE_COLLECTION_NAME])
+        # Mock chromadb client to return the active collection
+        mock_collection = MagicMock()
+        mock_collection.name = ACTIVE_COLLECTION_NAME
+        mock_chroma_client = MagicMock()
+        mock_chroma_client.list_collections.return_value = [mock_collection]
+        monkeypatch.setattr(api.chromadb, "PersistentClient", lambda path: mock_chroma_client)
 
         response = fake_initialized_app.get("/collections")
         assert response.status_code == 200
@@ -37,28 +43,43 @@ class TestGetCollections:
     def test_multiple_collections_all_appear(
         self, fake_initialized_app: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """All collections returned by list_existing_collections appear in response."""
+        """All collections returned by list_existing_collections appear in response with correct counts."""
         api._retriever.collection.name = ACTIVE_COLLECTION_NAME  # type: ignore[union-attr]
-        all_names = [ACTIVE_COLLECTION_NAME, OTHER_COLLECTION_NAME]
+        api._retriever.collection.count.return_value = 10  # type: ignore[union-attr]
 
-        mock_other_coll = MagicMock()
-        mock_other_coll.count.return_value = 3
+        # Mock collections
+        mock_active = MagicMock()
+        mock_active.name = ACTIVE_COLLECTION_NAME
+        mock_other = MagicMock()
+        mock_other.name = OTHER_COLLECTION_NAME
+
         mock_chroma_client = MagicMock()
-        mock_chroma_client.get_collection.return_value = mock_other_coll
+        mock_chroma_client.list_collections.return_value = [mock_active, mock_other]
 
-        mock_chromadb = MagicMock()
-        mock_chromadb.PersistentClient.return_value = mock_chroma_client
+        # Mock get_collection for non-active collection
+        mock_other_collection_handle = MagicMock()
+        mock_other_collection_handle.count.return_value = 3
+        mock_chroma_client.get_collection.return_value = mock_other_collection_handle
 
-        monkeypatch.setattr(api, "list_existing_collections", lambda _: all_names)
-        monkeypatch.setattr(api, "chromadb", mock_chromadb)
+        monkeypatch.setattr(api.chromadb, "PersistentClient", lambda path: mock_chroma_client)
 
         response = fake_initialized_app.get("/collections")
         assert response.status_code == 200
         data = response.json()
-        names = [c["name"] for c in data["collections"]]
+        collections = data["collections"]
+
+        # Verify both collections present
+        assert len(collections) == 2
+        names = [c["name"] for c in collections]
         assert ACTIVE_COLLECTION_NAME in names
         assert OTHER_COLLECTION_NAME in names
-        assert len(data["collections"]) == 2
+
+        # Verify correct counts
+        for collection in collections:
+            if collection["name"] == ACTIVE_COLLECTION_NAME:
+                assert collection["count"] == 10
+            elif collection["name"] == OTHER_COLLECTION_NAME:
+                assert collection["count"] == 3
 
     def test_collection_info_has_correct_name_and_count(
         self, fake_initialized_app: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -67,13 +88,28 @@ class TestGetCollections:
         api._retriever.collection.name = ACTIVE_COLLECTION_NAME  # type: ignore[union-attr]
         api._retriever.collection.count.return_value = 7  # type: ignore[union-attr]
 
-        monkeypatch.setattr(api, "list_existing_collections", lambda _: [ACTIVE_COLLECTION_NAME])
+        # Mock chromadb client to return the active collection
+        mock_collection = MagicMock()
+        mock_collection.name = ACTIVE_COLLECTION_NAME
+        mock_chroma_client = MagicMock()
+        mock_chroma_client.list_collections.return_value = [mock_collection]
+        monkeypatch.setattr(api.chromadb, "PersistentClient", lambda path: mock_chroma_client)
 
         response = fake_initialized_app.get("/collections")
         assert response.status_code == 200
         info = response.json()["collections"][0]
         assert info["name"] == ACTIVE_COLLECTION_NAME
         assert info["count"] == 7
+
+    def test_returns_500_when_collection_uninitialized(
+        self, fake_initialized_app: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Returns HTTP 500 when the retriever's collection handle is None."""
+        # Simulate uninitialized collection (retriever exists but collection is None)
+        api._retriever.collection = None  # type: ignore[assignment]
+
+        response = fake_initialized_app.get("/collections")
+        assert response.status_code == 500
 
     def test_returns_503_when_retriever_uninitialized(
         self, fake_initialized_app: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -87,12 +123,13 @@ class TestGetCollections:
     def test_vectordb_error_returns_500(
         self, fake_initialized_app: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """VectorDBError from list_existing_collections surfaces as HTTP 500."""
+        """VectorDBError from chromadb client surfaces as HTTP 500."""
+        api._retriever.collection.name = ACTIVE_COLLECTION_NAME  # type: ignore[union-attr]
 
-        def _raise(_: str) -> list[str]:
-            raise VectorDBError("disk read failure")
+        def _raise_on_persistent_client(path: str):
+            raise VectorDBError("Failed to create ChromaDB client")
 
-        monkeypatch.setattr(api, "list_existing_collections", _raise)
+        monkeypatch.setattr(api.chromadb, "PersistentClient", _raise_on_persistent_client)
 
         response = fake_initialized_app.get("/collections")
         assert response.status_code == 500
