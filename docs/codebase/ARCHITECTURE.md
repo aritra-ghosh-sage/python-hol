@@ -13,6 +13,8 @@ This is a monorepo with three layers:
 
 The core retrieval pipeline executes inside `HybridRetriever.retrieve()` in `hybrid_rag/retriever.py`:
 
+**Note**: This is a **retrieval-only system** using Sentence Transformers for embeddings and reranking. Unlike typical RAG systems, there is **no generative LLM in the stack** (no Claude, GPT, etc.). The system retrieves and ranks relevant documents; generation/synthesis is handled by external clients (see frontend or custom integrations).
+
 ```
 Query
   |

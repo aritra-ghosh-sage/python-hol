@@ -36,15 +36,15 @@ Based on `git log --name-only --since=2025-01-01 | sort | uniq -c | sort -rn`:
 `min_score_threshold=0.80` is hardcoded in `api.py:1425` inside the WebSocket handler. The constant `MIN_RELEVANCE_SCORE = 0.80` exists in `hybrid_rag/constants.py` but is not referenced by the WebSocket path — it is a silent divergence risk if the constant is ever changed.
 
 ### `langchain` / `langgraph` / `boto3` Unused in Core Pipeline
-`langchain`, `langchain-chroma`, `langchain-huggingface`, `langchain-openai`, `langchain-community`, `langgraph`, and `boto3` are listed in production dependencies but are not used in `api.py` or the `hybrid_rag/` library. They are present presumably from earlier experiments (the Jupyter notebook references them). This adds ~200–400 MB to the installed environment unnecessarily.
+`langchain`, `langchain-chroma`, `langchain-huggingface`, `langchain-openai`, `langchain-community`, `langgraph`, and `boto3` are listed in production dependencies but are not used in `api.py` or the `hybrid_rag/` library. They are present presumably from earlier experiments (the Jupyter notebook references them). This adds ~200–400 MB to the installed environment unnecessarily. **Decision**: These will remain as they may be used in supplementary tools or future extensions.
 
 ### `deepagents` Dependency
-`deepagents` >=0.5.1 is listed in production dependencies; no usage was found in `api.py` or `hybrid_rag/`. [TODO: confirm whether this is used in the notebook or agent infrastructure before removing]
+`deepagents` >=0.5.1 is listed in production dependencies; no usage was found in `api.py`, `hybrid_rag/`, or any core pipeline. **Status**: Not currently used; retention pending future requirements.
 
 ## Security Concerns
 
 ### Redis URL Logged at INFO Level
-`api.py:567` logs `f"✓ Cache initialized: backend={cache_settings.backend}, ttl={cache_settings.ttl_seconds}s"` at INFO. The URL itself is not logged here, but `RedisCache.stats()` returns `redis_url` in its stats dict, which is serialized and returned from `GET /cache/stats`. If the Redis URL contains credentials (username/password), they would be exposed in the `/cache/stats` response. [ASK USER: should the `redis_url` in stats be redacted?]
+`api.py:567` logs `f"✓ Cache initialized: backend={cache_settings.backend}, ttl={cache_settings.ttl_seconds}s"` at INFO. The URL itself is not logged here, but `RedisCache.stats()` returns `redis_url` in its stats dict, which is serialized and returned from `GET /cache/stats`. If the Redis URL contains credentials (username/password), they would be exposed in the `/cache/stats` response. **Action required**: Redact credentials from `redis_url` before serialization in the stats response.
 
 ### No Authentication on API Endpoints
 The API has no authentication or authorization layer. All endpoints (`/config` PUT, `/documents` POST, `/cache/stats`, etc.) are publicly accessible on the configured port. This is acceptable for local development but must be addressed before production exposure.
@@ -75,4 +75,4 @@ Both `SentenceTransformer` and `CrossEncoderReranker` are initialized synchronou
 `tests/conftest.py` notes that stale `Collection` handles cause `collection.count()` to fail silently. The `_is_retriever_collection_healthy()` helper probes for this. Tests using `initialized_app` always reinitialize the retriever per function, but if tests share a collection name that is deleted mid-suite, the handle can become stale. This has historically required `try/except` guards in the test suite.
 
 ### `initialized_app` Depends on Network/Model Availability
-Tests using `initialized_app` call `pytest.skip()` rather than failing when the model cannot be downloaded. This means CI environments without internet access will silently skip these tests rather than fail them, potentially hiding retrieval regressions. [ASK USER: should model-dependent tests be separately marked and conditionally run?]
+Tests using `initialized_app` call `pytest.skip()` rather than failing when the model cannot be downloaded. This means CI environments without internet access will silently skip these tests rather than fail them, potentially hiding retrieval regressions. **Action required**: Mark model-dependent tests with `@pytest.mark.requires_models` and conditionally run in CI vs local environments.

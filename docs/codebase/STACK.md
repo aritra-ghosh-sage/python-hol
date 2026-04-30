@@ -79,3 +79,15 @@
 - **Pydantic v2** is in use; v1 migration patterns (`.dict()`) are invalid.
 - `asyncio_mode = "auto"` in `pyproject.toml` means no `@pytest.mark.asyncio` needed on test functions.
 - Ruff excludes `jupyter-playground.ipynb` (`[tool.ruff] exclude = [...]` in `pyproject.toml`).
+
+## Architecture Note: Retrieval-Only System (No Generative LLM)
+
+**This system prioritizes retrieval quality, not text generation.** Unlike typical RAG systems that pair embeddings with a generative LLM (Claude, GPT, Llama, etc.), this stack uses **Sentence Transformers exclusively**:
+
+- **Embeddings**: `BAAI/bge-small-en-v1.5` (384-dim vectors for semantic search)
+- **Reranking**: `cross-encoder/ms-marco-MiniLM-L-6-v2` (passage relevance scoring)
+- **No generative LLM in the stack**: The pipeline retrieves, ranks, and deduplicates documents; synthesis/generation is delegated entirely to external clients
+
+This design separates concerns: the library provides high-quality hybrid document retrieval; clients integrate it with their own generation system (LLM API, local model, or custom business logic).
+
+**Implication**: The frontend (`frontend/src/components/chat/`) displays retrieved documents and context but does not generate responses. The backend API does not call any LLM.

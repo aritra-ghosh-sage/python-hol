@@ -1,0 +1,502 @@
+
+=== DIRECTORY TREE (max depth 3, source files only) ===
+.claude
+.claude/settings.json
+.claude/settings.local.json
+.coverage
+.env
+.env.local.example
+.github
+.github/AGENTS.md
+.github/agents
+.github/agents/adr-generator.agent.md
+.github/agents/arch.agent.md
+.github/agents/explore-hybrid-rag.agent.md
+.github/agents/gem-browser-tester.agent.md
+.github/agents/gem-code-simplifier.agent.md
+.github/agents/gem-critic.agent.md
+.github/agents/gem-debugger.agent.md
+.github/agents/gem-designer-mobile.agent.md
+.github/agents/gem-designer.agent.md
+.github/agents/gem-devops.agent.md
+.github/agents/gem-documentation-writer.agent.md
+.github/agents/gem-implementer-mobile.agent.md
+.github/agents/gem-implementer.agent.md
+.github/agents/gem-mobile-tester.agent.md
+.github/agents/gem-orchestrator.agent.md
+.github/agents/gem-planner.agent.md
+.github/agents/gem-researcher.agent.md
+.github/agents/gem-reviewer.agent.md
+.github/agents/prd.agent.md
+.github/agents/qa-subagent.agent.md
+.github/instructions
+.github/instructions/agent-safety.instructions.md
+.github/instructions/agent-skills.instructions.md
+.github/instructions/agents.instructions.md
+.github/instructions/code-review-generic.instructions.md
+.github/instructions/context-engineering.instructions.md
+.github/instructions/devops-core-principles.instructions.md
+.github/instructions/memory-bank.instructions.md
+.github/instructions/nextjs-best-practices.instructions.md
+.github/instructions/nextjs-tailwind.instructions.md
+.github/instructions/oop-design-patterns.instructions.md
+.github/instructions/performance-optimization.instructions.md
+.github/instructions/playwright-python.instructions.md
+.github/instructions/python-codexer.instructions.md
+.github/instructions/security-and-owasp.instructions.md
+.github/instructions/self-explanatory-code-commenting.instructions.md
+.github/prompts
+.github/prompts/backend-python.prompt.md
+.github/skills
+.github/skills/acquire-codebase-knowledge
+.github/skills/acquire-codebase-knowledge/SKILL.md
+.github/skills/add-educational-comments
+.github/skills/add-educational-comments/SKILL.md
+.github/skills/agent-governance
+.github/skills/agent-governance/SKILL.md
+.github/skills/agentic-eval
+.github/skills/agentic-eval/SKILL.md
+.github/skills/architecture-blueprint-generator
+.github/skills/architecture-blueprint-generator/SKILL.md
+.github/skills/automate-this
+.github/skills/automate-this/SKILL.md
+.github/skills/autoresearch
+.github/skills/autoresearch/SKILL.md
+.github/skills/boost-prompt
+.github/skills/boost-prompt/SKILL.md
+.github/skills/breakdown-epic-arch
+.github/skills/breakdown-epic-arch/SKILL.md
+.github/skills/breakdown-feature-implementation
+.github/skills/breakdown-feature-implementation/SKILL.md
+.github/skills/breakdown-feature-prd
+.github/skills/breakdown-feature-prd/SKILL.md
+.github/skills/breakdown-plan
+.github/skills/breakdown-plan/SKILL.md
+.github/skills/breakdown-test
+.github/skills/breakdown-test/SKILL.md
+.github/skills/cloud-design-patterns
+.github/skills/cloud-design-patterns/SKILL.md
+.github/skills/code-tour
+.github/skills/code-tour/SKILL.md
+.github/skills/codebase-knowledge
+.github/skills/codebase-knowledge/SKILL.md
+.github/skills/context-map
+.github/skills/context-map/SKILL.md
+.github/skills/conventional-commit
+.github/skills/conventional-commit/SKILL.md
+.github/skills/create-agentsmd
+.github/skills/create-agentsmd/SKILL.md
+.github/skills/create-architectural-decision-record
+.github/skills/create-architectural-decision-record/SKILL.md
+.github/skills/create-readme
+.github/skills/create-readme/SKILL.md
+.github/skills/create-specification
+.github/skills/create-specification/SKILL.md
+.github/skills/documentation-writer
+.github/skills/documentation-writer/SKILL.md
+.github/skills/doublecheck
+.github/skills/doublecheck/SKILL.md
+.github/skills/object-calisthenics
+.github/skills/object-calisthenics/SKILL.md
+.github/skills/prd
+.github/skills/prd/SKILL.md
+.github/skills/quality-playbook
+.github/skills/quality-playbook/SKILL.md
+.gitignore
+.mypy_cache
+.mypy_cache/.gitignore
+.mypy_cache/3.13
+.mypy_cache/3.13/cache.db
+.mypy_cache/CACHEDIR.TAG
+.mypy_cache/missing_stubs
+.pytest_cache
+.pytest_cache/.gitignore
+.pytest_cache/CACHEDIR.TAG
+.pytest_cache/README.md
+.pytest_cache/v
+.pytest_cache/v/cache
+.pytest_cache/v/cache/lastfailed
+.pytest_cache/v/cache/nodeids
+.python-version
+.ruff_cache
+.ruff_cache/.gitignore
+.ruff_cache/0.15.10
+.ruff_cache/0.15.10/16438600494302238006
+.ruff_cache/0.15.12
+.ruff_cache/0.15.12/10756339488843328034
+.ruff_cache/0.15.12/16214022369780587752
+.ruff_cache/0.15.12/17499018502306879355
+.ruff_cache/0.15.12/5632831270548960536
+.ruff_cache/0.15.12/925449527557620441
+.ruff_cache/0.15.12/9771964494681265934
+.ruff_cache/0.15.12/9869664042340435605
+.ruff_cache/CACHEDIR.TAG
+.tours
+.tours/architect-overview.tour
+.vscode
+.vscode/settings.json
+CLAUDE.md
+README.md
+
+#ignore all ai_support_kb files
+ai_support_kb 
+ai_support_kb/0010f955-cc42-4654-9146-14a3e6031e79
+ai_support_kb/0010f955-cc42-4654-9146-14a3e6031e79/data_level0.bin
+ai_support_kb/0010f955-cc42-4654-9146-14a3e6031e79/header.bin
+ai_support_kb/0010f955-cc42-4654-9146-14a3e6031e79/length.bin
+ai_support_kb/0010f955-cc42-4654-9146-14a3e6031e79/link_lists.bin
+ai_support_kb/00263a11-bccf-49ee-8475-ce1f7a2ee473
+ai_support_kb/00263a11-bccf-49ee-8475-ce1f7a2ee473/data_level0.bin
+ai_support_kb/00263a11-bccf-49ee-8475-ce1f7a2ee473/header.bin
+ai_support_kb/00263a11-bccf-49ee-8475-ce1f7a2ee473/length.bin
+ai_support_kb/00263a11-bccf-49ee-8475-ce1f7a2ee473/link_lists.bin
+ai_support_kb/0087a128-7573-4263-841e-429bf58336b7
+ai_support_kb/0087a128-7573-4263-841e-429bf58336b7/data_level0.bin
+ai_support_kb/0087a128-7573-4263-841e-429bf58336b7/header.bin
+ai_support_kb/0087a128-7573-4263-841e-429bf58336b7/length.bin
+ai_support_kb/0087a128-7573-4263-841e-429bf58336b7/link_lists.bin
+ai_support_kb/00900e62-9a98-4aec-ab1f-7d58dc64891b
+ai_support_kb/00900e62-9a98-4aec-ab1f-7d58dc64891b/data_level0.bin
+ai_support_kb/00900e62-9a98-4aec-ab1f-7d58dc64891b/header.bin
+ai_support_kb/00900e62-9a98-4aec-ab1f-7d58dc64891b/length.bin
+ai_support_kb/00900e62-9a98-4aec-ab1f-7d58dc64891b/link_lists.bin
+ai_support_kb/0098926c-20e3-4f9b-9ba4-fb6e85457ca6
+ai_support_kb/0098926c-20e3-4f9b-9ba4-fb6e85457ca6/data_level0.bin
+ai_support_kb/0098926c-20e3-4f9b-9ba4-fb6e85457ca6/header.bin
+ai_support_kb/0098926c-20e3-4f9b-9ba4-fb6e85457ca6/length.bin
+ai_support_kb/0098926c-20e3-4f9b-9ba4-fb6e85457ca6/link_lists.bin
+ai_support_kb/00c36c52-e245-4a50-8876-6cd01d1ecdd3
+ai_support_kb/00c36c52-e245-4a50-8876-6cd01d1ecdd3/data_level0.bin
+ai_support_kb/00c36c52-e245-4a50-8876-6cd01d1ecdd3/header.bin
+ai_support_kb/00c36c52-e245-4a50-8876-6cd01d1ecdd3/length.bin
+ai_support_kb/00c36c52-e245-4a50-8876-6cd01d1ecdd3/link_lists.bin
+ai_support_kb/010842be-92fe-4c8c-8bf7-8a782ec3e8c9
+ai_support_kb/010842be-92fe-4c8c-8bf7-8a782ec3e8c9/data_level0.bin
+ai_support_kb/010842be-92fe-4c8c-8bf7-8a782ec3e8c9/header.bin
+ai_support_kb/010842be-92fe-4c8c-8bf7-8a782ec3e8c9/length.bin
+ai_support_kb/010842be-92fe-4c8c-8bf7-8a782ec3e8c9/link_lists.bin
+ai_support_kb/01142b12-1130-4100-bbf2-be920e3e4f4c
+ai_support_kb/01142b12-1130-4100-bbf2-be920e3e4f4c/data_level0.bin
+ai_support_kb/01142b12-1130-4100-bbf2-be920e3e4f4c/header.bin
+ai_support_kb/01142b12-1130-4100-bbf2-be920e3e4f4c/length.bin
+ai_support_kb/01142b12-1130-4100-bbf2-be920e3e4f4c/link_lists.bin
+ai_support_kb/015e016c-8ba3-47cd-8ede-ff64e297275f
+ai_support_kb/015e016c-8ba3-47cd-8ede-ff64e297275f/data_level0.bin
+ai_support_kb/015e016c-8ba3-47cd-8ede-ff64e297275f/header.bin
+ai_support_kb/015e016c-8ba3-47cd-8ede-ff64e297275f/length.bin
+ai_support_kb/015e016c-8ba3-47cd-8ede-ff64e297275f/link_lists.bin
+ai_support_kb/01731f2a-3c31-45f9-848b-ab0b8c213f98
+ai_support_kb/01731f2a-3c31-45f9-848b-ab0b8c213f98/data_level0.bin
+ai_support_kb/01731f2a-3c31-45f9-848b-ab0b8c213f98/header.bin
+ai_support_kb/01731f2a-3c31-45f9-848b-ab0b8c213f98/length.bin
+ai_support_kb/01731f2a-3c31-45f9-848b-ab0b8c213f98/link_lists.bin
+ai_support_kb/01c4635e-8224-48d3-96e1-09d6ff3a5e67
+ai_support_kb/01c4635e-8224-48d3-96e1-09d6ff3a5e67/data_level0.bin
+ai_support_kb/01c4635e-8224-48d3-96e1-09d6ff3a5e67/header.bin
+ai_support_kb/01c4635e-8224-48d3-96e1-09d6ff3a5e67/length.bin
+ai_support_kb/01c4635e-8224-48d3-96e1-09d6ff3a5e67/link_lists.bin
+ai_support_kb/01e49240-e10e-47fa-b8a0-b4e80391cd2f
+ai_support_kb/01e49240-e10e-47fa-b8a0-b4e80391cd2f/data_level0.bin
+ai_support_kb/01e49240-e10e-47fa-b8a0-b4e80391cd2f/header.bin
+ai_support_kb/01e49240-e10e-47fa-b8a0-b4e80391cd2f/length.bin
+ai_support_kb/01e49240-e10e-47fa-b8a0-b4e80391cd2f/link_lists.bin
+ai_support_kb/01e83a58-ef41-48cd-947d-1dfca1a963b3
+ai_support_kb/01e83a58-ef41-48cd-947d-1dfca1a963b3/data_level0.bin
+
+=== STACK DETECTION (manifest files) ===
+
+--- pyproject.toml ---
+[project]
+name = "python-hol"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "cachetools>=5.3.0",
+    "chromadb>=1.5.7",
+    "fastapi>=0.135.3",
+    "huggingface-hub>=1.9.2",
+    "ipykernel>=7.2.0",
+    "ipywidgets>=8.1.8",
+    "langchain-core>=1.2.28",
+    "langchain-text-splitters>=1.1.1",
+    "lxml>=4.9.0",
+    "beautifulsoup4>=4.12.0",
+    "numpy>=2.4.4",
+    "pydantic>=2.12.5",
+    "pypdf>=4.0.0",
+    "python-dotenv>=1.0.0",
+    "redis>=5.0.0",
+    "requests>=2.33.1",
+    "sentence-transformers>=5.3.0",
+    "uvicorn>=0.44.0",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.12",
+    "websockets>=13.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+exclude = ["jupyter-playground.ipynb"]
+
+--- uv.lock ---
+version = 1
+revision = 3
+requires-python = ">=3.13"
+resolution-markers = [
+    "python_full_version >= '3.14'",
+    "python_full_version < '3.14'",
+]
+
+[[package]]
+name = "annotated-doc"
+version = "0.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/ba/046ceea27344560984e26a590f90bc7f4a75b06701f653222458922b558c/annotated_doc-0.0.4.tar.gz", hash = "sha256:fbcda96e87e9c92ad167c2e53839e57503ecfda18804ea28102353485033faa4", size = 7288, upload-time = "2025-11-10T22:07:42.062Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/d3/26bf1008eb3d2daa8ef4cacc7f3bfdc11818d111f7e2d0201bc6e3b49d45/annotated_doc-0.0.4-py3-none-any.whl", hash = "sha256:571ac1dc6991c450b25a9c2d84a3705e2ae7a53467b5d111c24fa8baabbed320", size = 5303, upload-time = "2025-11-10T22:07:40.673Z" },
+]
+
+[[package]]
+name = "annotated-types"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ee/67/531ea369ba64dcff5ec9c3402f9f51bf748cec26dde048a2f973a4eea7f5/annotated_types-0.7.0.tar.gz", hash = "sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89", size = 16081, upload-time = "2024-05-20T21:33:25.928Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/b6/6307fbef88d9b5ee7421e68d78a9f162e0da4900bc5f5793f6d3d0e34fb8/annotated_types-0.7.0-py3-none-any.whl", hash = "sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53", size = 13643, upload-time = "2024-05-20T21:33:24.1Z" },
+]
+
+[[package]]
+name = "anyio"
+version = "4.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "idna" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/19/14/2c5dd9f512b66549ae92767a9c7b330ae88e1932ca57876909410251fe13/anyio-4.13.0.tar.gz", hash = "sha256:334b70e641fd2221c1505b3890c69882fe4a2df910cba14d97019b90b24439dc", size = 231622, upload-time = "2026-03-24T12:59:09.671Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/da/42/e921fccf5015463e32a3cf6ee7f980a6ed0f395ceeaa45060b61d86486c2/anyio-4.13.0-py3-none-any.whl", hash = "sha256:08b310f9e24a9594186fd75b4f73f4a4152069e3853f1ed8bfbf58369f4ad708", size = 114353, upload-time = "2026-03-24T12:59:08.246Z" },
+]
+
+[[package]]
+name = "appnope"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/35/5d/752690df9ef5b76e169e68d6a129fa6d08a7100ca7f754c89495db3c6019/appnope-0.1.4.tar.gz", hash = "sha256:1de3860566df9caf38f01f86f65e0e13e379af54f9e4bee1e66b48f2efffd1ee", size = 4170, upload-time = "2024-02-06T09:43:11.258Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/29/5ecc3a15d5a33e31b26c11426c45c501e439cb865d0bff96315d86443b78/appnope-0.1.4-py2.py3-none-any.whl", hash = "sha256:502575ee11cd7a28c0205f379b525beefebab9d161b7c964670864014ed7213c", size = 4321, upload-time = "2024-02-06T09:43:09.663Z" },
+]
+
+[[package]]
+name = "asttokens"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/a5/8e3f9b6771b0b408517c82d97aed8f2036509bc247d46114925e32fe33f0/asttokens-3.0.1.tar.gz", hash = "sha256:71a4ee5de0bde6a31d64f6b13f2293ac190344478f081c3d1bccfcf5eacb0cb7", size = 62308, upload-time = "2025-11-15T16:43:48.578Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/39/e7eaf1799466a4aef85b6a4fe7bd175ad2b1c6345066aa33f1f58d4b18d0/asttokens-3.0.1-py3-none-any.whl", hash = "sha256:15a3ebc0f43c2d0a50eeafea25e19046c68398e487b9f1f5b517f7c0f40f976a", size = 27047, upload-time = "2025-11-15T16:43:16.109Z" },
+]
+
+[[package]]
+name = "attrs"
+version = "26.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9a/8e/82a0fe20a541c03148528be8cac2408564a6c9a0cc7e9171802bc1d26985/attrs-26.1.0.tar.gz", hash = "sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32", size = 952055, upload-time = "2026-03-19T14:22:25.026Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl", hash = "sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309", size = 67548, upload-time = "2026-03-19T14:22:23.645Z" },
+]
+
+[[package]]
+name = "bcrypt"
+version = "5.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d4/36/3329e2518d70ad8e2e5817d5a4cac6bba05a47767ec416c7d020a965f408/bcrypt-5.0.0.tar.gz", hash = "sha256:f748f7c2d6fd375cc93d3fba7ef4a9e3a092421b8dbf34d8d4dc06be9492dfdd", size = 25386, upload-time = "2025-09-25T19:50:47.829Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/85/3e65e01985fddf25b64ca67275bb5bdb4040bd1a53b66d355c6c37c8a680/bcrypt-5.0.0-cp313-cp313t-macosx_10_12_universal2.whl", hash = "sha256:f3c08197f3039bec79cee59a606d62b96b16669cff3949f21e74796b6e3cd2be", size = 481806, upload-time = "2025-09-25T19:49:05.102Z" },
+    { url = "https://files.pythonhosted.org/packages/44/dc/01eb79f12b177017a726cbf78330eb0eb442fae0e7b3dfd84ea2849552f3/bcrypt-5.0.0-cp313-cp313t-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:200af71bc25f22006f4069060c88ed36f8aa4ff7f53e67ff04d2ab3f1e79a5b2", size = 268626, upload-time = "2025-09-25T19:49:06.723Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/cf/e82388ad5959c40d6afd94fb4743cc077129d45b952d46bdc3180310e2df/bcrypt-5.0.0-cp313-cp313t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:baade0a5657654c2984468efb7d6c110db87ea63ef5a4b54732e7e337253e44f", size = 271853, upload-time = "2025-09-25T19:49:08.028Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/86/7134b9dae7cf0efa85671651341f6afa695857fae172615e960fb6a466fa/bcrypt-5.0.0-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:c58b56cdfb03202b3bcc9fd8daee8e8e9b6d7e3163aa97c631dfcfcc24d36c86", size = 269793, upload-time = "2025-09-25T19:49:09.727Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/82/6296688ac1b9e503d034e7d0614d56e80c5d1a08402ff856a4549cb59207/bcrypt-5.0.0-cp313-cp313t-manylinux_2_28_armv7l.manylinux_2_31_armv7l.whl", hash = "sha256:4bfd2a34de661f34d0bda43c3e4e79df586e4716ef401fe31ea39d69d581ef23", size = 289930, upload-time = "2025-09-25T19:49:11.204Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/18/884a44aa47f2a3b88dd09bc05a1e40b57878ecd111d17e5bba6f09f8bb77/bcrypt-5.0.0-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:ed2e1365e31fc73f1825fa830f1c8f8917ca1b3ca6185773b349c20fd606cec2", size = 272194, upload-time = "2025-09-25T19:49:12.524Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/8f/371a3ab33c6982070b674f1788e05b656cfbf5685894acbfef0c65483a59/bcrypt-5.0.0-cp313-cp313t-manylinux_2_34_aarch64.whl", hash = "sha256:83e787d7a84dbbfba6f250dd7a5efd689e935f03dd83b0f919d39349e1f23f83", size = 269381, upload-time = "2025-09-25T19:49:14.308Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/34/7e4e6abb7a8778db6422e88b1f06eb07c47682313997ee8a8f9352e5a6f1/bcrypt-5.0.0-cp313-cp313t-manylinux_2_34_x86_64.whl", hash = "sha256:137c5156524328a24b9fac1cb5db0ba618bc97d11970b39184c1d87dc4bf1746", size = 271750, upload-time = "2025-09-25T19:49:15.584Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/1b/54f416be2499bd72123c70d98d36c6cd61a4e33d9b89562c22481c81bb30/bcrypt-5.0.0-cp313-cp313t-musllinux_1_1_aarch64.whl", hash = "sha256:38cac74101777a6a7d3b3e3cfefa57089b5ada650dce2baf0cbdd9d65db22a9e", size = 303757, upload-time = "2025-09-25T19:49:17.244Z" },
+
+[TRUNCATED] Showing first 80 of 3135 lines.
+
+=== ENTRY POINTS ===
+Found: main.py
+
+=== LINTING AND FORMATTING CONFIG ===
+No linting or formatting config files found in project root.
+
+=== ENVIRONMENT VARIABLE TEMPLATES ===
+--- .env.local.example ---
+# Hybrid RAG Configuration - Environment Variables
+# Copy this file to .env.local and customize for your environment
+
+# ========================================
+# Cache Configuration
+# ========================================
+
+# Cache Backend Selection
+# Options:
+#   - 'memory': In-process TTL cache (recommended for development)
+#   - 'redis': Redis-backed distributed cache (recommended for production)
+# Default: 'memory'
+CACHE_BACKEND=memory
+
+# Redis Connection URL (required if CACHE_BACKEND=redis)
+# Format: redis://[user[:password]@]host[:port]/[database]
+# Example: redis://localhost:6379/0
+# Leave empty for in-memory cache
+# REDIS_URL=redis://localhost:6379/0
+
+# Cache Time-To-Live (TTL) in Seconds
+# How long cached entries remain valid before expiration
+# Default: 3600 (1 hour)
+# Set to 0 for indefinite caching (not recommended for production)
+CACHE_TTL_SECONDS=3600
+
+# Cache Key Prefix
+# Prepended to all cache keys to avoid collisions in shared Redis instances
+# Useful when multiple applications share the same Redis instance
+# Default: 'hybrid_rag_cache:'
+CACHE_KEY_PREFIX=hybrid_rag_cache:
+
+# Maximum Cache Size (in-memory only)
+# Maximum number of entries in memory cache before LRU eviction
+# Ignored when using Redis backend
+# Default: 10000
+CACHE_MAX_SIZE=10000
+
+# ========================================
+# FastAPI Configuration
+# ========================================
+
+# API Server Host and Port (optional)
+# API_HOST=localhost
+# API_PORT=8000
+
+# ========================================
+# Logging Configuration (optional)
+# ========================================
+
+# Log Level
+# Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+# LOG_LEVEL=INFO
+
+# ========================================
+# Examples
+# ========================================
+
+# Example 1: Development Setup (Local In-Memory Cache)
+# - Uncomment the lines below for a development environment
+# CACHE_BACKEND=memory
+# CACHE_TTL_SECONDS=3600
+# CACHE_MAX_SIZE=10000
+
+# Example 2: Production Setup (Redis-Backed Cache)
+# - Uncomment the lines below for a production environment
+# - Ensure Redis is running at the specified URL
+# CACHE_BACKEND=redis
+# REDIS_URL=redis://prod-cache.example.com:6379/0
+# CACHE_TTL_SECONDS=1800
+# CACHE_KEY_PREFIX=myapp_rag:
+
+
+=== TODO / FIXME / HACK (production code only, test dirs excluded) ===
+.claude/settings.local.json:8: "Bash(grep -n \"def test_\\\\|pass$\\\\|# TODO\\\\|# Should log\\\\|# This is verified\\\\|# When \" tests/test_cache_integration.py)",
+
+=== GIT RECENT COMMITS (last 20) ===
+7348b7e Merge pull request #77 from aritra-ghosh-sage/claude/update-public-api-docs-adr-0001
+4208756 Merge pull request #78 from aritra-ghosh-sage/get-collection-bug-fix
+9524034 fix(api): address PR#78 review comments - optimize client usage and improve test isolation
+e28c3e7 fix(api): enumerate all ChromaDB collections in GET /collections via list_existing_collections
+4bf614a fix(api): lower min_score_threshold in websocket_chat to improve document retrieval
+a5953ff fix(docs): fix export count to 26, add missing exports, add chunk_document to ARCHITECTURE.md
+81adc3e docs(adr-0001): update public API docs for chunk_document
+853ca40 Initial plan
+29cda10 Merge pull request #76 from aritra-ghosh-sage/claude/t4-wire-chunk-document-ingestion-paths
+09f55ea fix(api,tests): address review feedback - 400 status, safe error msg, improved tests
+486b31a feat(api,vectordb): wire chunk_document() into both ingestion paths (T4)
+7d845ef cleaned up CLAUDE.md. settings.json removed worktrees
+c09ff0c Initial plan
+29c80cd Merge pull request #75 from aritra-ghosh-sage/feature/adr-0001-wave-2
+2a12e6a fix(chunk_document): polish wording in comments per code review suggestions
+fb53f08 fix(chunk_document): address PR review feedback — validation guards, metadata copy, __all__ test, accurate comments
+6eec4aa docs(vectordb): add educational comments to chunk_document paths
+83b4bdf feat(vectordb): implement chunk_document() format-aware routing function
+80a94c6 test(vectordb): add unit tests for chunk_document() routing function
+9b3fc69 docs: add file read discipline guidelines to CLAUDE.md
+
+=== HIGH-CHURN FILES (last 90 days, top 20) ===
+  54 api.py
+  22 ai_support_kb/chroma.sqlite3
+  18 hybrid_rag/vectordb.py
+  18 tests/test_api_shared_retrieval.py
+  17 .gitignore
+  16 CLAUDE.md
+  14 api_middleware.py
+  13 pyproject.toml
+  12 hybrid_rag/__init__.py
+  11 hybrid_rag/constants.py
+  11 docs/CACHING_ARCHITECTURE.md
+  11 docs/LIBRARY_DESIGN.md
+  11 tests/test_cache_integration.py
+  11 docs/API_INTEGRATION.md
+  10 uv.lock
+  10 hybrid_rag/config.py
+  10 jupyter-playground.ipynb
+   9 tests/test_observability_logs.py
+   9 tests/test_retrieval_quality_benchmark.py
+   9 tests/test_optb013_docs_closeout.py
+
+=== MONOREPO SIGNALS ===
+No monorepo signals detected.
+
+=== CODE METRICS ===
+Total files scanned: 8300
+Total lines of code: 26847
+
+Files by language:
+  Other: 8229
+  Python: 34
+  TypeScript/React: 18
+  TypeScript: 16
+  JavaScript: 3
+
+Top 10 largest files:
+.mypy_cache/3.13/cache.db: 123412.0KB
+ai_support_kb/80e66293-e284-41b9-841b-6a7d324ba588/data_level0.bin: 19193.8KB
+ai_support_kb/154e9bde-0aa3-405f-8805-54e0d4396229/data_level0.bin: 11610.9KB
+knowledge_db/chroma.sqlite3: 1232.0KB
+uv.lock: 491.8KB
+frontend/package-lock.json: 290.8KB
+frontend/tsconfig.tsbuildinfo: 181.7KB
+frontend/pnpm-lock.yaml: 176.0KB
+knowledge_db/cf862836-a803-4208-9adf-1a8488683d17/data_level0.bin: 163.7KB
+knowledge_db/596ff07d-6f20-4322-a113-e4c14b58f2a4/data_level0.bin: 163.7KB
+
+=== CI/CD PIPELINES ===
+No CI/CD pipelines detected.
+
+=== CONTAINERS & ORCHESTRATION ===
+No containerization configs detected.
+
+=== SECURITY & COMPLIANCE ===
+No security configs detected.
+
+=== PERFORMANCE & TESTING ===
+No performance testing configs detected.
+
+=== SCAN COMPLETE ===

@@ -32,7 +32,7 @@ python-hol/
 
 ```
 hybrid_rag/
-├── __init__.py       # Public API: 24 exports via __all__; version "1.0.0"
+├── __init__.py       # Public API: 26 exports via __all__; version "1.0.0"
 ├── config.py         # HybridRetrieverConfig, CacheSettings, create_cache_backend
 ├── constants.py      # KNOWLEDGE_DB_DIRECTORY, DEFAULT_EMBEDDING_MODEL, MIN_RELEVANCE_SCORE,
 │                     # STOP_WORDS, CACHE_TELEMETRY_LABELS
