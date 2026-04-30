@@ -1,4 +1,7 @@
-# Restore WebSocket endpoint for real-time chat
+
+# -----------------------------
+# WebSocket endpoint for real-time chat
+# -----------------------------
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket) -> None:
     """WebSocket endpoint for real-time document queries.
