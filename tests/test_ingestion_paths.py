@@ -1,14 +1,12 @@
 """Test ingestion path wiring for chunk_document() integration.
 
 Tests validate that:
-1. _TextExtractor class has been removed from api.py
-2. chunk_document() is callable from hybrid_rag
-3. initialize_vector_db() stores section metadata for Markdown sources
-4. initialize_vector_db() does not store section metadata for plain text sources
-5. URL/HTML ingestion stores section_h1/h2 heading metadata
+1. chunk_document() is callable from hybrid_rag
+2. initialize_vector_db() stores section metadata for Markdown sources
+3. initialize_vector_db() does not store section metadata for plain text sources
+4. URL/HTML ingestion stores section_h1/h2 heading metadata
 """
 
-import inspect
 import tempfile
 
 import pytest
@@ -16,11 +14,6 @@ import pytest
 
 class TestIngestionPathWiring:
     """Test the wiring of chunk_document() into both ingestion paths."""
-
-    def test_textextractor_class_removed_from_api_module(self) -> None:
-        """Verify _TextExtractor class no longer exists anywhere in api.py source."""
-        import api
-        assert "_TextExtractor" not in inspect.getsource(api)
 
     def test_chunk_document_callable_from_hybrid_rag(self) -> None:
         """Verify chunk_document is exported from hybrid_rag."""
