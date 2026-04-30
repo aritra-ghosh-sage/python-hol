@@ -39,6 +39,7 @@ from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 
+import chromadb
 import requests
 from fastapi import FastAPI, HTTPException, WebSocketDisconnect, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -1843,22 +1844,27 @@ async def get_collections() -> CollectionsResponse:
         )
 
     try:
-        collection = _retriever.collection
-        if not collection:
-            raise HTTPException(
-                status_code=500, detail="Vector database collection not initialized or unavailable"
-            )
+        all_names = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
+        client = chromadb.PersistentClient(path=KNOWLEDGE_DB_DIRECTORY)
+        active_name = _retriever.collection.name
 
-        # Report only the active collection. ChromaDB's PersistentClient.list_collections()
-        # requires direct client access which is not exposed via the public Collection API;
-        # returning the active collection avoids coupling to internal implementation details.
-        collections = [
-            CollectionInfo(name=collection.name, count=collection.count())
-        ]
+        collections: list[CollectionInfo] = []
+        for name in all_names:
+            if name == active_name:
+                count = _retriever.collection.count()
+            else:
+                count = client.get_collection(name).count()
+            collections.append(CollectionInfo(name=name, count=count))
 
         logger.info(f"Retrieved {len(collections)} collections")
         return CollectionsResponse(collections=collections)
 
+    except VectorDBError as e:
+        logger.error(f"Failed to list collections: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list collections: {str(e)}",
+        )
     except HTTPException:
         raise
     except Exception as e:
