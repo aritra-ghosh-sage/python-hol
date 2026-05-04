@@ -1,0 +1,765 @@
+plan_id: adr-0001-structure-aware-ingestion
+objective: >
+  Implement ADR-0001: Structure-Aware Document Ingestion — fix chunk_size bug (500→400),
+  fix source_url/chunk_index metadata gap in initialize_vector_db(), implement
+  chunk_document() routing function, wire it into both ingestion paths with heading
+  metadata, replace _TextExtractor with HTMLSectionSplitter for URL ingestion, and
+  upgrade DEFAULT_EMBEDDING_MODEL to BAAI/bge-small-en-v1.5.
+created_at: "2026-04-29"
+created_by: gem-planner
+status: pending
+research_confidence: high
+
+plan_metrics:
+  wave_1_task_count: 3
+  total_dependencies: 5
+  risk_score: medium
+
+tldr: |
+  Five coordinated changes to hybrid_rag/vectordb.py, hybrid_rag/constants.py, and
+  api.py. Wave 1 fixes are independent (chunk_size constant, metadata gap, embedding
+  model constant). Wave 2 builds the chunk_document() routing function only after the
+  metadata fix is in place (so both ingestion paths share the correct metadata shape
+  from the moment wiring happens). Wave 3 wires chunk_document() into both call sites
+  and replaces _TextExtractor. Wave 4 adds documentation. All tasks are Python-only;
+  no frontend or new runtime dependencies.
+
+open_questions: []
+
+gaps: []
+
+pre_mortem:
+  overall_risk_level: medium
+  critical_failure_modes:
+    - scenario: >
+        chunk_document() returns plain strings for Markdown/HTML but initialize_vector_db()
+        expects strings — OK. However, if MarkdownHeaderTextSplitter produces Document
+        objects (LangChain Document), calling .page_content is required; returning the
+        raw object would cause ChromaDB to reject the input.
+      likelihood: medium
+      impact: high
+      mitigation: >
+        In chunk_document(), always extract .page_content from Document objects before
+        returning. Add an explicit unit test asserting return type is list[str].
+
+    - scenario: >
+        HTMLSectionSplitter requires the input to be valid HTML. If the URL path returns
+        plain text or a non-HTML content-type, HTMLSectionSplitter may raise or return
+        empty chunks. The original _TextExtractor handled any text gracefully.
+      likelihood: medium
+      impact: medium
+      mitigation: >
+        In chunk_document(), wrap HTMLSectionSplitter in a try/except; fall back to
+        RecursiveCharacterTextSplitter on failure. Add a test with plain-text input
+        routed via HTML path to verify the fallback activates.
+
+    - scenario: >
+        Changing DEFAULT_EMBEDDING_MODEL from all-MiniLM-L6-v2 to BAAI/bge-small-en-v1.5
+        invalidates the L2 LRU embedding cache in retriever.py on restart (expected) but
+        also invalidates any existing ChromaDB collection on disk whose vectors were
+        produced by the old model. Any test that re-opens an existing collection without
+        re-running initialize_vector_db() will query against wrong-model vectors.
+      likelihood: low
+      impact: medium
+      mitigation: >
+        Tests that open existing collections must re-initialize (already gated by
+        pytest.skip on model unavailability). Document in task that existing collections
+        must be re-embedded after this change is deployed.
+
+    - scenario: >
+        Reducing chunk_size from 500 to 400 changes the default parameter value of the
+        public chunk_text() API. Any caller that relied on the 500-character default
+        without passing chunk_size explicitly will get different chunk counts after this
+        change.
+      likelihood: low
+      impact: low
+      mitigation: >
+        Audit all call sites before changing the default. The only confirmed call sites
+        are api.py:1630 (passes 500 explicitly — must change to 400) and
+        vectordb.py:205 (calls chunk_text() with no args — will use new default 400).
+        Both are in scope for this ADR. Update docstring to reflect new default.
+
+  assumptions:
+    - langchain_text_splitters.MarkdownHeaderTextSplitter and HTMLSectionSplitter
+      are available in the installed langchain-text-splitters>=1.1.1 package.
+    - MarkdownHeaderTextSplitter and HTMLSectionSplitter return LangChain Document
+      objects with a .page_content attribute (standard LangChain interface).
+    - BAAI/bge-small-en-v1.5 outputs 384-dim vectors (same as all-MiniLM-L6-v2),
+      confirmed by ADR model comparison table — no HNSW schema migration needed.
+    - All current tests pass (100%) before this work begins; no pre-existing failures
+      will mask regressions.
+
+implementation_specification:
+  code_structure: |
+    Change 1 (chunk_size default): single-line edit in chunk_text() signature in
+    hybrid_rag/vectordb.py (line 31) and explicit 500→400 in api.py:1630.
+
+    Change 2 (metadata fix): edit initialize_vector_db() loop body (vectordb.py:205-211)
+    to add chunk_index=i and conditionally add source_url by parsing doc["source"] with
+    urllib.parse.urlparse. Mirror the pattern already at api.py:1649-1655.
+
+    Change 3 (chunk_document): new function in hybrid_rag/vectordb.py, added to __all__
+    and re-exported from hybrid_rag/__init__.py. Dispatch: source_hint ending .md →
+    MarkdownHeaderTextSplitter → RecursiveCharacterTextSplitter size-cap; source_hint
+    starting http:// or https:// → HTMLSectionSplitter → RecursiveCharacterTextSplitter
+    size-cap; else RecursiveCharacterTextSplitter only. Returns list[str] always.
+    Includes Google-style docstring and full type hints.
+
+    Change 4 (wiring): replace chunk_text() at api.py:1630 with chunk_document() passing
+    source_hint=request.content (URL) or source_hint=request.filename (file). In
+    vectordb.py:205 replace chunk_text() with chunk_document() passing
+    source_hint=doc.get("source", ""). For Markdown/HTML chunks, metadata dict gains
+    section_h1 and section_h2 fields from Document metadata. Replace _TextExtractor
+    class (api.py:1563-1584) with HTMLSectionSplitter call; raw HTML from response.text
+    feeds directly into chunk_document(source_hint=url). Remove HTMLParser import if no
+    longer used.
+
+    Change 5 (embedding model): single-line edit in hybrid_rag/constants.py line 15.
+
+  affected_areas:
+    - hybrid_rag/vectordb.py
+    - hybrid_rag/constants.py
+    - hybrid_rag/__init__.py
+    - api.py
+
+  component_details:
+    - component: chunk_text() in hybrid_rag/vectordb.py
+      responsibility: >
+        Public API, backward-compatible. Default chunk_size changes 500→400.
+        All existing callers that pass chunk_size explicitly are unaffected.
+      interfaces:
+        - "chunk_text(text: str, chunk_size: int = 400, chunk_overlap: int = 50) -> list[str]"
+      dependencies:
+        - component: RecursiveCharacterTextSplitter
+          relationship: wraps
+      integration_points:
+        - "Exported in __all__ of vectordb.py and hybrid_rag/__init__.py"
+        - "Direct call in api.py removed in Change 4 (replaced by chunk_document)"
+        - "Direct call in initialize_vector_db() removed in Change 4 (replaced by chunk_document)"
+
+    - component: initialize_vector_db() in hybrid_rag/vectordb.py
+      responsibility: >
+        Bulk ingestion path. After Change 2, writes chunk_index and source_url
+        into every chunk's ChromaDB metadata. After Change 4, delegates to
+        chunk_document() for format-aware splitting.
+      interfaces:
+        - "initialize_vector_db(documents, persist_dir, collection_name) -> Collection"
+      dependencies:
+        - component: chunk_document()
+          relationship: calls (after Change 4)
+        - component: urlparse from urllib.parse
+          relationship: uses for source_url extraction (Change 2)
+      integration_points:
+        - "ChromaDB metadata shape must match api.py add_documents() path"
+
+    - component: chunk_document() in hybrid_rag/vectordb.py
+      responsibility: >
+        New routing function. Dispatches to format-specific LangChain splitters then
+        applies RecursiveCharacterTextSplitter as size cap. Returns list[str] always.
+        Extracts section_h1/section_h2 from Document metadata for callers that need
+        heading context (returned as separate list[dict] or embedded in return value
+        — see task spec for chosen interface).
+      interfaces:
+        - "chunk_document(text: str, source_hint: str, chunk_size: int = 400, chunk_overlap: int = 50) -> list[dict[str, Any]]"
+      dependencies:
+        - component: MarkdownHeaderTextSplitter
+          relationship: uses for .md dispatch
+        - component: HTMLSectionSplitter
+          relationship: uses for URL/HTML dispatch
+        - component: RecursiveCharacterTextSplitter
+          relationship: uses as fallback and size-cap
+      integration_points:
+        - "Called by initialize_vector_db() (bulk path)"
+        - "Called by add_documents() in api.py (single-document path)"
+        - "Exported in __all__ of vectordb.py and hybrid_rag/__init__.py"
+
+    - component: _TextExtractor in api.py
+      responsibility: >
+        HTML text extraction for URL ingestion. Replaced by HTMLSectionSplitter
+        in Change 4. The class definition and HTMLParser import are removed.
+      interfaces: []
+      dependencies: []
+      integration_points:
+        - "api.py URL ingestion path (lines 1563-1584) — removed in Change 4"
+
+    - component: DEFAULT_EMBEDDING_MODEL in hybrid_rag/constants.py
+      responsibility: >
+        Constant consumed by initialize_vector_db() and open_collection() in vectordb.py
+        to select the SentenceTransformer model. Changed from all-MiniLM-L6-v2 to
+        BAAI/bge-small-en-v1.5.
+      interfaces:
+        - "DEFAULT_EMBEDDING_MODEL: str = 'BAAI/bge-small-en-v1.5'"
+      dependencies: []
+      integration_points:
+        - "hybrid_rag/vectordb.py (initialize_vector_db, open_collection)"
+        - "Exported in __all__ of constants.py and hybrid_rag/__init__.py"
+
+contracts:
+  - from_task: T2-metadata-fix
+    to_task: T4-wire-chunk-document
+    interface: >
+      initialize_vector_db() after T2 writes chunk metadata with keys:
+      {source: str, chunk_index: int, source_url: str (conditional)}.
+      T4 wiring relies on this shape being correct before it adds section_h1/section_h2
+      for Markdown and HTML chunks.
+    format: "dict[str, str | int] per ChromaDB metadata contract"
+
+  - from_task: T3-chunk-document-impl
+    to_task: T4-wire-chunk-document
+    interface: >
+      chunk_document() returns list[dict[str, Any]] where each dict has at minimum
+      keys: {text: str, metadata: dict}. metadata may include section_h1 and section_h2
+      for Markdown/HTML paths. T4 unpacks this to build ChromaDB doc_texts and
+      doc_metadatas lists.
+    format: "list[dict[str, Any]] — each item: {text: str, metadata: dict[str, str]}"
+
+tasks:
+  # ─── WAVE 1: Independent fixes (no inter-task dependencies) ───────────────
+
+  - id: T1-chunk-size-fix
+    title: "Fix chunk_size default from 500 to 400 in vectordb.py and api.py"
+    description: |
+      Change the default parameter value in chunk_text() from 500 to 400 characters.
+      Also update the explicit chunk_size=500 argument at api.py:1630 to chunk_size=400.
+      Update the docstring to reflect the new default and rationale (model window).
+
+      Files to edit:
+        - hybrid_rag/vectordb.py line 31: chunk_size: int = 500 → chunk_size: int = 400
+        - api.py line 1630: chunk_text(text_content, chunk_size=500, chunk_overlap=50)
+          → chunk_text(text_content, chunk_size=400, chunk_overlap=50)
+        - Update chunk_text() docstring to note "Defaults to 400" and why.
+
+      The public signature remains fully backward-compatible for callers that pass
+      chunk_size explicitly. Only callers using the default are affected.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - "ADR Change 2: chunk_size=500 → 400 at all call sites"
+      - "Bug 2: embedding model silent truncation fix"
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: hybrid_rag/vectordb.py
+        description: "chunk_text() definition at line 30-72; default arg on line 31"
+      - path: api.py
+        description: "Explicit chunk_size=500 call at line 1630"
+    estimated_effort: small
+    estimated_files: 2
+    estimated_lines: 10
+    focus_area: "hybrid_rag/vectordb.py, api.py"
+    tech_stack: ["Python 3.13", "langchain-text-splitters"]
+    test_coverage: >
+      Update any existing test that asserts chunk counts based on chunk_size=500 default.
+      Add one unit test: chunk_text("x" * 500) with default args produces ≥2 chunks
+      (confirming 400-char limit splits the 500-char input).
+    requires_review: false
+    review_depth: lightweight
+    review_security_sensitive: false
+    verification:
+      - "uv run ruff check . passes"
+      - "pytest tests/ -v passes (100%)"
+      - "chunk_text.__defaults__ == (400, 50) confirmed via inspect or direct call"
+    acceptance_criteria:
+      - "chunk_text() signature is def chunk_text(text: str, chunk_size: int = 400, chunk_overlap: int = 50)"
+      - "api.py:1630 passes chunk_size=400 (not 500)"
+      - "Docstring updated to say 'Defaults to 400'"
+      - "All existing tests continue to pass"
+    failure_modes:
+      - scenario: "Existing test fixtures assert exact chunk counts based on default 500"
+        likelihood: low
+        impact: low
+        mitigation: "Search tests/ for hardcoded chunk count assertions; update counts"
+
+  - id: T2-metadata-fix
+    title: "Fix source_url and chunk_index metadata in initialize_vector_db()"
+    description: |
+      Edit the document loop in initialize_vector_db() (vectordb.py:201-212) to mirror
+      the metadata shape produced by api.py:1649-1655.
+
+      Specific changes in vectordb.py:
+        1. Add `from urllib.parse import urlparse` to imports at the top of file.
+        2. Inside the `for doc in documents:` loop, after computing chunks:
+           - Parse doc["source"] with urlparse; if scheme in ("http", "https") and
+             netloc is non-empty, add source_url: doc["source"] to metadata.
+           - Add chunk_index: i (per-chunk loop variable) to metadata.
+        3. Metadata dict shape after change:
+             {"source": doc["source"], "text": doc["text"].strip(),
+              "chunk_index": i, "source_url": source_url}  # source_url key omitted if not a URL
+
+      The variable `i` must be the chunk-level counter (currently `id_counter`) or a
+      per-doc chunk index. Use a per-doc chunk index (reset to 0 for each new doc)
+      named `chunk_idx` to match api.py semantics. The global `id_counter` remains for
+      generating unique doc_ids.
+
+      Do NOT change the function signature or return type.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - "ADR Change 3: source_url + chunk_index metadata fix"
+      - "Bug 1: deduplication filter invisibility for bulk-ingested documents"
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: hybrid_rag/vectordb.py
+        description: "initialize_vector_db() loop body lines 201-212; target edit site"
+      - path: api.py
+        description: "Reference metadata shape at lines 1649-1655"
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 20
+    focus_area: "hybrid_rag/vectordb.py — initialize_vector_db() loop body"
+    tech_stack: ["Python 3.13", "ChromaDB", "urllib.parse"]
+    test_coverage: >
+      Add one integration test in tests/test_collection_utils.py (or a new
+      test_vectordb_metadata.py): after initialize_vector_db() with a document whose
+      source is a URL, assert collection.get(where={"source_url": url}) returns
+      non-empty ids. Add a second test asserting chunk_index values are sequential
+      integers starting at 0 for each document.
+    requires_review: false
+    review_depth: lightweight
+    review_security_sensitive: false
+    verification:
+      - "uv run ruff check . passes"
+      - "pytest tests/ -v passes (100%)"
+      - "collection.get(where={'source_url': url}) returns non-empty result for URL-sourced doc"
+      - "chunk_index in metadata for all chunks"
+    acceptance_criteria:
+      - "Every chunk stored by initialize_vector_db() has chunk_index: int in metadata"
+      - "Chunks from URL-sourced documents have source_url: str in metadata"
+      - "Chunks from non-URL documents do not have a source_url key in metadata"
+      - "Metadata shape matches api.py add_documents() path (parity confirmed by test)"
+    failure_modes:
+      - scenario: >
+          ChromaDB rejects integer chunk_index in metadata because ChromaDB metadata
+          values must be str | int | float | bool — int is supported but verify version.
+        likelihood: low
+        impact: medium
+        mitigation: "Check ChromaDB version; cast to int explicitly; test with real collection"
+      - scenario: >
+          Per-doc chunk_idx counter not reset between documents, causing incorrect
+          sequential numbering across the full corpus instead of per-document.
+        likelihood: medium
+        impact: low
+        mitigation: "Reset chunk_idx = 0 at start of each `for doc in documents:` iteration"
+
+  - id: T5-embedding-model-upgrade
+    title: "Upgrade DEFAULT_EMBEDDING_MODEL to BAAI/bge-small-en-v1.5"
+    description: |
+      Change the single constant in hybrid_rag/constants.py:
+
+        DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+        →
+        DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+
+      No other code changes. No HNSW index migration needed (both models output
+      384-dim vectors). The L2 LRU embedding cache in retriever.py invalidates
+      naturally on process restart.
+
+      Update the inline comment on the constant to name the new model and note that
+      the previous model was all-MiniLM-L6-v2. Do not add a migration script —
+      re-embedding existing collections is an operational step documented in the ADR.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - "ADR Change 5: embedding model upgrade"
+      - "EMB-006: MTEB retrieval improvement ~10 points"
+    priority: medium
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: hybrid_rag/constants.py
+        description: "DEFAULT_EMBEDDING_MODEL constant at line 15"
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 3
+    focus_area: "hybrid_rag/constants.py"
+    tech_stack: ["Python 3.13", "sentence-transformers"]
+    test_coverage: >
+      Add one unit test asserting DEFAULT_EMBEDDING_MODEL == "BAAI/bge-small-en-v1.5".
+      Any integration test that downloads the model will now pull bge-small; existing
+      model-gated tests already use pytest.skip when the model is unavailable, so no
+      test changes needed beyond the constant assertion.
+    requires_review: false
+    review_depth: lightweight
+    review_security_sensitive: false
+    verification:
+      - "uv run ruff check . passes"
+      - "pytest tests/ -v passes (100%)"
+      - "hybrid_rag.DEFAULT_EMBEDDING_MODEL == 'BAAI/bge-small-en-v1.5'"
+    acceptance_criteria:
+      - "constants.py line defines DEFAULT_EMBEDDING_MODEL = 'BAAI/bge-small-en-v1.5'"
+      - "Comment updated to reference new model"
+      - "No other files changed (vectordb.py, retriever.py consume the constant — no edits needed)"
+    failure_modes:
+      - scenario: "Integration tests that initialize real ChromaDB fail due to model download timeout"
+        likelihood: low
+        impact: low
+        mitigation: "Tests already guarded with pytest.skip on model unavailability; no action needed"
+
+  # ─── WAVE 2: chunk_document() implementation (depends on T2 for metadata contract) ───
+
+  - id: T3-chunk-document-impl
+    title: "Implement chunk_document() routing function in vectordb.py"
+    description: |
+      Add `chunk_document()` to hybrid_rag/vectordb.py. Add it to __all__ in vectordb.py
+      and re-export it from hybrid_rag/__init__.py __all__.
+
+      Function signature:
+        def chunk_document(
+            text: str,
+            source_hint: str,
+            chunk_size: int = 400,
+            chunk_overlap: int = 50,
+        ) -> list[dict[str, Any]]:
+
+      Return type: list[dict[str, Any]] where each dict is:
+        {"text": str, "metadata": {"section_h1": str, "section_h2": str}}
+      For plain-text/PDF paths, metadata is an empty dict {}.
+      This allows callers to merge heading fields into ChromaDB metadata selectively.
+
+      Dispatch logic (check in order):
+        1. source_hint.lower().endswith(".md") → Markdown path
+        2. source_hint.lower().startswith(("http://", "https://")) → HTML/URL path
+        3. Everything else (including .pdf, .txt, raw text) → plain path
+
+      Markdown path:
+        - headers_to_split_on = [("#", "section_h1"), ("##", "section_h2")]
+        - md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on,
+            strip_headers=False)
+        - md_docs = md_splitter.split_text(text)
+        - size_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap)
+        - For each doc in md_docs: further split doc.page_content; carry forward
+          doc.metadata (section_h1, section_h2) to each sub-chunk.
+        - Return list of {"text": chunk_str, "metadata": {k: v for k, v in
+            doc.metadata.items() if k in ("section_h1", "section_h2")}}.
+
+      HTML/URL path:
+        - headers_to_split_on = [("h1", "section_h1"), ("h2", "section_h2")]
+        - html_splitter = HTMLSectionSplitter(headers_to_split_on=headers_to_split_on)
+        - Try: html_docs = html_splitter.split_text(text)
+        - Except any exception: fall back to plain path (log warning).
+        - Apply size cap with RecursiveCharacterTextSplitter as in Markdown path.
+
+      Plain path:
+        - size_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap)
+        - chunks = size_splitter.split_text(text)
+        - Return [{"text": c, "metadata": {}} for c in chunks]
+
+      Add required imports to vectordb.py:
+        from langchain_text_splitters import (
+            MarkdownHeaderTextSplitter,
+            HTMLSectionSplitter,
+        )
+      (RecursiveCharacterTextSplitter is already imported.)
+      Add `from typing import Any` if not already present (currently `from typing import cast`
+      — add Any to the same import line).
+
+      Google-style docstring required: Args, Returns, Raises, Example sections.
+      Preserve the existing chunk_text() — do not modify it.
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - "ADR Change 1: chunk_document() routing function"
+      - "ADR IMP-001: chunk_document implementation spec"
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - T2-metadata-fix
+    conflicts_with: []
+    context_files:
+      - path: hybrid_rag/vectordb.py
+        description: "Existing imports, chunk_text(), __all__ — add chunk_document() here"
+      - path: hybrid_rag/__init__.py
+        description: "Add chunk_document to __all__ and import from .vectordb"
+    estimated_effort: medium
+    estimated_files: 2
+    estimated_lines: 90
+    focus_area: "hybrid_rag/vectordb.py — new function, imports, __all__"
+    tech_stack: ["Python 3.13", "langchain-text-splitters>=1.1.1"]
+    test_coverage: >
+      Add tests/test_chunk_document.py with class TestChunkDocument:
+        - test_md_path_splits_on_headers: input has # H1 and ## H2 markers; assert
+          section_h1 and section_h2 appear in metadata of returned dicts.
+        - test_html_path_splits_on_headings: input is minimal valid HTML with <h1> and
+          <h2> tags; assert section_h1/section_h2 in metadata.
+        - test_html_fallback_on_invalid_html: input is plain text routed via http://
+          source_hint; assert returns list[dict] without raising.
+        - test_plain_path_returns_empty_metadata: .txt source_hint; assert metadata == {}.
+        - test_pdf_path_returns_empty_metadata: .pdf source_hint; assert metadata == {}.
+        - test_return_type_is_list_of_dicts: all paths return list[dict] with "text" key.
+        - test_chunk_size_respected: long input with plain path; assert max(len(d["text"])
+          for d in result) <= chunk_size + chunk_overlap.
+    requires_review: false
+    review_depth: standard
+    review_security_sensitive: false
+    verification:
+      - "uv run ruff check . passes"
+      - "pytest tests/test_chunk_document.py -v passes all cases"
+      - "pytest tests/ -v passes (100%)"
+      - "chunk_document in hybrid_rag.__all__"
+    acceptance_criteria:
+      - "chunk_document() is defined in hybrid_rag/vectordb.py and added to __all__"
+      - "chunk_document() is re-exported from hybrid_rag/__init__.py"
+      - "Markdown dispatch: section_h1/section_h2 fields present in metadata for .md source"
+      - "HTML dispatch: section_h1/section_h2 fields present in metadata for http/https source"
+      - "HTML fallback: plain text input via HTML path does not raise; returns chunked dicts"
+      - "Plain dispatch: metadata dict is empty for .txt / .pdf / raw source_hint"
+      - "Return type is list[dict[str, Any]] always"
+      - "chunk_text() is unchanged (public API preserved)"
+      - "Google-style docstring present with Args, Returns, Raises, Example"
+      - "Type hints on all parameters and return"
+    failure_modes:
+      - scenario: >
+          LangChain Document objects returned by MarkdownHeaderTextSplitter may not have
+          .metadata attribute populated if no headers are found in the input.
+        likelihood: low
+        impact: medium
+        mitigation: >
+          Default to empty dict when doc.metadata is None or missing keys:
+          doc.metadata.get("section_h1", None) — omit key if None so ChromaDB
+          metadata stays clean.
+      - scenario: >
+          HTMLSectionSplitter is unavailable in the installed langchain-text-splitters
+          version (was added in 0.2.x / requires specific version).
+        likelihood: low
+        impact: high
+        mitigation: >
+          Verify availability with: from langchain_text_splitters import HTMLSectionSplitter.
+          The pyproject.toml pins >=1.1.1 which includes this class. If import fails at
+          test time, investigate version; do not add a try/except that silently swallows
+          ImportError.
+
+  # ─── WAVE 3: Wire chunk_document() into both ingestion paths ──────────────
+
+  - id: T4-wire-chunk-document
+    title: "Wire chunk_document() into both ingestion paths and replace _TextExtractor"
+    description: |
+      Three coordinated edits in one task (all in api.py and vectordb.py):
+
+      Edit 1 — vectordb.py initialize_vector_db() bulk path:
+        Replace:
+          chunks = chunk_text(doc["text"].strip())
+          for chunk in chunks:
+              doc_metadatas.append({"source": doc["source"], "text": doc["text"].strip(),
+                  "chunk_index": chunk_idx, ...})
+        With:
+          chunk_dicts = chunk_document(doc["text"].strip(),
+              source_hint=doc.get("source", ""),
+              chunk_size=400, chunk_overlap=50)
+          for j, cd in enumerate(chunk_dicts):
+              doc_metadatas.append({
+                  "source": doc["source"],
+                  "text": doc["text"].strip(),
+                  "chunk_index": chunk_idx,
+                  **({"source_url": doc["source"]} if is_url else {}),
+                  **{k: v for k, v in cd["metadata"].items() if k in ("section_h1", "section_h2") and v is not None},
+              })
+              doc_texts.append(cd["text"])
+        (is_url detection already added in T2-metadata-fix using urlparse.)
+
+      Edit 2 — api.py add_documents() single-document path:
+        Replace at line ~1630:
+          chunks = chunk_text(text_content, chunk_size=400, chunk_overlap=50)
+        With:
+          source_hint = request.content if request.source_type == "url" else (request.filename or "")
+          chunk_dicts = chunk_document(text_content, source_hint=source_hint,
+              chunk_size=400, chunk_overlap=50)
+          chunks = [cd["text"] for cd in chunk_dicts]
+        Update metadatas list comprehension (lines 1653-1656) to merge heading fields
+        from cd["metadata"] for each chunk:
+          metadatas = [
+              {"source": source_label, "chunk_index": i, **url_meta,
+               **{k: v for k, v in chunk_dicts[i]["metadata"].items()
+                  if k in ("section_h1", "section_h2") and v is not None}}
+              for i in range(len(chunks))
+          ]
+
+      Edit 3 — api.py URL ingestion path (replacing _TextExtractor):
+        Remove the _TextExtractor class definition (lines 1563-1581) and the two lines
+        that instantiate and call it (lines 1582-1584).
+        Replace with:
+          # Pass raw HTML to chunk_document; text extraction handled by HTMLSectionSplitter
+          text_content = response.text
+        (chunk_document() is called later at Edit 2 with source_hint=request.content,
+        which is the URL — this routes to the HTML path automatically.)
+        Remove `from html.parser import HTMLParser` import from api.py top if no
+        longer used elsewhere. Verify with grep before removing.
+
+      Also import chunk_document in api.py imports section (alongside existing chunk_text).
+      chunk_text import can be retained or removed — retain it to avoid breaking any
+      future direct import from api namespace, but it is no longer called directly.
+    wave: 3
+    agent: gem-implementer
+    prototype: false
+    covers:
+      - "ADR Change 4: wire chunk_document() into both ingestion paths"
+      - "ADR Change 4: replace _TextExtractor with HTMLSectionSplitter"
+      - "ADR IMP-003: heading metadata in ChromaDB for Markdown and HTML chunks"
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - T2-metadata-fix
+      - T3-chunk-document-impl
+    conflicts_with: []
+    context_files:
+      - path: api.py
+        description: >
+          _TextExtractor class at 1563-1584; chunk_text call at 1630; metadatas
+          list at 1653-1656; imports at line 39 (HTMLParser) and line 57 (chunk_text)
+      - path: hybrid_rag/vectordb.py
+        description: "initialize_vector_db() loop body (bulk path) post-T2"
+    estimated_effort: medium
+    estimated_files: 2
+    estimated_lines: 60
+    focus_area: "api.py (3 edit sites) + hybrid_rag/vectordb.py (1 edit site)"
+    tech_stack: ["Python 3.13", "FastAPI", "langchain-text-splitters"]
+    test_coverage: >
+      Add integration tests in tests/test_ingestion_paths.py:
+        - test_url_ingestion_stores_section_metadata: mock response.text with HTML
+          containing <h1> and <h2> tags; call add_documents via fake_initialized_app;
+          assert returned chunk metadatas contain section_h1 key.
+        - test_bulk_ingestion_stores_section_metadata: call initialize_vector_db() with
+          a Markdown-format doc (source ending .md); assert collection metadata has
+          section_h1 for at least one chunk.
+        - test_plain_file_ingestion_no_section_metadata: call with .txt source_type=file;
+          assert no section_h1 key in chunk metadatas.
+        - test_html_extraction_removes_textextractor_dependency: confirm _TextExtractor
+          class no longer defined in api module (getattr check).
+    requires_review: true
+    review_depth: standard
+    review_security_sensitive: false
+    verification:
+      - "uv run ruff check . passes"
+      - "pytest tests/ -v passes (100%)"
+      - "_TextExtractor class not present in api.py (grep confirms)"
+      - "HTMLParser import removed from api.py (grep confirms)"
+      - "chunk_document imported in api.py"
+      - "Markdown and HTML chunks have section_h1/section_h2 in ChromaDB metadata"
+    acceptance_criteria:
+      - "_TextExtractor class removed from api.py"
+      - "from html.parser import HTMLParser removed (if not used elsewhere)"
+      - "chunk_document imported in api.py alongside or replacing chunk_text"
+      - "URL ingestion path passes response.text directly to chunk_document()"
+      - "File and text ingestion paths pass source_hint=filename/'' to chunk_document()"
+      - "initialize_vector_db() uses chunk_document() for all document types"
+      - "section_h1/section_h2 present in chunk metadata for Markdown and HTML docs"
+      - "Plain-text and PDF chunks do not have section_h1/section_h2 keys"
+      - "All existing API contract tests (add_documents, dedup filters) continue to pass"
+    failure_modes:
+      - scenario: >
+          HTMLSectionSplitter returns chunks with very short text (single words or
+          empty strings) for HTML that uses heading tags sparsely, causing noise chunks
+          in ChromaDB.
+        likelihood: medium
+        impact: medium
+        mitigation: >
+          After size-cap step, filter out chunks where len(text.strip()) < 20 characters.
+          Add this filter in chunk_document() HTML path.
+      - scenario: >
+          Removing _TextExtractor changes the no-text-content guard (line 1585-1593)
+          which currently checks `if not text_content`. After change, text_content is
+          response.text — may be non-empty even for JS-rendered pages with no readable
+          content.
+        likelihood: low
+        impact: low
+        mitigation: >
+          Retain the empty-chunk guard: after chunk_document() returns, if not chunk_dicts
+          raise HTTPException(422). This catches the case where splitting produced zero
+          chunks from an effectively empty page.
+
+  # ─── WAVE 4: Documentation ────────────────────────────────────────────────
+
+  - id: T6-documentation
+    title: "Update public API docs and docstrings for ADR-0001 changes"
+    description: |
+      Documentation-only pass after all implementation tasks are complete.
+
+      Scope:
+        1. Update chunk_text() docstring in vectordb.py to reflect new default (400)
+           and note the model window rationale (should already be done in T1, verify).
+        2. Verify chunk_document() docstring is complete: Args, Returns, Raises, Example,
+           and dispatch table in the body (Markdown / HTML / plain paths).
+        3. Update hybrid_rag/__init__.py module docstring to list chunk_document in
+           the "Utilities" exports section.
+        4. Update docs/LIBRARY_DESIGN.md (if it mentions chunking or ingestion) to
+           note chunk_document() routing and the new DEFAULT_EMBEDDING_MODEL.
+        5. Update the "Public API (17 exports)" count in CLAUDE.md or the relevant
+           section — chunk_document adds one export, making 18.
+
+      Do not change any code logic. Read-only verification of docstrings, then edit
+      only documentation strings and .md files.
+    wave: 4
+    agent: gem-documentation-writer
+    prototype: false
+    covers:
+      - "ADR IMP-003: documentation of new public API"
+    priority: low
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - T1-chunk-size-fix
+      - T2-metadata-fix
+      - T3-chunk-document-impl
+      - T4-wire-chunk-document
+      - T5-embedding-model-upgrade
+    conflicts_with: []
+    context_files:
+      - path: hybrid_rag/vectordb.py
+        description: "chunk_text() and chunk_document() docstrings"
+      - path: hybrid_rag/__init__.py
+        description: "Module docstring listing public API exports"
+      - path: docs/LIBRARY_DESIGN.md
+        description: "Architecture documentation — chunking section"
+      - path: CLAUDE.md
+        description: "Public API export count in Architecture section"
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 40
+    focus_area: "Docstrings in vectordb.py, module docstring in __init__.py, LIBRARY_DESIGN.md"
+    task_type: update
+    audience: developers
+    coverage_matrix:
+      - "chunk_document() public API: signature, return type, dispatch table"
+      - "chunk_text() updated default documented"
+      - "DEFAULT_EMBEDDING_MODEL updated in architecture docs"
+      - "Export count accurate in CLAUDE.md"
+    requires_review: false
+    review_depth: lightweight
+    review_security_sensitive: false
+    verification:
+      - "All docstrings have Args, Returns, Raises, Example sections"
+      - "chunk_document listed in hybrid_rag/__init__.py module docstring"
+      - "LIBRARY_DESIGN.md references chunk_document if it mentions chunking"
+    acceptance_criteria:
+      - "chunk_document() docstring is complete (Args, Returns, Raises, Example)"
+      - "chunk_text() docstring reflects 400 default"
+      - "hybrid_rag/__init__.py module docstring lists chunk_document under Utilities"
+      - "No code logic changed (documentation pass only)"

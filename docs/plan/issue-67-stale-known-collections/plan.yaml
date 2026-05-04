@@ -1,0 +1,605 @@
+plan_id: issue-67-stale-known-collections
+objective: >
+  Fix stale knownCollections entries in settingsStore by implementing per-entry
+  miss counting (Option A). Collections absent from the API for 15 consecutive
+  merges are soft-hidden from the UI dropdown. The active collection is always
+  shown regardless of missCount. A stale-collection warning is surfaced in the
+  save flow when the selected collection_name is hidden.
+created_at: "2026-04-28"
+created_by: gem-planner
+status: pending
+research_confidence: high
+
+plan_metrics:
+  wave_1_task_count: 1
+  total_dependencies: 4
+  risk_score: low
+
+tldr: |
+  Four sequential frontend changes across three files, plus a verification pass.
+  Wave 1: extend the CollectionInfo type. Wave 2: rewrite mergeCollections in
+  the Zustand store with STALE_THRESHOLD logic. Wave 3: filter the dropdown and
+  add a stale-save warning in SettingsPanel. Wave 4: extend SettingsPanel tests
+  with store reset + four new stale-behaviour scenarios. Wave 5: confirm all
+  three done-criteria commands pass (pnpm lint, pnpm test:unit, pnpm build).
+
+open_questions:
+  - question: >
+      Should the stale warning in the save flow be a blocking modal or an inline
+      non-blocking banner?
+    context: >
+      The issue description says "show a warning" but does not specify whether
+      the user should be prevented from saving or merely alerted. The current
+      message system (setMessage) is non-blocking. Defaulting to non-blocking
+      inline warning is safest; a modal can be added in a follow-up.
+    type: nice_to_know
+    affects: [task-03]
+
+  - question: >
+      Should missCount be persisted across browser sessions (localStorage /
+      zustand-persist) or reset on page reload?
+    context: >
+      The issue description targets 15 consecutive panel opens. If the store is
+      ephemeral (not persisted), the counter resets on every page reload, making
+      STALE_THRESHOLD=15 effectively "15 opens in one browser session". This is
+      consistent with the existing additive-merge design (also session-scoped).
+    type: decision_blocker
+    affects: [task-02]
+
+gaps: []
+
+pre_mortem:
+  overall_risk_level: low
+  critical_failure_modes:
+    - scenario: >
+        Active collection name injected at SettingsPanel lines 348-349 is
+        accidentally filtered out by the stale filter, leaving the dropdown
+        empty or showing an incorrect value.
+      likelihood: medium
+      impact: high
+      mitigation: >
+        The filter must check missCount AFTER the active-collection injection
+        block. The injection creates a fresh entry with missCount=0 (not stale),
+        so it will never be filtered. Verify in tests that the active collection
+        always appears in the dropdown even when its store entry has
+        missCount >= STALE_THRESHOLD.
+
+    - scenario: >
+        Test ordering pollution: a prior test leaves knownCollections in a
+        non-empty state, causing stale-count assertions to fail intermittently.
+      likelihood: high
+      impact: medium
+      mitigation: >
+        Add useSettingsStore.setState({ knownCollections: [] }) to the
+        beforeEach block in SettingsPanel.test.tsx. This is the primary fix
+        identified in the research findings.
+
+    - scenario: >
+        TypeScript strict-mode rejects using the optional missCount field
+        without a null-check, causing pnpm tsc --noEmit to fail in the build.
+      likelihood: low
+      impact: medium
+      mitigation: >
+        Use nullish coalescing in all missCount reads:
+        (known.missCount ?? 0) + 1. The interface declares missCount?: number
+        so the store sets it explicitly on every merge, keeping reads safe.
+
+  assumptions:
+    - The store is NOT persisted across page reloads (session-scoped).
+    - GET /collections always returns at most 1 entry (the active collection).
+    - STALE_THRESHOLD=15 is the agreed threshold; no env-var override is needed.
+    - The stale warning in the save flow is non-blocking (inline banner).
+    - CollectionInfo is used only in frontend code; no backend serialisation impact.
+
+implementation_specification:
+  code_structure: >
+    All changes are contained in the frontend package at
+    frontend/src/{lib/types.ts, stores/settingsStore.ts,
+    components/settings/SettingsPanel.tsx,
+    components/settings/SettingsPanel.test.tsx}.
+    No new files are created. No backend changes are required.
+  affected_areas:
+    - frontend/src/lib/types.ts
+    - frontend/src/stores/settingsStore.ts
+    - frontend/src/components/settings/SettingsPanel.tsx
+    - frontend/src/components/settings/SettingsPanel.test.tsx
+  component_details:
+    - component: CollectionInfo (types.ts)
+      responsibility: >
+        Shared TypeScript interface for collection metadata. Gains an optional
+        missCount field that the store always populates.
+      interfaces:
+        - "missCount?: number  // undefined on first creation, 0+ after first merge"
+      dependencies: []
+      integration_points:
+        - settingsStore.ts uses CollectionInfo as the knownCollections element type
+        - SettingsPanel.tsx reads CollectionInfo entries from the store
+
+    - component: settingsStore (settingsStore.ts)
+      responsibility: >
+        Zustand store holding knownCollections. mergeCollections is rewritten to:
+        (1) define STALE_THRESHOLD=15 as a module-level named constant,
+        (2) reset missCount=0 for entries present in fresh,
+        (3) increment missCount for entries absent from fresh,
+        (4) write the updated array back to state.
+      interfaces:
+        - "STALE_THRESHOLD: 15 (module-level constant)"
+        - "mergeCollections(fresh: CollectionInfo[]): void"
+        - "knownCollections: CollectionInfo[]"
+      dependencies:
+        - component: CollectionInfo
+          relationship: element type of knownCollections array
+      integration_points:
+        - SettingsPanel.tsx calls mergeCollections on mount and after Create & Switch
+        - SettingsPanel.tsx reads knownCollections to build the dropdown
+
+    - component: SettingsPanel (SettingsPanel.tsx)
+      responsibility: >
+        Settings UI component. The collection dropdown is updated to filter out
+        entries with missCount >= STALE_THRESHOLD before rendering options.
+        The active-collection fallback injection (lines 348-349) is preserved and
+        runs before the filter to guarantee the current collection always appears.
+        handleSave gains a pre-save stale check: if the selected collection_name
+        matches a stale entry, an inline warning banner is shown.
+      interfaces:
+        - "visibleCollections: CollectionInfo[] (derived, not stored)"
+        - "isStaleSelection: boolean (derived in handleSave)"
+      dependencies:
+        - component: settingsStore
+          relationship: consumes knownCollections and mergeCollections
+        - component: CollectionInfo
+          relationship: reads missCount field for filtering
+      integration_points:
+        - mergeCollections called at lines 33 and 411
+
+    - component: SettingsPanel.test.tsx
+      responsibility: >
+        Vitest test suite. beforeEach gains a store reset. Four new test cases
+        cover: (1) missCount increments for absent collections, (2) stale entries
+        hidden from dropdown at threshold, (3) reappearing collections reset to 0,
+        (4) stale warning shown when saving with a hidden collection.
+      interfaces: []
+      dependencies:
+        - component: SettingsPanel
+          relationship: renders and asserts on component output
+        - component: settingsStore
+          relationship: direct state manipulation via useSettingsStore.setState
+      integration_points:
+        - vi.mock('@/lib/api') stubs apiClient
+
+contracts:
+  - from_task: task-01
+    to_task: task-02
+    interface: CollectionInfo.missCount field
+    format: "missCount?: number  (optional on interface, always set in store)"
+
+  - from_task: task-02
+    to_task: task-03
+    interface: STALE_THRESHOLD constant + updated knownCollections shape
+    format: >
+      Store exports STALE_THRESHOLD (number = 15) so SettingsPanel can import
+      and use the same constant for filtering and the save-flow warning.
+
+  - from_task: task-03
+    to_task: task-04
+    interface: Rendered dropdown and warning banner selectors
+    format: >
+      Tests use screen.getByLabelText("Active Collection") for the dropdown and
+      screen.getByText(/stale/i) (or equivalent) for the warning banner.
+
+tasks:
+  # ─── Wave 1 ───────────────────────────────────────────────────────────────
+  - id: task-01
+    title: Add missCount field to CollectionInfo interface
+    description: |
+      File: frontend/src/lib/types.ts, lines 48-51.
+
+      Current definition:
+        export interface CollectionInfo {
+          name: string;
+          count: number;
+        }
+
+      Change: add `missCount?: number` as a third field.
+
+      The field is optional on the interface so that existing callers (API
+      response parsing, test fixtures) that omit it remain valid TypeScript.
+      The store always sets it explicitly during mergeCollections, so runtime
+      values are never undefined after the first merge.
+
+      No other file changes in this task.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: ["frontend/src/lib/types.ts"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: frontend/src/lib/types.ts
+        description: CollectionInfo interface at lines 48-51
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 3
+    focus_area: types
+    verification:
+      - "pnpm tsc --noEmit completes without errors (no new type errors)"
+      - "CollectionInfo interface has exactly three fields: name, count, missCount?"
+    acceptance_criteria:
+      - "CollectionInfo gains missCount?: number"
+      - "Existing callers that construct CollectionInfo without missCount remain valid"
+      - "pnpm tsc --noEmit passes"
+    failure_modes:
+      - scenario: >
+          Adding missCount as required (not optional) breaks existing test fixtures
+          and API response parsers that build CollectionInfo objects without it.
+        likelihood: low
+        impact: medium
+        mitigation: Declare as optional (missCount?: number), never required.
+    tech_stack: [TypeScript]
+    test_coverage: null
+
+  # ─── Wave 2 ───────────────────────────────────────────────────────────────
+  - id: task-02
+    title: Rewrite mergeCollections with missCount tracking in settingsStore
+    description: |
+      File: frontend/src/stores/settingsStore.ts, lines 1-20 (full file).
+
+      Changes required:
+      1. Add module-level named constant before the create() call:
+           export const STALE_THRESHOLD = 15;
+         (exported so SettingsPanel can import and reuse it for filtering)
+
+      2. Rewrite the mergeCollections action body:
+         - Build a Map<string, CollectionInfo> from fresh[], setting missCount=0
+           for every entry present in fresh.
+         - Iterate get().knownCollections. For each entry:
+           a. If the entry IS in fresh (byName.has(known.name)): already handled
+              above (fresh entry wins, missCount=0).
+           b. If the entry is NOT in fresh: carry it forward with
+              missCount = (known.missCount ?? 0) + 1.
+         - Overwrite set({ knownCollections: Array.from(byName.values()) }).
+
+      The SettingsState interface does not change (no new exported actions).
+      STALE_THRESHOLD is exported for SettingsPanel to import.
+
+      Pseudocode for the new mergeCollections body:
+        const byName = new Map(fresh.map(c => [c.name, { ...c, missCount: 0 }]));
+        for (const known of get().knownCollections) {
+          if (!byName.has(known.name)) {
+            byName.set(known.name, {
+              ...known,
+              missCount: (known.missCount ?? 0) + 1,
+            });
+          }
+        }
+        set({ knownCollections: Array.from(byName.values()) });
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers: ["frontend/src/stores/settingsStore.ts"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [task-01]
+    conflicts_with: []
+    context_files:
+      - path: frontend/src/stores/settingsStore.ts
+        description: Full store file (lines 1-20); mergeCollections action at lines 11-19
+      - path: frontend/src/lib/types.ts
+        description: CollectionInfo interface with missCount (after task-01)
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 20
+    focus_area: store logic
+    verification:
+      - "STALE_THRESHOLD constant is exported and equals 15"
+      - "After one merge with fresh=[A], known=[A,B]: A.missCount=0, B.missCount=1"
+      - >
+        After 15 merges missing B: B.missCount=15 (equal to STALE_THRESHOLD)
+      - "pnpm tsc --noEmit passes"
+    acceptance_criteria:
+      - "STALE_THRESHOLD = 15 exported from settingsStore.ts"
+      - >
+        mergeCollections resets missCount=0 for entries present in fresh and
+        increments missCount for entries absent from fresh
+      - "No mutation of existing CollectionInfo objects (use spread)"
+      - "pnpm tsc --noEmit passes"
+    failure_modes:
+      - scenario: >
+          Fresh entries overwrite known entries that have additional fields,
+          causing missCount to be lost on re-appearance if spread is wrong.
+        likelihood: low
+        impact: medium
+        mitigation: >
+          Spread fresh entry first, then set missCount: 0 explicitly so the
+          fresh API data wins on all other fields and missCount is always reset.
+      - scenario: >
+          Exporting STALE_THRESHOLD causes a circular import if SettingsPanel
+          imports from settingsStore but settingsStore also imports from types.ts.
+        likelihood: low
+        impact: low
+        mitigation: >
+          The import chain is types.ts <- settingsStore.ts <- SettingsPanel.tsx,
+          which is acyclic. No circular import risk.
+    tech_stack: [TypeScript, Zustand]
+    test_coverage: null
+
+  # ─── Wave 3 ───────────────────────────────────────────────────────────────
+  - id: task-03
+    title: Filter stale entries from dropdown and add stale-save warning in SettingsPanel
+    description: |
+      File: frontend/src/components/settings/SettingsPanel.tsx.
+
+      Two sub-changes:
+
+      --- Sub-change A: Dropdown filtering (lines 346-358) ---
+
+      Import STALE_THRESHOLD from '@/stores/settingsStore' at the top of the
+      file (add to existing import line).
+
+      Inside the IIFE that builds dropdown options (lines 346-358):
+      1. Keep the active-collection fallback injection unchanged
+         (lines 348-349 check config.collection_name not in collectionMap).
+         This runs BEFORE the filter so the active collection is never hidden.
+      2. After injection, add a filter step:
+           const visibleCollections = Array.from(collectionMap.values())
+             .filter(col => (col.missCount ?? 0) < STALE_THRESHOLD);
+      3. Map visibleCollections (not all collectionMap values) to <option> elements.
+
+      The sort by name is preserved on visibleCollections.
+
+      --- Sub-change B: Stale warning in handleSave (lines 73-104) ---
+
+      At the top of handleSave, before the try block, add a stale check:
+        const selectedEntry = knownCollections.find(
+          c => c.name === config.collection_name
+        );
+        const isStaleSelection =
+          selectedEntry !== undefined &&
+          (selectedEntry.missCount ?? 0) >= STALE_THRESHOLD;
+
+      If isStaleSelection is true, call setMessage with a warning:
+        setMessage({
+          type: "error",
+          text: "Warning: the selected collection may no longer exist on the server. Saving may recreate it as an empty collection.",
+        });
+      Then return early (do not proceed with the API call).
+
+      NOTE: If the open question about blocking vs. non-blocking is resolved
+      as "non-blocking", remove the early return and let the save proceed with
+      the warning banner visible. The default implementation uses a blocking
+      early return (safest).
+    wave: 3
+    agent: gem-implementer
+    prototype: false
+    covers: ["frontend/src/components/settings/SettingsPanel.tsx"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [task-01, task-02]
+    conflicts_with: []
+    context_files:
+      - path: frontend/src/components/settings/SettingsPanel.tsx
+        description: >
+          Full component. Key sections: dropdown IIFE lines 346-358,
+          handleSave lines 73-104, import block lines 1-8.
+      - path: frontend/src/stores/settingsStore.ts
+        description: Exports STALE_THRESHOLD (after task-02)
+    estimated_effort: small
+    estimated_files: 1
+    estimated_lines: 25
+    focus_area: UI filtering + save guard
+    verification:
+      - >
+        Dropdown renders only collections with missCount < STALE_THRESHOLD
+        when store contains a mix of fresh and stale entries
+      - >
+        Active collection (config.collection_name) always appears in dropdown
+        even if its store entry has missCount >= STALE_THRESHOLD
+      - >
+        handleSave calls setMessage with warning text and returns early
+        when selected collection is stale
+      - "pnpm tsc --noEmit passes"
+    acceptance_criteria:
+      - "Stale entries (missCount >= STALE_THRESHOLD) are absent from dropdown options"
+      - "Active collection is always present in dropdown regardless of missCount"
+      - >
+        Attempting to save settings with a stale collection selected shows
+        an inline warning and does not call apiClient.updateConfig
+      - "pnpm tsc --noEmit passes"
+    failure_modes:
+      - scenario: >
+          The active-collection injection creates an entry with missCount
+          undefined, causing (col.missCount ?? 0) < STALE_THRESHOLD to be
+          (0 < 15) = true, so it is included — correct behaviour.
+        likelihood: low
+        impact: low
+        mitigation: >
+          Injected entry has no missCount (uses { name, count: 0 }), so
+          nullish coalescing to 0 is correct. Document this in a comment.
+      - scenario: >
+          SettingsPanel imports STALE_THRESHOLD and uses it in JSX render scope,
+          but a future refactor moves the constant, breaking the import.
+        likelihood: low
+        impact: low
+        mitigation: >
+          STALE_THRESHOLD is the single source of truth in settingsStore.ts.
+          The import path is explicit and linted.
+    tech_stack: [TypeScript, React, Zustand, Tailwind CSS]
+    test_coverage: null
+
+  # ─── Wave 4 ───────────────────────────────────────────────────────────────
+  - id: task-04
+    title: Extend SettingsPanel tests with store reset and stale-behaviour scenarios
+    description: |
+      File: frontend/src/components/settings/SettingsPanel.test.tsx.
+
+      Change 1 — Fix beforeEach (existing, line 42):
+        Add store reset before vi.clearAllMocks():
+          useSettingsStore.setState({ knownCollections: [] });
+        Import useSettingsStore from '@/stores/settingsStore' at the top.
+
+      Change 2 — Add four new test cases inside the "SettingsPanel" describe block:
+
+      Test A: missCount increments for absent collections
+        - Seed store with knownCollections=[{name:'other_collection',count:7,missCount:0}]
+        - Mock getCollections to return only [{name:'rag_collection',count:42}]
+        - Render <SettingsPanel />, wait for load
+        - Assert store state: knownCollections.find(c=>c.name==='other_collection').missCount === 1
+
+      Test B: stale entry hidden from dropdown at threshold
+        - Seed store with knownCollections=[
+            {name:'rag_collection',count:42,missCount:0},
+            {name:'other_collection',count:7,missCount:15}
+          ]
+        - Mock getCollections to return only [{name:'rag_collection',count:42}]
+        - Render, wait for load
+        - Assert: dropdown has option 'rag_collection', does NOT have option 'other_collection'
+
+      Test C: reappearing collection resets missCount to 0
+        - Seed store with knownCollections=[
+            {name:'rag_collection',count:42,missCount:0},
+            {name:'other_collection',count:7,missCount:14}
+          ]
+        - Mock getCollections to return both collections
+        - Render, wait for load
+        - Assert: store entry for 'other_collection' has missCount === 0
+
+      Test D: stale-save warning shown when selected collection is stale
+        - Seed store with knownCollections=[
+            {name:'rag_collection',count:42,missCount:0},
+            {name:'stale_col',count:0,missCount:15}
+          ]
+        - Mock getConfig to return baseConfig with collection_name='stale_col'
+        - Mock getCollections to return only [{name:'rag_collection',count:42}]
+        - Render, wait for load
+        - Click "Save Settings" button
+        - Assert: warning message text is visible in the DOM
+        - Assert: apiClient.updateConfig was NOT called (vi.mocked check)
+
+      All four tests must pass and must not pollute each other thanks to the
+      beforeEach store reset.
+    wave: 4
+    agent: gem-implementer
+    prototype: false
+    covers: ["frontend/src/components/settings/SettingsPanel.test.tsx"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [task-03]
+    conflicts_with: []
+    context_files:
+      - path: frontend/src/components/settings/SettingsPanel.test.tsx
+        description: Existing test file; beforeEach at line 42
+      - path: frontend/src/stores/settingsStore.ts
+        description: useSettingsStore.setState and STALE_THRESHOLD exports
+      - path: frontend/src/components/settings/SettingsPanel.tsx
+        description: Component under test (after task-03)
+    estimated_effort: medium
+    estimated_files: 1
+    estimated_lines: 80
+    focus_area: test coverage
+    verification:
+      - "pnpm test:unit reports 0 failures"
+      - "All four new tests pass in isolation and in full suite run"
+      - "beforeEach store reset prevents cross-test knownCollections pollution"
+    acceptance_criteria:
+      - "useSettingsStore.setState({ knownCollections: [] }) in beforeEach"
+      - "Test A: missCount increments for absent collections"
+      - "Test B: stale entry (missCount=15) is absent from dropdown"
+      - "Test C: reappearing collection resets missCount to 0"
+      - "Test D: stale-save warning displayed, updateConfig not called"
+      - "pnpm test:unit passes (100% of tests)"
+    failure_modes:
+      - scenario: >
+          Test D relies on config.collection_name being 'stale_col' but the
+          active-collection fallback injection in SettingsPanel adds 'stale_col'
+          to the dropdown with missCount=undefined (0 after coalescing), so it
+          would NOT be filtered by the stale filter — and the save guard checks
+          the store entry, not the DOM. Ensure the save guard reads from
+          knownCollections store (where missCount=15), not from the rendered DOM.
+        likelihood: medium
+        impact: medium
+        mitigation: >
+          The handleSave guard uses knownCollections.find() from the store, so
+          the injected-but-not-stale DOM option does not affect the guard logic.
+          Test D must assert on apiClient.updateConfig call count, not on
+          whether the option is visible.
+      - scenario: >
+          Async store state assertion (Test A and Test C) race with React
+          re-render. The store update happens inside mergeCollections which is
+          called inside a useEffect; waitFor must wrap the store read.
+        likelihood: medium
+        impact: low
+        mitigation: >
+          Use waitFor(() => expect(useSettingsStore.getState().knownCollections
+          .find(...).missCount).toBe(N)) for async assertions.
+    tech_stack: [TypeScript, Vitest, Testing Library, Zustand]
+    test_coverage: "four new stale-behaviour scenarios"
+
+  # ─── Wave 5 ───────────────────────────────────────────────────────────────
+  - id: task-05
+    title: Verify pnpm lint, pnpm test:unit, and pnpm build all pass
+    description: |
+      Working directory: frontend/
+
+      Run the three done-criteria commands in order and confirm all pass:
+        1. pnpm lint          — ESLint must exit 0
+        2. pnpm test:unit     — Vitest must report 0 failures
+        3. pnpm build         — Next.js build must complete without errors
+
+      If any command fails, report the output and do NOT mark this task
+      complete. Route failures back to the appropriate task:
+        - Type errors / lint errors  → task-01 or task-02 or task-03
+        - Test failures              → task-04
+        - Build errors               → task-03 (JSX/render issues)
+
+      Do not modify any source files in this task. This is a read-only
+      verification pass.
+    wave: 5
+    agent: gem-devops
+    prototype: false
+    covers: []
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: [task-04]
+    conflicts_with: []
+    context_files:
+      - path: frontend/package.json
+        description: Script definitions for lint, test:unit, build
+    estimated_effort: small
+    estimated_files: 0
+    estimated_lines: 0
+    focus_area: verification
+    verification:
+      - "pnpm lint exits 0"
+      - "pnpm test:unit exits 0 with 0 failures"
+      - "pnpm build exits 0"
+    acceptance_criteria:
+      - "All three commands exit 0 in the frontend/ directory"
+    failure_modes:
+      - scenario: >
+          pnpm build fails due to Next.js App Router RSC boundary issues if
+          a server component accidentally imports a client-only Zustand store.
+        likelihood: low
+        impact: medium
+        mitigation: >
+          SettingsPanel.tsx already has "use client" at line 1. No new server
+          components are added. Build failure here is unlikely.
+    environment: development
+    requires_approval: false
+    devops_security_sensitive: false
