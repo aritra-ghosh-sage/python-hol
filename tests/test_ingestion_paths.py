@@ -116,6 +116,9 @@ class TestIngestionPathWiring:
         monkeypatch.setattr(api, "_corpus_version", "gen0.n0")
         monkeypatch.setattr(api, "_cache_generation", 0)
         monkeypatch.setattr("api.requests.get", lambda *a, **kw: mock_http_response)
+        # Bypass DNS resolution in the SSRF guard — this test exercises HTML metadata
+        # extraction, not SSRF protection, so return the URL unchanged.
+        monkeypatch.setattr("routers.documents._validate_url_for_ssrf", lambda url: url)
 
         client = TestClient(api.app)
         resp = client.post(
