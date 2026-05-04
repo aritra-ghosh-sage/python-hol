@@ -140,8 +140,8 @@ async def query_knowledge_base(
             {
                 "id": r["id"],
                 "text": r["text"],
-                "source": r["metadata"]["source"],
-                "source_url": r["metadata"].get("source_url"),
+                "source": r.get("metadata", {}).get("source", "unknown"),
+                "source_url": r.get("metadata", {}).get("source_url"),
                 "score": float(r["score"]),
             }
             for r in raw_results

@@ -49,6 +49,7 @@ async def test_query_knowledge_base_returns_results(mock_retriever):
     assert doc["id"] == "doc1"
     assert doc["text"] == "Sample document text"
     assert doc["source"] == "test_doc.txt"
+    assert doc["source_url"] is None
     assert doc["score"] == 0.85
     assert "metadata" not in doc
 
