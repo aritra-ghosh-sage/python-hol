@@ -1,0 +1,807 @@
+---
+# DAG-Based Implementation Plan: MCP Server Integration
+# Generated: 2026-05-04
+# Specification: spec/spec-infrastructure-mcp-server.md
+# Implementation status: spec/mcp-implementation-status.md
+# Context: Core MCP server (mcp_server.py) is fully implemented and tested.
+#          This plan covers all remaining production-readiness enhancements.
+
+meta:
+  title: "MCP Server Integration — Production-Readiness Plan"
+  version: "1.0.0"
+  status: "active"
+  created: "2026-05-04"
+  spec_ref: "spec/spec-infrastructure-mcp-server.md"
+  implementation_ref: "mcp_server.py"
+  test_ref: "tests/test_mcp_server.py"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASES
+# Phase ordering reflects critical-path logic; phases within a wave are
+# independent and may run in parallel.
+#   Wave 0 — Foundation (already done, listed for completeness)
+#   Wave 1 — Security (blocks production HTTP deployment)
+#   Wave 2 — Observability + Additional Tools (independent of each other)
+#   Wave 3 — Deployment (depends on Wave 1 + Wave 2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+phases:
+  - id: wave-0
+    name: "Foundation (Completed)"
+    description: >
+      Core MCP server implementation, protocol compliance, caching, and test
+      suite. All tasks in this wave are ✅ done and serve as DAG roots.
+
+  - id: wave-1
+    name: "Security"
+    description: >
+      Authentication and rate limiting. Blocks any internet-facing HTTP
+      deployment. Must be completed before Wave 3.
+
+  - id: wave-2
+    name: "Observability & Additional Tools"
+    description: >
+      Health check, metrics, tracing, and new MCP tools. Independent of
+      Wave 1; can run concurrently with wave-1 tasks.
+
+  - id: wave-3
+    name: "Deployment"
+    description: >
+      Docker and Kubernetes packaging. Requires Wave 1 security controls
+      and Wave 2 health/metrics endpoints.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPLETED TASKS (Wave 0) — DAG roots, no dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+
+completed_tasks:
+
+  - id: T0-CORE
+    title: "Core MCP server implementation"
+    phase: wave-0
+    status: done
+    files_changed:
+      - mcp_server.py
+      - tests/test_mcp_server.py
+    summary: >
+      FastMCP server with query_knowledge_base and get_config tools,
+      stdio/HTTP transport, three-layer caching, async initialization,
+      full type hints, and 23 passing tests.
+
+  - id: T0-SPEC
+    title: "MCP server specification"
+    phase: wave-0
+    status: done
+    files_changed:
+      - spec/spec-infrastructure-mcp-server.md
+      - spec/mcp-implementation-status.md
+    summary: >
+      Full specification covering requirements, architecture, protocol,
+      security constraints, deployment guide, and future enhancements.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PENDING TASKS
+# ─────────────────────────────────────────────────────────────────────────────
+
+tasks:
+
+  # ───────────────────────────── Wave 1: Security ───────────────────────────
+
+  - id: T1-AUTH
+    title: "HTTP transport authentication (JWT / API key)"
+    phase: wave-1
+    priority: critical
+    status: pending
+    estimated_effort: "2–3 days"
+    depends_on:
+      - T0-CORE        # needs the running server to attach middleware to
+    files:
+      - mcp_server.py          # add auth middleware / dependency
+      - tests/test_mcp_auth.py # new test file
+    file_count: 2
+    description: >
+      Add Bearer-token authentication for the streamable-HTTP transport.
+      Stdio transport remains unauthenticated (process-level isolation is
+      sufficient for local use).
+
+    contract:
+      inputs:
+        - name: MCP_AUTH_TOKEN
+          type: "env var (string)"
+          description: "Secret bearer token; server rejects requests without it."
+        - name: Authorization header
+          type: "HTTP header"
+          format: "Bearer <token>"
+      outputs:
+        - "HTTP 401 on missing or invalid token"
+        - "HTTP 200 pass-through when token matches MCP_AUTH_TOKEN"
+        - "Stdio transport: no change (auth bypass preserved)"
+      invariants:
+        - "Token stored only in environment variable, never in source code"
+        - "Token comparison uses hmac.compare_digest() to prevent timing attacks"
+        - "Stdio transport is never gated by auth checks"
+
+    acceptance_criteria:
+      - "Bearer token middleware rejects requests with missing/wrong token (HTTP 401)"
+      - "Valid token allows access (HTTP 200)"
+      - "Stdio transport unaffected"
+      - "MCP_AUTH_TOKEN='' or unset → server logs a warning and disables auth (dev mode)"
+      - "All existing tests pass unchanged"
+      - "New test file contains ≥ 5 tests covering: missing token, wrong token, valid token, empty-env dev mode, stdio bypass"
+      - "`uv run ruff check .` passes, `mypy mcp_server.py` passes"
+
+    implementation_notes: >
+      Use a FastMCP middleware hook (or Starlette middleware if FastMCP exposes
+      the underlying ASGI app) to intercept HTTP requests before they reach the
+      tool dispatcher. Keep middleware logic in a standalone function so it can
+      be unit-tested independently of the server lifecycle.
+
+  - id: T1-RATELIMIT
+    title: "Per-IP / per-token rate limiting for HTTP transport"
+    phase: wave-1
+    priority: critical
+    status: pending
+    estimated_effort: "1 day"
+    depends_on:
+      - T1-AUTH        # rate-limit key uses authenticated identity when available
+    files:
+      - mcp_server.py
+      - tests/test_mcp_ratelimit.py
+    file_count: 2
+    description: >
+      Enforce request quotas on the HTTP transport to prevent abuse.
+      Default: 60 requests / minute / IP.  Configurable via env vars.
+
+    contract:
+      inputs:
+        - name: MCP_RATE_LIMIT_RPM
+          type: "env var (int, default 60)"
+          description: "Max requests per minute per client IP."
+        - name: MCP_RATE_LIMIT_BURST
+          type: "env var (int, default 10)"
+          description: "Burst allowance above RPM."
+      outputs:
+        - "HTTP 429 with Retry-After header when limit exceeded"
+        - "Requests within quota processed normally"
+        - "Stdio transport: no rate limiting applied"
+      invariants:
+        - "Rate limiter state is in-process (no Redis dependency for limits)"
+        - "Burst allowance does not exceed 5× RPM"
+        - "Stdio transport always bypasses the limiter"
+
+    acceptance_criteria:
+      - "Exceeding RPM returns HTTP 429 with Retry-After header"
+      - "Requests within quota return HTTP 200"
+      - "MCP_RATE_LIMIT_RPM env var overrides default"
+      - "Stdio transport unaffected"
+      - "All existing tests pass unchanged"
+      - "New test file contains ≥ 4 tests: under-limit, at-limit, over-limit, env-var override"
+      - "`uv run ruff check .` and `mypy mcp_server.py` pass"
+
+  # ─────────────── Wave 2: Observability & Additional Tools ────────────────
+
+  - id: T2-HEALTH
+    title: "Health check endpoint (/health)"
+    phase: wave-2
+    priority: high
+    status: pending
+    estimated_effort: "0.5 days"
+    depends_on:
+      - T0-CORE
+    files:
+      - mcp_server.py
+      - tests/test_mcp_health.py
+    file_count: 2
+    description: >
+      Add a lightweight GET /health HTTP endpoint that reports liveness and
+      readiness (retriever initialized, cache backend reachable).
+      Required by Docker and Kubernetes health probes.
+
+    contract:
+      inputs:
+        - "None (unauthenticated — liveness probes must not require tokens)"
+      outputs:
+        - name: healthy response
+          type: "JSON"
+          schema: >
+            {
+              "status": "ok",
+              "retriever_initialized": true,
+              "cache_backend": "memory|redis|none",
+              "collection_name": "<string>",
+              "corpus_version": "<string>"
+            }
+          http_status: 200
+        - name: unhealthy response
+          type: "JSON"
+          schema: >
+            {
+              "status": "error",
+              "detail": "<reason>"
+            }
+          http_status: 503
+      invariants:
+        - "Endpoint responds in < 100 ms"
+        - "Does not trigger retrieval pipeline"
+        - "Available only on HTTP transport (no-op for stdio)"
+
+    acceptance_criteria:
+      - "GET /health returns 200 + JSON when retriever is initialized"
+      - "GET /health returns 503 + JSON when retriever is not initialized"
+      - "Response includes retriever_initialized, cache_backend, corpus_version"
+      - "Endpoint is exempt from authentication middleware (T1-AUTH)"
+      - "New test file contains ≥ 3 tests: healthy, unhealthy, fields present"
+      - "`uv run ruff check .` and `mypy mcp_server.py` pass"
+
+  - id: T2-METRICS
+    title: "Prometheus metrics exposition"
+    phase: wave-2
+    priority: medium
+    status: pending
+    estimated_effort: "1–2 days"
+    depends_on:
+      - T2-HEALTH      # reuses the HTTP transport setup validated in T2-HEALTH
+    files:
+      - mcp_server.py
+      - tests/test_mcp_metrics.py
+    file_count: 2
+    description: >
+      Expose a GET /metrics endpoint in Prometheus text format.  Instruments
+      request counts, durations, cache hit/miss/error counts, and retrieval
+      duration histograms.
+
+    contract:
+      inputs:
+        - "None (unauthenticated — Prometheus scrape must not require bearer token)"
+      outputs:
+        - name: metrics text
+          type: "text/plain; version=0.0.4"
+          metrics:
+            - "mcp_requests_total{tool, status}"
+            - "mcp_request_duration_seconds{tool}"
+            - "mcp_cache_operations_total{operation: hit|miss|error}"
+            - "mcp_retrieval_duration_seconds"
+      invariants:
+        - "Metrics are incremented atomically"
+        - "Counter labels are stable (no high-cardinality labels)"
+        - "Available only on HTTP transport"
+
+    acceptance_criteria:
+      - "GET /metrics returns 200 with Content-Type text/plain"
+      - "mcp_requests_total increments on each tool call"
+      - "mcp_cache_operations_total increments on cache hit/miss/error"
+      - "Endpoint exempt from auth middleware"
+      - "New test file contains ≥ 4 tests: endpoint reachable, counter increment, histogram present, no auth required"
+      - "`uv run ruff check .` and `mypy mcp_server.py` pass"
+      - "prometheus_client added to pyproject.toml dependencies"
+
+  - id: T2-TRACING
+    title: "OpenTelemetry distributed tracing"
+    phase: wave-2
+    priority: medium
+    status: pending
+    estimated_effort: "2–3 days"
+    depends_on:
+      - T0-CORE
+    files:
+      - mcp_server.py
+      - tests/test_mcp_tracing.py
+    file_count: 2
+    description: >
+      Instrument mcp_server.py with OpenTelemetry spans covering the full
+      request path: auth check → cache read → retrieval → cache write →
+      response serialization.  Exports to OTLP endpoint (Jaeger/Zipkin).
+
+    contract:
+      inputs:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          type: "env var (string, optional)"
+          description: "OTLP endpoint URL; tracing disabled when absent."
+        - name: OTEL_SERVICE_NAME
+          type: "env var (string, default: hybrid-rag-mcp)"
+      outputs:
+        - "Spans exported to OTLP endpoint with operation names and status codes"
+        - "No performance overhead when OTEL_EXPORTER_OTLP_ENDPOINT is unset"
+      invariants:
+        - "Tracing is opt-in (no env var → no overhead)"
+        - "Span attributes never contain raw query text (privacy)"
+        - "Span status=ERROR only when an exception propagates to the caller"
+
+    acceptance_criteria:
+      - "When OTEL_EXPORTER_OTLP_ENDPOINT is set, spans are created for each tool call"
+      - "Span attributes include tool name, cache_hit boolean, result_count"
+      - "Span attributes do NOT include raw query text"
+      - "When env var is absent, no OTEL SDK initialization occurs"
+      - "New test file contains ≥ 4 tests using in-memory exporter"
+      - "opentelemetry-sdk and opentelemetry-exporter-otlp added to pyproject.toml"
+      - "`uv run ruff check .` and `mypy mcp_server.py` pass"
+
+  - id: T2-INGEST
+    title: "ingest_documents MCP tool"
+    phase: wave-2
+    priority: medium
+    status: pending
+    estimated_effort: "3–4 days"
+    depends_on:
+      - T0-CORE
+    files:
+      - mcp_server.py
+      - tests/test_mcp_ingest.py
+    file_count: 2
+    description: >
+      Add an `ingest_documents` MCP tool that allows callers to upload plain
+      text documents directly via the MCP protocol.  Performs chunking,
+      embedding, and ChromaDB ingestion, then invalidates the L1 cache.
+
+    contract:
+      inputs:
+        - name: documents
+          type: "list[dict]"
+          schema: >
+            [
+              {
+                "text": "<string, required, 1-10000 chars>",
+                "source": "<string, required>",
+                "source_url": "<string, optional>"
+              }
+            ]
+          max_items: 100
+      outputs:
+        - name: ingestion result
+          type: "dict"
+          schema: >
+            {
+              "ingested_count": <int>,
+              "collection_name": "<string>",
+              "corpus_version": "<string>"
+            }
+      invariants:
+        - "Empty documents list raises ValueError"
+        - "Individual documents exceeding 10 000 chars are rejected"
+        - "_cache_generation is incremented after successful ingestion"
+        - "_corpus_version is recalculated after ingestion"
+        - "Tool is atomic: all documents ingested or none (ChromaDB batch add)"
+
+    acceptance_criteria:
+      - "Tool registered and discoverable via tools/list"
+      - "Valid input returns ingested_count matching len(documents)"
+      - "Empty list raises ValueError with descriptive message"
+      - "Document text > 10 000 chars raises ValueError"
+      - "_cache_generation incremented after ingestion (cache busted)"
+      - "New test file contains ≥ 6 tests: happy path, empty list, oversized doc, cache bust, collection name returned, corpus_version updated"
+      - "`uv run ruff check .` and `mypy mcp_server.py` pass"
+
+  - id: T2-UPDATE-CONFIG
+    title: "update_config MCP tool"
+    phase: wave-2
+    priority: low
+    status: pending
+    estimated_effort: "1 day"
+    depends_on:
+      - T0-CORE
+    files:
+      - mcp_server.py
+      - tests/test_mcp_update_config.py
+    file_count: 2
+    description: >
+      Add an `update_config` MCP tool for runtime configuration updates
+      without server restart.  Persists the new config to disk and
+      invalidates the L1 cache.
+
+    contract:
+      inputs:
+        - name: config_updates
+          type: "dict"
+          valid_keys:
+            - semantic_top_k (int, 1–50)
+            - keyword_top_k (int, 1–50)
+            - final_top_k (int, 1–20)
+            - semantic_weight (float, 0.0–1.0)
+            - keyword_weight (float, 0.0–1.0)
+            - enable_rerank (bool)
+            - pre_rerank_top_k (int, 1–50)
+      outputs:
+        - name: updated config
+          type: "dict"
+          description: "Full config dict after applying updates (mirrors get_config output)"
+      invariants:
+        - "Unknown keys raise ValueError listing valid keys"
+        - "Out-of-range values raise ValueError with constraint details"
+        - "_cache_generation incremented to bust L1 cache"
+        - "Uses HybridRetrieverConfig.update() (immutable dataclass replace)"
+
+    acceptance_criteria:
+      - "Valid update returns new full config dict"
+      - "Unknown key raises ValueError"
+      - "Out-of-range value raises ValueError"
+      - "_cache_generation incremented after successful update"
+      - "New test file contains ≥ 5 tests: valid update, unknown key, out-of-range, cache bust, get_config reflects change"
+      - "`uv run ruff check .` and `mypy mcp_server.py` pass"
+
+  - id: T2-LIST-COLLECTIONS
+    title: "list_collections MCP tool"
+    phase: wave-2
+    priority: low
+    status: pending
+    estimated_effort: "0.5 days"
+    depends_on:
+      - T0-CORE
+    files:
+      - mcp_server.py
+      - tests/test_mcp_list_collections.py
+    file_count: 2
+    description: >
+      Add a `list_collections` MCP tool that enumerates all ChromaDB
+      collections available in the knowledge DB directory.
+
+    contract:
+      inputs: []
+      outputs:
+        - name: collections list
+          type: "dict"
+          schema: >
+            {
+              "collections": ["<name>", ...],
+              "active_collection": "<name>",
+              "total": <int>
+            }
+      invariants:
+        - "active_collection always matches _config.collection_name"
+        - "Result is read-only (does not modify state)"
+
+    acceptance_criteria:
+      - "Tool returns list of collection names and active_collection"
+      - "active_collection matches current _config.collection_name"
+      - "Empty DB returns collections: [] and total: 0"
+      - "New test file contains ≥ 3 tests: non-empty DB, empty DB, active_collection field"
+      - "`uv run ruff check .` and `mypy mcp_server.py` pass"
+
+  # ──────────────────────── Wave 3: Deployment ─────────────────────────────
+
+  - id: T3-DOCKER
+    title: "Dockerfile for MCP server"
+    phase: wave-3
+    priority: medium
+    status: pending
+    estimated_effort: "1 day"
+    depends_on:
+      - T1-AUTH        # container must include auth controls before being published
+      - T1-RATELIMIT   # rate limiting must be present in the image
+      - T2-HEALTH      # health check required for Docker HEALTHCHECK instruction
+    files:
+      - Dockerfile.mcp
+      - .dockerignore
+    file_count: 2
+    description: >
+      Multi-stage Dockerfile for the MCP server.  Stage 1: build/compile
+      dependencies.  Stage 2: minimal runtime image.  Exposes port 8000,
+      includes HEALTHCHECK, and runs as non-root user.
+
+    contract:
+      inputs:
+        - name: MCP_HOST
+          type: "env var (string, default 0.0.0.0)"
+        - name: MCP_PORT
+          type: "env var (int, default 8000)"
+        - name: MCP_AUTH_TOKEN
+          type: "env var (string, required for HTTP)"
+        - name: MCP_TRANSPORT
+          type: "env var (string, default streamable-http)"
+      outputs:
+        - "Docker image: hybrid-rag-mcp:<version>"
+        - "Container listens on MCP_PORT"
+        - "HEALTHCHECK: GET /health every 30s, timeout 5s, 3 retries"
+      invariants:
+        - "Final image runs as non-root user (uid 1000)"
+        - "No secrets baked into the image layers"
+        - "Image size < 2 GB"
+        - ".knowledge_db/ volume mount required for ChromaDB persistence"
+
+    acceptance_criteria:
+      - "`docker build -f Dockerfile.mcp -t hybrid-rag-mcp:test .` succeeds"
+      - "Container starts and GET /health returns 200"
+      - "`docker inspect` shows HEALTHCHECK configuration"
+      - "Running user is not root"
+      - "Image layers contain no .env or secrets"
+
+  - id: T3-K8S
+    title: "Kubernetes manifests for MCP server"
+    phase: wave-3
+    priority: medium
+    status: pending
+    estimated_effort: "2 days"
+    depends_on:
+      - T3-DOCKER      # Docker image must exist before writing manifest image refs
+      - T2-METRICS     # HPA uses custom metrics from Prometheus
+    files:
+      - deploy/k8s/mcp-server/deployment.yaml
+      - deploy/k8s/mcp-server/service.yaml
+      - deploy/k8s/mcp-server/hpa.yaml
+    file_count: 3
+    description: >
+      Kubernetes manifests for deploying the MCP server as a Deployment with
+      a ClusterIP Service, HorizontalPodAutoscaler, and optional Ingress.
+      Secrets managed via Kubernetes Secret (not ConfigMap).
+
+    contract:
+      inputs:
+        - name: hybrid-rag-mcp image
+          type: "Docker image"
+          source: "Docker registry (output of T3-DOCKER)"
+        - name: mcp-server-secret
+          type: "Kubernetes Secret"
+          keys: ["MCP_AUTH_TOKEN", "REDIS_URL"]
+      outputs:
+        - "Deployment: 2 replicas, rolling update, resource limits"
+        - "Service: ClusterIP on port 8000"
+        - "HPA: min 2, max 10 replicas, CPU target 70%"
+      invariants:
+        - "Secrets mounted as env vars from Secret object (never ConfigMap)"
+        - "Liveness probe: GET /health, 30s initial delay"
+        - "Readiness probe: GET /health, 10s initial delay"
+        - "Resources: requests cpu=250m memory=512Mi, limits cpu=1 memory=2Gi"
+        - "ChromaDB PVC mounted at /app/.knowledge_db"
+
+    acceptance_criteria:
+      - "`kubectl apply --dry-run=client -f deploy/k8s/mcp-server/` succeeds"
+      - "Deployment spec includes liveness and readiness probes"
+      - "HPA spec references CPU metric"
+      - "Secret references present in Deployment env (no plaintext secrets)"
+      - "Resource requests and limits defined on all containers"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEPENDENCY GRAPH (textual DAG)
+# ─────────────────────────────────────────────────────────────────────────────
+# Legend: --> means "is required by"
+#
+#  T0-CORE ──────────────────────────────────────────────────────────────────┐
+#     │                                                                       │
+#     ├──> T1-AUTH ──> T1-RATELIMIT ──────────────────────────────────────┐  │
+#     │                                                                    │  │
+#     ├──> T2-HEALTH ──> T2-METRICS ──────────────────────────────────┐   │  │
+#     │                                                                │   │  │
+#     ├──> T2-TRACING                                                 │   │  │
+#     │                                                               │   │  │
+#     ├──> T2-INGEST                                                  │   │  │
+#     │                                                               │   │  │
+#     ├──> T2-UPDATE-CONFIG                                           │   │  │
+#     │                                                               │   │  │
+#     └──> T2-LIST-COLLECTIONS                                        │   │  │
+#                                                                     │   │  │
+#  T0-SPEC ────────────────────────────────────────────────────────────   │  │
+#                                                                          │  │
+#     T1-AUTH, T1-RATELIMIT, T2-HEALTH ──────────────> T3-DOCKER ─────────┘  │
+#                                                                             │
+#     T3-DOCKER, T2-METRICS ──────────────────────────> T3-K8S ──────────────┘
+#
+# Critical path: T0-CORE → T1-AUTH → T1-RATELIMIT → T3-DOCKER → T3-K8S
+
+dependency_graph:
+  edges:
+    - from: T0-CORE
+      to: T1-AUTH
+    - from: T1-AUTH
+      to: T1-RATELIMIT
+    - from: T0-CORE
+      to: T2-HEALTH
+    - from: T2-HEALTH
+      to: T2-METRICS
+    - from: T0-CORE
+      to: T2-TRACING
+    - from: T0-CORE
+      to: T2-INGEST
+    - from: T0-CORE
+      to: T2-UPDATE-CONFIG
+    - from: T0-CORE
+      to: T2-LIST-COLLECTIONS
+    - from: T1-AUTH
+      to: T3-DOCKER
+    - from: T1-RATELIMIT
+      to: T3-DOCKER
+    - from: T2-HEALTH
+      to: T3-DOCKER
+    - from: T3-DOCKER
+      to: T3-K8S
+    - from: T2-METRICS
+      to: T3-K8S
+
+  critical_path:
+    - T0-CORE
+    - T1-AUTH
+    - T1-RATELIMIT
+    - T3-DOCKER
+    - T3-K8S
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RISK ANALYSIS
+# ─────────────────────────────────────────────────────────────────────────────
+
+risks:
+
+  - id: R1
+    title: "FastMCP API does not expose ASGI middleware hooks"
+    probability: medium
+    impact: high
+    affected_tasks: [T1-AUTH, T1-RATELIMIT, T2-HEALTH, T2-METRICS]
+    description: >
+      FastMCP's public API may not provide a stable way to inject Starlette
+      middleware or add custom HTTP routes (/health, /metrics).  If the
+      internal ASGI app is not accessible, auth and observability tasks
+      require either a wrapper process or waiting for upstream SDK support.
+    mitigation: >
+      1. Inspect FastMCP source for .app property before coding.
+      2. If not available, wrap mcp_server.py in a Starlette app that mounts
+         FastMCP as a sub-application alongside /health and /metrics routes.
+      3. Pin mcp SDK version in pyproject.toml to avoid unexpected breakage.
+    contingency: >
+      If wrapping is needed, add a single wrapper module (mcp_http_app.py,
+      ≤ 150 lines) that composes FastMCP + auth middleware + health/metrics
+      routes without touching mcp_server.py core logic.
+
+  - id: R2
+    title: "ChromaDB persistence conflicts in multi-replica Kubernetes deployment"
+    probability: high
+    impact: high
+    affected_tasks: [T3-K8S]
+    description: >
+      Multiple MCP server pods sharing a single PVC (ReadWriteMany) may
+      corrupt the ChromaDB SQLite WAL under concurrent writes, especially
+      during ingest_documents calls (T2-INGEST).
+    mitigation: >
+      1. Document that write operations (ingest) must route to a single
+         designated primary pod (ReadWriteOnce PVC).
+      2. Consider splitting read and write replicas (separate Deployments).
+      3. Long-term: migrate ChromaDB to its HTTP API mode (Chroma server)
+         to support true horizontal scaling.
+    contingency: >
+      If ReadWriteMany causes corruption in testing, default the Kubernetes
+      manifest to a single replica (min: 1, max: 1) until Chroma server mode
+      is implemented, and document this limitation prominently.
+
+  - id: R3
+    title: "Token-based auth insufficient for multi-tenant deployments"
+    probability: low
+    impact: medium
+    affected_tasks: [T1-AUTH]
+    description: >
+      A single shared MCP_AUTH_TOKEN provides no per-user identity or
+      audit trail.  If the system needs to serve multiple tenants, a
+      shared secret is not sufficient.
+    mitigation: >
+      Implement T1-AUTH with a clean abstraction (AuthProvider interface)
+      so that a future JWT-based provider can replace the static token
+      without changing the middleware integration point.
+    contingency: >
+      Document clearly that the static token model is suitable only for
+      single-tenant or internal deployments.  Create a follow-up issue for
+      JWT/OIDC support if multi-tenancy is required.
+
+  - id: R4
+    title: "Prometheus client adds significant startup latency"
+    probability: low
+    impact: low
+    affected_tasks: [T2-METRICS]
+    description: >
+      The prometheus_client library initializes a global registry on import,
+      which may slow server startup or conflict with test parallelism
+      (shared global state across test workers).
+    mitigation: >
+      1. Use a lazily-initialized registry (create_registry_on_first_request).
+      2. In tests, use a fresh CollectorRegistry() per test to avoid cross-
+         test pollution.
+    contingency: >
+      If startup latency is measurable (> 200 ms), expose metrics via a
+      separate sidecar (prometheus/node-exporter pattern) rather than
+      instrumenting mcp_server.py directly.
+
+  - id: R5
+    title: "ingest_documents introduces data-loss risk on partial failure"
+    probability: medium
+    impact: high
+    affected_tasks: [T2-INGEST]
+    description: >
+      ChromaDB's add() call may partially succeed if the batch is large
+      and the process is interrupted mid-way.  This leaves the collection
+      in an inconsistent state and poisons the corpus version token.
+    mitigation: >
+      1. Use ChromaDB's upsert() with deterministic IDs (SHA-256 of text)
+         so re-runs are idempotent.
+      2. Cap batch size at 50 documents; loop in smaller batches.
+      3. Validate all documents before any ChromaDB calls (fail fast).
+    contingency: >
+      If idempotency is not achievable, add a pre-flight dry-run flag
+      (dry_run: bool = False) to validate without writing, enabling
+      callers to verify before committing.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRE-MORTEM
+# ─────────────────────────────────────────────────────────────────────────────
+# Imagine it is 3 months after this plan was executed and the MCP server
+# production deployment has failed.  What went wrong?
+
+pre_mortem:
+  scenario: >
+    It is 2026-08-04.  The MCP HTTP server has been in production for six
+    weeks.  A post-incident review reveals two simultaneous failures that
+    brought the service down for 4 hours.
+
+  failure_modes:
+
+    - id: FM-1
+      title: "Authentication bypass via OPTIONS preflight"
+      description: >
+        The auth middleware (T1-AUTH) correctly checks the Authorization header
+        on POST /mcp requests, but CORS preflight OPTIONS requests were
+        accidentally excluded from auth checks "to avoid CORS issues."
+        An attacker discovered that sending a malformed MCP request with
+        method=OPTIONS bypassed authentication entirely.
+      root_cause: "Middleware excluded OPTIONS from auth without a security review."
+      prevention:
+        - "Require security review sign-off for any auth bypass condition."
+        - "Add an integration test that sends OPTIONS with no token and asserts 401."
+        - "Use a denylist-free auth approach: authenticate all methods, let CORS preflight use a dedicated unauthenticated /cors-preflight endpoint."
+
+    - id: FM-2
+      title: "ChromaDB corruption under K8s rolling update with shared PVC"
+      description: >
+        During a rolling deployment (T3-K8S), two pods briefly shared the same
+        ReadWriteMany PVC.  The outgoing pod had an open SQLite WAL transaction
+        when the incoming pod started writing.  The WAL became corrupted;
+        ChromaDB raised sqlite3.DatabaseError on every subsequent query.
+      root_cause: "ReadWriteMany PVC not safe for simultaneous ChromaDB writers (Risk R2 materialized)."
+      prevention:
+        - "Default K8s manifests to ReadWriteOnce PVC and single-replica deployment."
+        - "Add a pre-upgrade hook that drains all in-flight queries before terminating the old pod (terminationGracePeriodSeconds: 60)."
+        - "Add a startup probe that validates ChromaDB integrity before pod becomes Ready."
+        - "Address R2 mitigation: migrate to Chroma HTTP server mode for multi-replica."
+
+    - id: FM-3
+      title: "Rate limiter state lost on pod restart — burst abuse"
+      description: >
+        The in-process rate limiter (T1-RATELIMIT) stores per-IP counters in
+        a Python dict.  A pod crash-loop reset all counters every 30 seconds,
+        effectively giving abusers unlimited burst capacity during instability.
+      root_cause: "In-memory rate limit state is not durable and not shared across replicas."
+      prevention:
+        - "Document clearly that in-process rate limiting is best-effort (not cryptographically enforced)."
+        - "For production multi-replica deployments, offload rate limiting to the ingress layer (nginx, Kong, AWS API Gateway)."
+        - "Add a Redis-backed rate limit option (reuse existing Redis infrastructure from L1 cache)."
+
+    - id: FM-4
+      title: "Health endpoint false-positive — unhealthy pods declared ready"
+      description: >
+        The /health endpoint (T2-HEALTH) returned 200 as soon as the retriever
+        object was assigned, even before the ChromaDB collection metadata was
+        fully loaded.  The Kubernetes readiness probe marked pods Ready while
+        the first few query requests were still failing with 'collection not found'.
+      root_cause: "Readiness ≠ liveness: the health check did not probe ChromaDB reachability."
+      prevention:
+        - "Health check must execute a ChromaDB heartbeat call (collection.count()) to confirm DB is responsive."
+        - "Add a separate liveness probe (basic ping) vs. readiness probe (full ChromaDB check)."
+        - "Test the health endpoint after simulating ChromaDB unavailability."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GLOBAL CONSTRAINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+constraints:
+  - "Each task modifies ≤ 3 files"
+  - "Each changed file must remain ≤ 300 lines after the task is complete (excluding test files which may be longer)"
+  - "All new code must pass: uv run ruff check . && pytest tests/ -v"
+  - "Type hints required on all new functions (mypy mcp_server.py passes)"
+  - "No bare except Exception blocks except at fail-open cache boundaries"
+  - "Google-style docstrings on all new public functions"
+  - "No print() statements — use logger"
+  - "__all__ updated in hybrid_rag/__init__.py if any new public symbols are added"
+
+quality_gates:
+  per_task:
+    - "uv run ruff check . — zero errors"
+    - "pytest tests/ -v — 100% pass rate"
+    - "mypy mcp_server.py — zero errors"
+  per_wave:
+    - "pytest tests/ -v --cov=mcp_server — ≥ 80% coverage"
+  on_completion:
+    - "All acceptance criteria checked off"
+    - "spec/mcp-implementation-status.md updated to reflect completed tasks"
+    - "CHANGELOG.md updated"
