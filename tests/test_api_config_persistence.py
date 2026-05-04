@@ -7,8 +7,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from api import app, initialize_retriever
-from hybrid_rag import KNOWLEDGE_DB_DIRECTORY
+from api import app
 
 
 @pytest.fixture
@@ -80,22 +79,19 @@ class TestConfigPersistenceAPI:
         # Now initialize with patched directory
         with patch("api.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db):
             with patch("hybrid_rag.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db):
-                with patch(
-                    "hybrid_rag.persistence.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db
-                ):
-                    # Create new app instance to trigger startup
-                    from api import app as new_app
+                # Create new app instance to trigger startup
+                from api import app as new_app
 
-                    client = TestClient(new_app)
+                client = TestClient(new_app)
 
-                    # Query config
-                    response = client.get("/config")
-                    assert response.status_code == 200
+                # Query config
+                response = client.get("/config")
+                assert response.status_code == 200
 
-                    data = response.json()
-                    assert data["semantic_weight"] == 0.9
-                    assert data["keyword_weight"] == 0.1
-                    assert data["enable_rerank"] is False
+                data = response.json()
+                assert data["semantic_weight"] == 0.9
+                assert data["keyword_weight"] == 0.1
+                assert data["enable_rerank"] is False
 
     def test_default_config_when_no_persisted_file(self, client_with_temp_db):
         """Test that default config is used when no persisted file exists."""

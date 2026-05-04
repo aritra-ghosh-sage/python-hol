@@ -1252,8 +1252,12 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
             save_config_to_disk(_config, KNOWLEDGE_DB_DIRECTORY)
             logger.info("Configuration persisted to disk")
         except Exception as e:
-            logger.warning(f"Failed to persist configuration to disk: {e}")
-            # Non-fatal: continue even if persistence fails
+            logger.error(f"Failed to persist configuration to disk: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Configuration updated in memory but could not be persisted to disk. "
+                "Settings will revert on restart.",
+            )
 
         logger.info("Configuration updated successfully")
         return ConfigResponse(

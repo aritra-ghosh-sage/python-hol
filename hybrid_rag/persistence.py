@@ -2,10 +2,12 @@
 
 import json
 import logging
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 from .config import HybridRetrieverConfig
+from .constants import KNOWLEDGE_DB_DIRECTORY
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +17,7 @@ __all__ = [
 ]
 
 
-def get_config_file_path(persist_dir: str = "./knowledge_db") -> Path:
+def get_config_file_path(persist_dir: str = KNOWLEDGE_DB_DIRECTORY) -> Path:
     """Get the path to the config file.
 
     Args:
@@ -28,7 +30,7 @@ def get_config_file_path(persist_dir: str = "./knowledge_db") -> Path:
 
 
 def save_config_to_disk(
-    config: HybridRetrieverConfig, persist_dir: str = "./knowledge_db"
+    config: HybridRetrieverConfig, persist_dir: str = KNOWLEDGE_DB_DIRECTORY
 ) -> None:
     """Save configuration to disk as JSON.
 
@@ -49,12 +51,19 @@ def save_config_to_disk(
     config_path = get_config_file_path(persist_dir)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write to temp file first for atomic operation
-    temp_path = config_path.with_suffix(".tmp")
+    # Write to a unique temp file in the same directory so that the final
+    # os.replace() is an atomic same-filesystem rename.  Using a unique name
+    # per call means concurrent writers never clobber each other's temp file;
+    # the last os.replace() wins, keeping the persisted JSON structurally valid.
+    fd, tmp_name = tempfile.mkstemp(
+        dir=config_path.parent, prefix="config.", suffix=".tmp"
+    )
+    temp_path = Path(tmp_name)
     try:
-        with open(temp_path, "w") as f:
+        with open(fd, "w") as f:
             json.dump(config.to_dict(), f, indent=2)
-        # Atomic rename
+        # Atomic rename — guaranteed same filesystem because temp is in the
+        # same directory as the target.
         temp_path.replace(config_path)
         logger.info(f"Configuration saved to {config_path}")
     except Exception as e:
@@ -66,7 +75,7 @@ def save_config_to_disk(
 
 
 def load_config_from_disk(
-    persist_dir: str = "./knowledge_db",
+    persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
 ) -> Optional[HybridRetrieverConfig]:
     """Load configuration from disk.
 
