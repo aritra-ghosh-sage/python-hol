@@ -1,3 +1,4 @@
+
 """FastAPI REST API for Hybrid RAG Retrieval Service.
 
 This module provides a production-ready REST API for the hybrid RAG library,
@@ -41,9 +42,11 @@ from contextlib import asynccontextmanager
 
 import chromadb
 import requests
-from fastapi import FastAPI, HTTPException, WebSocketDisconnect, WebSocket
+from fastapi import Body, FastAPI, HTTPException, WebSocketDisconnect, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from pydantic import BaseModel as PydanticBaseModel
 
 from hybrid_rag import (
     HybridRetriever,
@@ -958,6 +961,90 @@ app.add_middleware(
 )
 logger.info(f"CORS enabled for origins: {allow_origins}")
 
+
+@app.websocket("/ws/chat")
+async def websocket_chat(websocket: WebSocket) -> None:
+    """WebSocket endpoint for real-time document queries.
+
+    Client sends: {"query": str, "enable_rerank": bool?}
+    Server sends (in sequence):
+      - {"type": "status", "message": str}
+      - {"type": "results", "query": str, "results": [...], "total_results": int}
+      - {"type": "error", "message": str} (on failure)
+    """
+    await websocket.accept()
+    logger.info("WebSocket client connected")
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            query = data.get("query", "").strip()
+            enable_rerank = data.get("enable_rerank")
+
+            if not query or len(query) < 1 or len(query) > 500:
+                error_msg = WsErrorMessage(
+                    message="Query must be between 1 and 500 characters"
+                )
+                await websocket.send_json(error_msg.model_dump())
+                continue
+
+            if _retriever is None or _config is None:
+                error_msg = WsErrorMessage(message="Retriever not initialized")
+                await websocket.send_json(error_msg.model_dump())
+                continue
+
+            try:
+                status_msg = WsStatusMessage(message="Retrieving documents...")
+                await websocket.send_json(status_msg.model_dump())
+
+                ws_correlation_id = str(uuid.uuid4())
+                ws_cache_status_out: list[str] = []
+                results = _shared_retrieve_documents(
+                    query,
+                    enable_rerank=enable_rerank,
+                    correlation_id=ws_correlation_id,
+                    _out_cache_status=ws_cache_status_out,
+                )
+                doc_results = _to_filtered_document_results(
+                    results, min_score_threshold=0.40
+                )
+
+                _raw_status = ws_cache_status_out[0] if ws_cache_status_out else "MISS"
+                ws_cache_status: Literal["HIT", "MISS", "ERROR"] = (
+                    _raw_status if _raw_status in ("HIT", "MISS", "ERROR") else "MISS"
+                )
+
+                results_msg = WsResultsMessage(
+                    query=query,
+                    results=doc_results,
+                    total_results=len(doc_results),
+                    cache_status=ws_cache_status,
+                )
+                await websocket.send_json(results_msg.model_dump())
+                logger.info(
+                    f"WebSocket query succeeded: {query[:50]}... ({len(doc_results)} results after filtering)"
+                )
+
+            except RetrievalError as e:
+                logger.error(f"WebSocket retrieval error: {e}")
+                error_msg = WsErrorMessage(message=f"Retrieval failed: {str(e)}")
+                await websocket.send_json(error_msg.model_dump())
+            except Exception as e:
+                logger.error(f"WebSocket unexpected error: {e}")
+                error_msg = WsErrorMessage(message="An unexpected error occurred")
+                await websocket.send_json(error_msg.model_dump())
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        try:
+            error_msg = WsErrorMessage(message="Connection error")
+            await websocket.send_json(error_msg.model_dump())
+        except Exception:
+            pass
+
+
 @app.get(
     "/health",
     response_model=HealthResponse,
@@ -1371,99 +1458,117 @@ async def get_cache_stats() -> LayeredCacheStatsResponse:
 
 
 
-# WebSocket endpoint for real-time chat
-@app.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket) -> None:
-    """WebSocket endpoint for real-time document queries.
 
-    Client sends: {"query": str, "enable_rerank": bool?}
-    Server sends (in sequence):
-      - {"type": "status", "message": str}
-      - {"type": "results", "query": str, "results": [...], "total_results": int}
-      - {"type": "error", "message": str} (on failure)
-    """
-    await websocket.accept()
-    logger.info("WebSocket client connected")
+# --- MCP Protocol Endpoints ---
 
-    try:
-        while True:
-            # Receive query from client
-            data = await websocket.receive_json()
-            query = data.get("query", "").strip()
-            enable_rerank = data.get("enable_rerank")
+class MCPHealthResponse(PydanticBaseModel):
+    status: str = "ok"
 
-            # Validate query
-            if not query or len(query) < 1 or len(query) > 500:
-                error_msg = WsErrorMessage(
-                    message="Query must be between 1 and 500 characters"
-                )
-                await websocket.send_json(error_msg.model_dump())
-                continue
+@app.get("/mcp/health", response_model=MCPHealthResponse, tags=["MCP"], summary="MCP health check")
+async def mcp_health():
+    return MCPHealthResponse()
 
-            if _retriever is None or _config is None:
-                error_msg = WsErrorMessage(message="Retriever not initialized")
-                await websocket.send_json(error_msg.model_dump())
-                continue
+class MCPConfigResponse(PydanticBaseModel):
+    semantic_top_k: int
+    keyword_top_k: int
+    final_top_k: int
+    semantic_weight: float
+    keyword_weight: float
+    enable_rerank: bool
+    pre_rerank_top_k: int
+    collection_name: str
 
-            try:
-                # Send initial status
-                status_msg = WsStatusMessage(message="Retrieving documents...")
-                await websocket.send_json(status_msg.model_dump())
+@app.get("/mcp/config", response_model=MCPConfigResponse, tags=["MCP"], summary="Get MCP config")
+async def mcp_get_config():
+    if _config is None:
+        return JSONResponse(status_code=503, content={"detail": "Retriever not initialized"})
+    return MCPConfigResponse(
+        semantic_top_k=_config.semantic_top_k,
+        keyword_top_k=_config.keyword_top_k,
+        final_top_k=_config.final_top_k,
+        semantic_weight=_config.semantic_weight,
+        keyword_weight=_config.keyword_weight,
+        enable_rerank=_config.enable_rerank,
+        pre_rerank_top_k=_config.pre_rerank_top_k,
+        collection_name=_config.collection_name,
+    )
 
-                # OPTB-012: Generate a per-message correlation ID for WebSocket
-                # requests.  WebSocket frames do not carry HTTP headers, so we
-                # always auto-generate a UUID.  This links cache hit/miss logs
-                # to the specific WebSocket message.
-                ws_correlation_id = str(uuid.uuid4())
-                ws_cache_status_out: list[str] = []
-                results = _shared_retrieve_documents(
-                    query,
-                    enable_rerank=enable_rerank,
-                    correlation_id=ws_correlation_id,
-                    _out_cache_status=ws_cache_status_out,
-                )
-                doc_results = _to_filtered_document_results(
-                    results, min_score_threshold=0.40
-                )
+class MCPConfigUpdateRequest(PydanticBaseModel):
+    semantic_top_k: Optional[int] = None
+    keyword_top_k: Optional[int] = None
+    final_top_k: Optional[int] = None
+    semantic_weight: Optional[float] = None
+    keyword_weight: Optional[float] = None
+    enable_rerank: Optional[bool] = None
+    pre_rerank_top_k: Optional[int] = None
+    collection_name: Optional[str] = None
 
-                # T03 WS cache-status contract: include retrieval-layer cache
-                # outcome in the results payload so WS clients have direct
-                # cache visibility via the cache_status field in the message.
-                # _shared_retrieve_documents always appends exactly one element;
-                # the fallback handles any unexpected empty-list edge case.
-                _raw_status = ws_cache_status_out[0] if ws_cache_status_out else "MISS"
-                ws_cache_status: Literal["HIT", "MISS", "ERROR"] = (
-                    _raw_status if _raw_status in ("HIT", "MISS", "ERROR") else "MISS"
-                )
-
-                # Send results (total_results reflects post-filter count)
-                results_msg = WsResultsMessage(
-                    query=query,
-                    results=doc_results,
-                    total_results=len(doc_results),
-                    cache_status=ws_cache_status,
-                )
-                await websocket.send_json(results_msg.model_dump())
-                logger.info(f"WebSocket query succeeded: {query[:50]}... ({len(doc_results)} results after filtering)")
-
-            except RetrievalError as e:
-                logger.error(f"WebSocket retrieval error: {e}")
-                error_msg = WsErrorMessage(message=f"Retrieval failed: {str(e)}")
-                await websocket.send_json(error_msg.model_dump())
-            except Exception as e:
-                logger.error(f"WebSocket unexpected error: {e}")
-                error_msg = WsErrorMessage(message="An unexpected error occurred")
-                await websocket.send_json(error_msg.model_dump())
-
-    except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+@app.put("/mcp/config", response_model=MCPConfigResponse, tags=["MCP"], summary="Update MCP config")
+async def mcp_update_config(request: MCPConfigUpdateRequest):
+    global _config, _cache_generation, _corpus_version, _retriever
+    if _config is None:
+        return JSONResponse(status_code=503, content={"detail": "Retriever not initialized"})
+    update_dict = request.model_dump(exclude_unset=True)
+    if not update_dict:
+        return MCPConfigResponse(**_config.__dict__)
+    new_collection_name = update_dict.get("collection_name")
+    collection_changed = (
+        new_collection_name is not None and new_collection_name != _config.collection_name
+    )
+    if new_collection_name is not None and not is_valid_collection_name(new_collection_name):
+        return JSONResponse(status_code=400, content={"detail": f"Invalid collection name '{new_collection_name}': must be 6-20 chars, alphanumeric/underscore/hyphen only"})
+    _config = _config.update(**update_dict)
+    if collection_changed:
+        existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
+        if _config.collection_name in existing:
+            new_collection = open_collection(
+                persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                collection_name=_config.collection_name,
+            )
+        else:
+            documents = get_sample_documents()
+            new_collection = initialize_vector_db(
+                documents,
+                persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                collection_name=_config.collection_name,
+            )
+        _retriever = HybridRetriever(new_collection, _config)
+    _cache_generation += 1
+    _corpus_version = _build_corpus_version_token()
+    if _cache is not None:
         try:
-            error_msg = WsErrorMessage(message="Connection error")
-            await websocket.send_json(error_msg.model_dump())
+            lazy_cache.clear()
         except Exception:
             pass
+    return MCPConfigResponse(**_config.__dict__)
+
+class MCPQueryRequest(PydanticBaseModel):
+    query: str
+    enable_rerank: Optional[bool] = None
+
+class MCPQueryResponse(PydanticBaseModel):
+    results: list[dict]
+    total_results: int
+
+@app.post("/mcp/query", response_model=MCPQueryResponse, tags=["MCP"], summary="Query via MCP protocol")
+async def mcp_query(request: MCPQueryRequest = Body(...)):
+    if _retriever is None or _config is None:
+        return JSONResponse(status_code=503, content={"detail": "Retriever not initialized"})
+    query = request.query.strip()
+    if not query or len(query) < 1 or len(query) > 500:
+        return JSONResponse(status_code=400, content={"detail": "Query must be between 1 and 500 characters"})
+    try:
+        results = _shared_retrieve_documents(query, enable_rerank=request.enable_rerank)
+        doc_results = _to_filtered_document_results(results, min_score_threshold=0.40)
+        # Convert DocumentResult models to dicts for response
+        return MCPQueryResponse(
+            results=[d.model_dump() for d in doc_results],
+            total_results=len(doc_results),
+        )
+    except RetrievalError as e:
+        return JSONResponse(status_code=500, content={"detail": f"Retrieval failed: {str(e)}"})
+    except Exception:
+        return JSONResponse(status_code=500, content={"detail": "An unexpected error occurred"})
 
 
 def _extract_text_from_file(filename: str, content_bytes: bytes) -> str:

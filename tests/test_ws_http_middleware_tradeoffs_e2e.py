@@ -5,7 +5,7 @@ in-process websocket double.
 
 Coverage:
 - B1: WS emits cache.retrieval_* events; no cache.http_* events are emitted
-- B2: WS applies the 0.80 min-score filter correctly
+- B2: WS applies the 0.40 min-score filter correctly
 - B3: WS cache_status payload field carries HIT/MISS/ERROR
 - C1 (T03 RSK-002): WS cache HIT — payload field and log event both signal HIT
 - C2 (T03 RSK-002): WS cache MISS — payload field and log event both signal MISS
@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pytest
+
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
@@ -116,7 +117,7 @@ async def test_b1_ws_emits_retrieval_cache_events(
 
 @pytest.mark.asyncio
 async def test_b2_ws_applies_min_score_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """B2: WS applies the 0.80 min-score filter correctly."""
+    """B2: WS applies the 0.40 min-score filter correctly."""
 
     retriever = DeterministicRetriever(
         results=[
@@ -124,13 +125,13 @@ async def test_b2_ws_applies_min_score_filter(monkeypatch: pytest.MonkeyPatch) -
                 "id": "below-threshold",
                 "text": "should be filtered",
                 "metadata": {"source": "src-a"},
-                "score": 0.79,
+                "score": 0.39,
             },
             {
                 "id": "above-threshold",
                 "text": "should remain",
                 "metadata": {"source": "src-b"},
-                "score": 0.81,
+                "score": 0.41,
             },
         ]
     )
@@ -148,7 +149,7 @@ async def test_b2_ws_applies_min_score_filter(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(api, "_cache_generation", 0)
     monkeypatch.setattr(api, "_corpus_version", "gen0.n1")
 
-    # WS still applies the same 0.80 filter.
+    # WS applies the 0.40 filter.
     ws = FakeWebSocket(incoming_messages=[{"query": "b2-filter", "enable_rerank": False}])
     await api.websocket_chat(ws)
     ws_results = _extract_ws_results_message(ws)

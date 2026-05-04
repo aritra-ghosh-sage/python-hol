@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
 
 import pytest
+
 from fastapi import WebSocketDisconnect
 
 import api
@@ -146,7 +147,7 @@ def _get_error_message(ws: FakeWebSocket) -> Dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_ws_filters_results_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    """WS path discards results with score < 0.80 and returns only results at or above the floor.
+    """WS path discards results with score < 0.40 and returns only results at or above the floor.
 
     Supersedes: TestRestApi.test_retrieve_filters_below_threshold
     (live-backend HTTP test in test_retrieval_filtering.py)
@@ -160,9 +161,9 @@ async def test_ws_filters_results_below_threshold(monkeypatch: pytest.MonkeyPatc
         def retrieve(self, query: str, enable_rerank: Optional[bool] = None) -> List[Dict[str, Any]]:
             return [
                 {"id": "pass-high", "text": "doc1", "metadata": {"source": "s1"}, "score": 0.95},
-                {"id": "fail-low", "text": "doc2", "metadata": {"source": "s2"}, "score": 0.79},
-                {"id": "pass-boundary", "text": "doc3", "metadata": {"source": "s3"}, "score": 0.80},
-                {"id": "fail-very-low", "text": "doc4", "metadata": {"source": "s4"}, "score": 0.40},
+                {"id": "pass-mid", "text": "doc2", "metadata": {"source": "s2"}, "score": 0.79},
+                {"id": "pass-boundary", "text": "doc3", "metadata": {"source": "s3"}, "score": 0.40},
+                {"id": "fail-below", "text": "doc4", "metadata": {"source": "s4"}, "score": 0.39},
             ]
 
     monkeypatch.setattr(api, "_retriever", MixedScoreRetriever())
@@ -181,10 +182,10 @@ async def test_ws_filters_results_below_threshold(monkeypatch: pytest.MonkeyPatc
     returned_ids = [r["id"] for r in results_msg["results"]]
 
     assert "pass-high" in returned_ids
+    assert "pass-mid" in returned_ids
     assert "pass-boundary" in returned_ids
-    assert "fail-low" not in returned_ids, "score 0.79 must be filtered"
-    assert "fail-very-low" not in returned_ids, "score 0.40 must be filtered"
-    assert all(r["score"] >= 0.80 for r in results_msg["results"])
+    assert "fail-below" not in returned_ids, "score 0.39 must be filtered"
+    assert all(r["score"] >= 0.40 for r in results_msg["results"])
 
 
 @pytest.mark.asyncio
@@ -203,7 +204,7 @@ async def test_ws_total_results_reflects_post_filter_count(monkeypatch: pytest.M
         def retrieve(self, query: str, enable_rerank: Optional[bool] = None) -> List[Dict[str, Any]]:
             return [
                 {"id": "d1", "text": "t1", "metadata": {"source": "s"}, "score": 0.91},
-                {"id": "d2", "text": "t2", "metadata": {"source": "s"}, "score": 0.50},
+                {"id": "d2", "text": "t2", "metadata": {"source": "s"}, "score": 0.39},
                 {"id": "d3", "text": "t3", "metadata": {"source": "s"}, "score": 0.82},
             ]
 
@@ -251,8 +252,8 @@ async def test_ws_results_sorted_descending(monkeypatch: pytest.MonkeyPatch) -> 
             return [
                 {"id": "highest", "text": "t", "metadata": {"source": "s"}, "score": 0.97},
                 {"id": "mid", "text": "t", "metadata": {"source": "s"}, "score": 0.88},
-                {"id": "low-filtered", "text": "t", "metadata": {"source": "s"}, "score": 0.50},
-                {"id": "low-pass", "text": "t", "metadata": {"source": "s"}, "score": 0.81},
+                {"id": "mid-low", "text": "t", "metadata": {"source": "s"}, "score": 0.81},
+                {"id": "low-pass", "text": "t", "metadata": {"source": "s"}, "score": 0.50},
             ]
 
     monkeypatch.setattr(api, "_retriever", PreSortedRetriever())
@@ -331,7 +332,7 @@ async def test_ws_success_result_fields_populated(ws_harness: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_ws_empty_results_on_all_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    """WS returns an empty results list (not an error) when all scores are below 0.80."""
+    """WS returns an empty results list (not an error) when all scores are below 0.40."""
     from types import SimpleNamespace
 
     class AllFilteredRetriever:
@@ -340,9 +341,9 @@ async def test_ws_empty_results_on_all_below_threshold(monkeypatch: pytest.Monke
 
         def retrieve(self, query: str, enable_rerank: Optional[bool] = None) -> List[Dict[str, Any]]:
             return [
-                {"id": "x1", "text": "t", "metadata": {"source": "s"}, "score": 0.79},
-                {"id": "x2", "text": "t", "metadata": {"source": "s"}, "score": 0.50},
-                {"id": "x3", "text": "t", "metadata": {"source": "s"}, "score": 0.20},
+                {"id": "x1", "text": "t", "metadata": {"source": "s"}, "score": 0.39},
+                {"id": "x2", "text": "t", "metadata": {"source": "s"}, "score": 0.20},
+                {"id": "x3", "text": "t", "metadata": {"source": "s"}, "score": 0.05},
             ]
 
     monkeypatch.setattr(api, "_retriever", AllFilteredRetriever())
