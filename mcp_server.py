@@ -119,7 +119,8 @@ async def query_knowledge_base(
 
     Returns:
         A dictionary with:
-        - results: List of documents, each with query and metadata fields
+        - results: List of normalized documents, each with id, text, source,
+          source_url, and score fields
         - total_results: Number of documents returned
     """
     if _retriever is None:
@@ -133,12 +134,23 @@ async def query_knowledge_base(
         # Run retrieval pipeline
         raw_results = _retriever.retrieve(query_str, enable_rerank=enable_rerank)
 
-        # Filter results by minimum relevance score (matching api.py behavior)
-        filtered_results = [r for r in raw_results if r.get("score", 0) >= 0.40]
+        # Filter and normalize to the same {id, text, source, source_url, score}
+        # contract used by every other retrieval entrypoint in api.py.
+        normalized_results = [
+            {
+                "id": r["id"],
+                "text": r["text"],
+                "source": r["metadata"]["source"],
+                "source_url": r["metadata"].get("source_url"),
+                "score": float(r["score"]),
+            }
+            for r in raw_results
+            if float(r.get("score", 0.0)) >= 0.40
+        ]
 
         return {
-            "results": filtered_results,
-            "total_results": len(filtered_results),
+            "results": normalized_results,
+            "total_results": len(normalized_results),
         }
     except RetrievalError as e:
         raise ValueError(f"Retrieval failed: {str(e)}")

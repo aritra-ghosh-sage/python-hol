@@ -13,8 +13,9 @@ def mock_retriever():
     retriever = MagicMock()
     retriever.retrieve.return_value = [
         {
-            "query": "test query",
-            "metadata": {"source": "test_doc.txt"},
+            "id": "doc1",
+            "text": "Sample document text",
+            "metadata": {"source": "test_doc.txt", "source_url": None},
             "score": 0.85,
         }
     ]
@@ -44,15 +45,20 @@ async def test_query_knowledge_base_returns_results(mock_retriever):
     assert "total_results" in result
     assert len(result["results"]) == 1
     assert result["total_results"] == 1
-    assert result["results"][0]["score"] == 0.85
+    doc = result["results"][0]
+    assert doc["id"] == "doc1"
+    assert doc["text"] == "Sample document text"
+    assert doc["source"] == "test_doc.txt"
+    assert doc["score"] == 0.85
+    assert "metadata" not in doc
 
 
 @pytest.mark.asyncio
 async def test_query_knowledge_base_filters_low_scores(mock_retriever):
     """Test that results below min_score_threshold are filtered."""
     mock_retriever.retrieve.return_value = [
-        {"query": "test", "metadata": {}, "score": 0.85},
-        {"query": "test", "metadata": {}, "score": 0.30},  # Below threshold
+        {"id": "d1", "text": "high", "metadata": {"source": "a.txt"}, "score": 0.85},
+        {"id": "d2", "text": "low", "metadata": {"source": "b.txt"}, "score": 0.30},  # Below threshold
     ]
     mcp_server._retriever = mock_retriever
     mcp_server._config = DEFAULT_CONFIG
