@@ -1,23 +1,27 @@
 """MCP (Model Context Protocol) server for Hybrid RAG retrieval.
 
-Exposes the hybrid RAG query pipeline as MCP tools accessible via stdio transport
-(e.g., Claude Desktop, Claude API with mcp.json configuration).
+Exposes the hybrid RAG query pipeline as MCP tools accessible via stdio or
+streamable HTTP transport (e.g., Claude Desktop, hosted MCP gateways).
 """
 
 import asyncio
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from hybrid_rag import (
     DEFAULT_CONFIG,
+    KNOWLEDGE_DB_DIRECTORY,
     HybridRetriever,
     HybridRetrieverConfig,
-    RetrieverNotInitializedError,
     RetrievalError,
+    get_sample_documents,
+    initialize_vector_db,
+    list_existing_collections,
+    open_collection,
 )
 
 # Load environment variables
@@ -25,12 +29,44 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+try:
+    from hybrid_rag.persistence import load_config_from_disk
+except ImportError:  # pragma: no cover - compatibility with branches without #86
+    load_config_from_disk = None
+
 # Initialize FastMCP server
-mcp = FastMCP("hybrid-rag")
+mcp = FastMCP(
+    "hybrid-rag",
+    host=os.getenv("MCP_HOST", "127.0.0.1"),
+    port=int(os.getenv("MCP_PORT", "8000")),
+)
 
 # Global state
 _retriever: Optional[HybridRetriever] = None
 _config: HybridRetrieverConfig = DEFAULT_CONFIG
+
+
+def _load_initial_config() -> HybridRetrieverConfig:
+    """Load startup configuration, preferring persisted settings when available."""
+    persisted_loader: Callable[[str], Optional[HybridRetrieverConfig]] | None = (
+        load_config_from_disk
+    )
+    config = HybridRetrieverConfig(**DEFAULT_CONFIG.to_dict())
+
+    if persisted_loader is not None:
+        try:
+            persisted_config = persisted_loader(KNOWLEDGE_DB_DIRECTORY)
+            if persisted_config is not None:
+                config = persisted_config
+                logger.info("Loaded persisted MCP configuration")
+        except Exception:
+            logger.exception("Failed to load persisted configuration; using defaults")
+
+    env_collection_name = os.getenv("COLLECTION_NAME")
+    if env_collection_name:
+        config = config.update(collection_name=env_collection_name)
+
+    return config
 
 
 async def _initialize_retriever() -> None:
@@ -41,10 +77,21 @@ async def _initialize_retriever() -> None:
         return  # Already initialized
 
     try:
-        collection_name = os.getenv("COLLECTION_NAME", "rag_collection")
-        _retriever = HybridRetriever(config=_config)
-        _retriever.initialize(collection_name=collection_name)
-        logger.info(f"Retriever initialized with collection: {collection_name}")
+        _config = _load_initial_config()
+        existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
+        if _config.collection_name in existing:
+            collection = open_collection(
+                persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                collection_name=_config.collection_name,
+            )
+        else:
+            collection = initialize_vector_db(
+                get_sample_documents(),
+                persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                collection_name=_config.collection_name,
+            )
+        _retriever = HybridRetriever(collection, _config)
+        logger.info("Retriever initialized with collection: %s", _config.collection_name)
     except Exception as e:
         logger.error(f"Failed to initialize retriever: {e}")
         raise
@@ -90,9 +137,9 @@ async def query_knowledge_base(
         }
     except RetrievalError as e:
         raise ValueError(f"Retrieval failed: {str(e)}")
-    except Exception as e:
-        logger.error(f"Unexpected error in query_knowledge_base: {e}")
-        raise ValueError(f"An unexpected error occurred: {str(e)}")
+    except Exception:
+        logger.exception("Unexpected error in query_knowledge_base")
+        raise ValueError("An unexpected error occurred")
 
 
 @mcp.tool()
@@ -106,14 +153,29 @@ async def get_config() -> dict[str, Any]:
     if _config is None:
         raise ValueError("Configuration not available")
 
-    return _config.__dict__
+    return _config.to_dict()
+
+
+def _resolve_transport() -> str:
+    """Resolve MCP transport mode from environment."""
+    configured_transport = os.getenv("MCP_TRANSPORT", "stdio").strip().lower()
+    if configured_transport in {"stdio"}:
+        return "stdio"
+    if configured_transport in {"http", "streamable-http", "streamable_http"}:
+        return "streamable-http"
+    raise ValueError(
+        "Unsupported MCP_TRANSPORT. Use one of: stdio, http, streamable-http."
+    )
 
 
 async def main() -> None:
     """Start the MCP server."""
     await _initialize_retriever()
-    async with mcp.run_stdio():
-        await asyncio.Event().wait()  # Run forever
+    transport = _resolve_transport()
+    if transport == "stdio":
+        await mcp.run_stdio_async()
+    else:
+        await mcp.run_streamable_http_async()
 
 
 if __name__ == "__main__":

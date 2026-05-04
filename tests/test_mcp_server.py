@@ -1,11 +1,10 @@
 """Tests for the MCP server."""
 
 import pytest
-from mcp.server.fastmcp import FastMCP
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import mcp_server
-from hybrid_rag import HybridRetrieverConfig, DEFAULT_CONFIG
+from hybrid_rag import DEFAULT_CONFIG
 
 
 @pytest.fixture
@@ -119,3 +118,97 @@ def test_mcp_server_has_config_tool():
     """Test that the MCP server exposes the get_config tool."""
     tool_names = list(mcp_server.mcp._tool_manager._tools.keys())
     assert "get_config" in tool_names
+
+
+def test_initialize_retriever_uses_open_collection_when_collection_exists(monkeypatch):
+    """Initialize retriever from an existing collection."""
+    config = DEFAULT_CONFIG.update(collection_name="rag_collection")
+    mock_collection = MagicMock()
+    mock_retriever_instance = MagicMock()
+
+    mcp_server._retriever = None
+    mcp_server._config = DEFAULT_CONFIG
+
+    monkeypatch.setattr(mcp_server, "_load_initial_config", lambda: config)
+    monkeypatch.setattr(
+        mcp_server, "list_existing_collections", lambda _: [config.collection_name]
+    )
+    monkeypatch.setattr(mcp_server, "open_collection", lambda **_: mock_collection)
+    init_vector_db_mock = MagicMock()
+    monkeypatch.setattr(mcp_server, "initialize_vector_db", init_vector_db_mock)
+    monkeypatch.setattr(
+        mcp_server,
+        "HybridRetriever",
+        MagicMock(return_value=mock_retriever_instance),
+    )
+
+    import asyncio
+
+    asyncio.run(mcp_server._initialize_retriever())
+
+    init_vector_db_mock.assert_not_called()
+    assert mcp_server._retriever is mock_retriever_instance
+
+
+def test_initialize_retriever_creates_collection_when_missing(monkeypatch):
+    """Initialize retriever by creating a new collection if absent."""
+    config = DEFAULT_CONFIG.update(collection_name="rag_collection")
+    docs = [{"id": "d1", "text": "x", "metadata": {"source": "test"}}]
+    mock_collection = MagicMock()
+    mock_retriever_instance = MagicMock()
+
+    mcp_server._retriever = None
+    mcp_server._config = DEFAULT_CONFIG
+
+    monkeypatch.setattr(mcp_server, "_load_initial_config", lambda: config)
+    monkeypatch.setattr(mcp_server, "list_existing_collections", lambda _: [])
+    monkeypatch.setattr(mcp_server, "get_sample_documents", lambda: docs)
+    init_vector_db_mock = MagicMock(return_value=mock_collection)
+    monkeypatch.setattr(mcp_server, "initialize_vector_db", init_vector_db_mock)
+    open_collection_mock = MagicMock()
+    monkeypatch.setattr(mcp_server, "open_collection", open_collection_mock)
+    monkeypatch.setattr(
+        mcp_server,
+        "HybridRetriever",
+        MagicMock(return_value=mock_retriever_instance),
+    )
+
+    import asyncio
+
+    asyncio.run(mcp_server._initialize_retriever())
+
+    init_vector_db_mock.assert_called_once()
+    open_collection_mock.assert_not_called()
+    assert mcp_server._retriever is mock_retriever_instance
+
+
+@pytest.mark.asyncio
+async def test_main_uses_stdio_transport(monkeypatch):
+    """main() runs stdio transport when configured."""
+    monkeypatch.setattr(mcp_server, "_initialize_retriever", AsyncMock())
+    monkeypatch.setattr(mcp_server, "_resolve_transport", lambda: "stdio")
+    stdio_mock = AsyncMock()
+    http_mock = AsyncMock()
+    monkeypatch.setattr(mcp_server.mcp, "run_stdio_async", stdio_mock)
+    monkeypatch.setattr(mcp_server.mcp, "run_streamable_http_async", http_mock)
+
+    await mcp_server.main()
+
+    stdio_mock.assert_awaited_once()
+    http_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_main_uses_http_transport(monkeypatch):
+    """main() runs streamable HTTP transport when configured."""
+    monkeypatch.setattr(mcp_server, "_initialize_retriever", AsyncMock())
+    monkeypatch.setattr(mcp_server, "_resolve_transport", lambda: "streamable-http")
+    stdio_mock = AsyncMock()
+    http_mock = AsyncMock()
+    monkeypatch.setattr(mcp_server.mcp, "run_stdio_async", stdio_mock)
+    monkeypatch.setattr(mcp_server.mcp, "run_streamable_http_async", http_mock)
+
+    await mcp_server.main()
+
+    http_mock.assert_awaited_once()
+    stdio_mock.assert_not_awaited()
