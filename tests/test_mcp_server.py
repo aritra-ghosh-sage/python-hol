@@ -27,9 +27,13 @@ def restore_module_state():
     """Restore mutable module globals after each test."""
     original_retriever = mcp_server._retriever
     original_config = mcp_server._config
+    original_cache = mcp_server._cache
+    original_corpus_version = mcp_server._corpus_version
     yield
     mcp_server._retriever = original_retriever
     mcp_server._config = original_config
+    mcp_server._cache = original_cache
+    mcp_server._corpus_version = original_corpus_version
 
 
 @pytest.mark.asyncio
@@ -252,3 +256,84 @@ def test_load_initial_config_accepts_valid_collection_name(monkeypatch):
     config = mcp_server._load_initial_config()
 
     assert config.collection_name == "valid_col_1"
+
+
+@pytest.mark.asyncio
+async def test_query_knowledge_base_uses_cache_on_hit(mock_retriever):
+    """query_knowledge_base serves from L1 cache on a hit without calling retrieve()."""
+    cached_raw = [
+        {
+            "id": "cached1",
+            "text": "Cached text",
+            "metadata": {"source": "cached.txt"},
+            "score": 0.90,
+        }
+    ]
+    mock_cache = MagicMock()
+    mock_cache.get.return_value = cached_raw  # cache hit
+
+    mcp_server._retriever = mock_retriever
+    mcp_server._config = DEFAULT_CONFIG
+    mcp_server._cache = mock_cache
+
+    result = await mcp_server.query_knowledge_base("cached query")
+
+    mock_retriever.retrieve.assert_not_called()
+    mock_cache.get.assert_called_once()
+    assert result["total_results"] == 1
+    assert result["results"][0]["id"] == "cached1"
+    assert result["results"][0]["source"] == "cached.txt"
+
+
+@pytest.mark.asyncio
+async def test_query_knowledge_base_populates_cache_on_miss(mock_retriever):
+    """query_knowledge_base calls retrieve() on a cache miss and writes the result."""
+    mock_cache = MagicMock()
+    mock_cache.get.return_value = None  # cache miss
+
+    mcp_server._retriever = mock_retriever
+    mcp_server._config = DEFAULT_CONFIG
+    mcp_server._cache = mock_cache
+
+    result = await mcp_server.query_knowledge_base("miss query")
+
+    mock_retriever.retrieve.assert_called_once()
+    mock_cache.set.assert_called_once()
+    assert result["total_results"] == 1
+
+
+@pytest.mark.asyncio
+async def test_query_knowledge_base_fail_open_on_cache_error(mock_retriever):
+    """query_knowledge_base falls back to retrieve() when the cache read raises."""
+    mock_cache = MagicMock()
+    mock_cache.get.side_effect = RuntimeError("Redis connection lost")
+
+    mcp_server._retriever = mock_retriever
+    mcp_server._config = DEFAULT_CONFIG
+    mcp_server._cache = mock_cache
+
+    result = await mcp_server.query_knowledge_base("error query")
+
+    mock_retriever.retrieve.assert_called_once()
+    assert result["total_results"] == 1
+
+
+def test_build_corpus_version_token_with_retriever(mock_retriever):
+    """_build_corpus_version_token reads collection count from the retriever."""
+    mock_retriever.collection.count.return_value = 42
+    mcp_server._retriever = mock_retriever
+    mcp_server._cache_generation = 1
+
+    token = mcp_server._build_corpus_version_token()
+
+    assert token == "gen1.n42"
+
+
+def test_build_corpus_version_token_without_retriever():
+    """_build_corpus_version_token falls back gracefully when retriever is None."""
+    mcp_server._retriever = None
+    mcp_server._cache_generation = 0
+
+    token = mcp_server._build_corpus_version_token()
+
+    assert token == "gen0.n0"
