@@ -9,6 +9,8 @@ Routes:
 import base64
 import hashlib
 import io
+import ipaddress
+import socket
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -43,6 +45,68 @@ try:
     import pypdf
 except ImportError:
     with_pdf_support = False
+
+
+def _validate_url_for_ssrf(url: str) -> None:
+    """Validate a user-supplied URL to prevent Server-Side Request Forgery (SSRF).
+
+    Checks that the URL:
+    1. Uses only http/https scheme.
+    2. Has a non-empty hostname.
+    3. Does not resolve to a private, loopback, link-local, or reserved IP address
+       (RFC 1918 / RFC 4193 / RFC 3927 / cloud-metadata range 169.254.0.0/16).
+
+    Note: DNS resolution is performed here to detect obvious SSRF vectors.  A
+    sophisticated attacker could exploit a TOCTOU race via DNS rebinding; for
+    full protection deploy a network-level egress firewall in addition to this
+    check.
+
+    Args:
+        url: The URL string provided by the user.
+
+    Raises:
+        HTTPException: 400 if the URL scheme is invalid, the host is missing,
+            or the host resolves to a private/reserved address.
+        HTTPException: 502 if DNS resolution fails.
+    """
+    parsed = urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only HTTP/HTTPS URLs are supported for document ingestion.",
+        )
+    if not parsed.netloc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid URL: missing hostname.",
+        )
+
+    hostname = parsed.hostname or ""
+    try:
+        resolved_ip = socket.gethostbyname(hostname)
+    except socket.gaierror as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to resolve hostname '{hostname}': {exc}",
+        )
+
+    try:
+        addr = ipaddress.ip_address(resolved_ip)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid resolved IP address: {resolved_ip}",
+        )
+
+    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Requests to private, loopback, link-local, or reserved IP "
+                "addresses are not permitted."
+            ),
+        )
 
 
 def _extract_text_from_file(filename: str, content_bytes: bytes) -> str:
@@ -134,20 +198,8 @@ async def add_documents(
             api.logger.info("Ingesting text document: %s", source_label)
 
         elif request.source_type == "url":
-            # SSRF guard: validate URL scheme and netloc before fetching.
-            # Only http/https with a non-empty host are permitted; file://,
-            # ftp://, and bare paths are all rejected here.
-            _parsed_url = urlparse(request.content)
-            if _parsed_url.scheme not in ("http", "https"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Only HTTP/HTTPS URLs are supported for document ingestion.",
-                )
-            if not _parsed_url.netloc:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid URL: missing hostname.",
-                )
+            # SSRF guard: validate scheme, netloc, and resolved IP before fetching.
+            _validate_url_for_ssrf(request.content)
 
             api.logger.info("Fetching content from URL: %s", request.content)
             try:
