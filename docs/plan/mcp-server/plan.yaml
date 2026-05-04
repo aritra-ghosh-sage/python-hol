@@ -817,4 +817,4 @@ quality_gates:
   on_completion:
     - "All acceptance criteria checked off"
     - "spec/mcp-implementation-status.md updated to reflect completed tasks"
-    - "CHANGELOG.md updated"
+    - "docs/CHANGELOG.md updated"
