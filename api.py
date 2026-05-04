@@ -63,6 +63,8 @@ from hybrid_rag import (
     KNOWLEDGE_DB_DIRECTORY,
     list_existing_collections,
     is_valid_collection_name,
+    load_config_from_disk,
+    save_config_to_disk,
 )
 from hybrid_rag.cache import CacheBackend
 from hybrid_rag.config import CacheSettings, create_cache_backend
@@ -504,10 +506,16 @@ def initialize_retriever() -> None:
     try:
         logger.info("Initializing hybrid retriever...")
 
-        # Initialize configuration
-        _config = HybridRetrieverConfig(
-            semantic_weight=0.7, keyword_weight=0.3, enable_rerank=True
-        )
+        # Try to load persisted configuration first
+        _config = load_config_from_disk(KNOWLEDGE_DB_DIRECTORY)
+        if _config is not None:
+            logger.info("Loaded persisted configuration from disk")
+        else:
+            # Initialize with default configuration if no persisted config
+            logger.info("No persisted configuration found, using defaults")
+            _config = HybridRetrieverConfig(
+                semantic_weight=0.7, keyword_weight=0.3, enable_rerank=True
+            )
 
         # Initialize vector database
         existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
@@ -1238,6 +1246,14 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
                 logger.warning(f"Failed to clear cache after config update: {e}")
         else:
             logger.debug("Config updated; cache not initialized")
+
+        # Persist the configuration to disk
+        try:
+            save_config_to_disk(_config, KNOWLEDGE_DB_DIRECTORY)
+            logger.info("Configuration persisted to disk")
+        except Exception as e:
+            logger.warning(f"Failed to persist configuration to disk: {e}")
+            # Non-fatal: continue even if persistence fails
 
         logger.info("Configuration updated successfully")
         return ConfigResponse(
