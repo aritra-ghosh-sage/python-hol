@@ -233,7 +233,9 @@ async def add_documents(
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.5",
                 }
-                response = requests.get(safe_url, headers=headers, timeout=15)
+                response = requests.get(
+                    safe_url, headers=headers, timeout=15, allow_redirects=False
+                )
                 response.raise_for_status()
             except requests.RequestException as exc:
                 api.logger.error("Failed to fetch URL: %s", exc)
