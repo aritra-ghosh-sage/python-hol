@@ -235,3 +235,20 @@ async def test_main_uses_http_transport(monkeypatch):
 
     http_mock.assert_awaited_once()
     stdio_mock.assert_not_awaited()
+
+
+def test_load_initial_config_rejects_invalid_collection_name(monkeypatch):
+    """Invalid COLLECTION_NAME env var raises ValueError before Chroma startup."""
+    monkeypatch.setenv("COLLECTION_NAME", "my.col")  # dots not allowed
+
+    with pytest.raises(ValueError, match="Invalid COLLECTION_NAME"):
+        mcp_server._load_initial_config()
+
+
+def test_load_initial_config_accepts_valid_collection_name(monkeypatch):
+    """Valid COLLECTION_NAME env var is applied to the config."""
+    monkeypatch.setenv("COLLECTION_NAME", "valid_col_1")
+
+    config = mcp_server._load_initial_config()
+
+    assert config.collection_name == "valid_col_1"

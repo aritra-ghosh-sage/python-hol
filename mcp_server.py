@@ -20,6 +20,7 @@ from hybrid_rag import (
     RetrievalError,
     get_sample_documents,
     initialize_vector_db,
+    is_valid_collection_name,
     list_existing_collections,
     open_collection,
 )
@@ -68,6 +69,11 @@ def _load_initial_config() -> HybridRetrieverConfig:
 
     env_collection_name = os.getenv("COLLECTION_NAME")
     if env_collection_name:
+        if not is_valid_collection_name(env_collection_name):
+            raise ValueError(
+                f"Invalid COLLECTION_NAME '{env_collection_name}': must be 6-20 chars, "
+                "alphanumeric/underscore/hyphen only"
+            )
         config = config.update(collection_name=env_collection_name)
 
     return config
