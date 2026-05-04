@@ -7,7 +7,7 @@ streamable HTTP transport (e.g., Claude Desktop, hosted MCP gateways).
 import asyncio
 import logging
 import os
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from hybrid_rag.persistence import load_config_from_disk
-except ImportError:  # pragma: no cover - compatibility with branches without #86
+except ImportError:  # pragma: no cover - compatibility without persistence module
     load_config_from_disk = None
 
 # Initialize FastMCP server
@@ -48,19 +48,18 @@ _config: HybridRetrieverConfig = DEFAULT_CONFIG
 
 def _load_initial_config() -> HybridRetrieverConfig:
     """Load startup configuration, preferring persisted settings when available."""
-    persisted_loader: Callable[[str], Optional[HybridRetrieverConfig]] | None = (
-        load_config_from_disk
-    )
     config = HybridRetrieverConfig(**DEFAULT_CONFIG.to_dict())
 
-    if persisted_loader is not None:
+    if load_config_from_disk is not None:
         try:
-            persisted_config = persisted_loader(KNOWLEDGE_DB_DIRECTORY)
+            persisted_config = load_config_from_disk(KNOWLEDGE_DB_DIRECTORY)
             if persisted_config is not None:
                 config = persisted_config
                 logger.info("Loaded persisted MCP configuration")
-        except Exception:
-            logger.exception("Failed to load persisted configuration; using defaults")
+        except (OSError, ValueError, TypeError):
+            logger.exception(
+                "Failed to load persisted configuration; falling back to defaults"
+            )
 
     env_collection_name = os.getenv("COLLECTION_NAME")
     if env_collection_name:
@@ -71,29 +70,30 @@ def _load_initial_config() -> HybridRetrieverConfig:
 
 async def _initialize_retriever() -> None:
     """Initialize the hybrid retriever (called at server startup)."""
-    global _retriever, _config
+    global _config, _retriever
 
     if _retriever is not None:
         return  # Already initialized
 
     try:
-        _config = _load_initial_config()
+        config = _load_initial_config()
         existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
-        if _config.collection_name in existing:
+        if config.collection_name in existing:
             collection = open_collection(
                 persist_dir=KNOWLEDGE_DB_DIRECTORY,
-                collection_name=_config.collection_name,
+                collection_name=config.collection_name,
             )
         else:
             collection = initialize_vector_db(
                 get_sample_documents(),
                 persist_dir=KNOWLEDGE_DB_DIRECTORY,
-                collection_name=_config.collection_name,
+                collection_name=config.collection_name,
             )
-        _retriever = HybridRetriever(collection, _config)
-        logger.info("Retriever initialized with collection: %s", _config.collection_name)
-    except Exception as e:
-        logger.error(f"Failed to initialize retriever: {e}")
+        _config = config
+        _retriever = HybridRetriever(collection, config)
+        logger.info("Retriever initialized with collection: %s", config.collection_name)
+    except Exception:
+        logger.exception("Failed to initialize retriever")
         raise
 
 
@@ -159,12 +159,13 @@ async def get_config() -> dict[str, Any]:
 def _resolve_transport() -> str:
     """Resolve MCP transport mode from environment."""
     configured_transport = os.getenv("MCP_TRANSPORT", "stdio").strip().lower()
-    if configured_transport in {"stdio"}:
+    if configured_transport == "stdio":
         return "stdio"
     if configured_transport in {"http", "streamable-http", "streamable_http"}:
         return "streamable-http"
     raise ValueError(
-        "Unsupported MCP_TRANSPORT. Use one of: stdio, http, streamable-http."
+        f"Unsupported MCP_TRANSPORT '{configured_transport}'. "
+        "Use one of: stdio, http, streamable-http."
     )
 
 

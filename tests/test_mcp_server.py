@@ -21,6 +21,16 @@ def mock_retriever():
     return retriever
 
 
+@pytest.fixture(autouse=True)
+def restore_module_state():
+    """Restore mutable module globals after each test."""
+    original_retriever = mcp_server._retriever
+    original_config = mcp_server._config
+    yield
+    mcp_server._retriever = original_retriever
+    mcp_server._config = original_config
+
+
 @pytest.mark.asyncio
 async def test_query_knowledge_base_returns_results(mock_retriever):
     """Test that query_knowledge_base returns properly formatted results."""
@@ -120,18 +130,23 @@ def test_mcp_server_has_config_tool():
     assert "get_config" in tool_names
 
 
-def test_initialize_retriever_uses_open_collection_when_collection_exists(monkeypatch):
+@pytest.mark.asyncio
+async def test_initialize_retriever_uses_open_collection_when_collection_exists(monkeypatch):
     """Initialize retriever from an existing collection."""
-    config = DEFAULT_CONFIG.update(collection_name="rag_collection")
+    config = DEFAULT_CONFIG.update(collection_name="existing_collection")
     mock_collection = MagicMock()
     mock_retriever_instance = MagicMock()
 
     mcp_server._retriever = None
     mcp_server._config = DEFAULT_CONFIG
 
-    monkeypatch.setattr(mcp_server, "_load_initial_config", lambda: config)
     monkeypatch.setattr(
-        mcp_server, "list_existing_collections", lambda _: [config.collection_name]
+        mcp_server, "_load_initial_config", MagicMock(return_value=config)
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "list_existing_collections",
+        MagicMock(return_value=[config.collection_name]),
     )
     monkeypatch.setattr(mcp_server, "open_collection", lambda **_: mock_collection)
     init_vector_db_mock = MagicMock()
@@ -142,17 +157,16 @@ def test_initialize_retriever_uses_open_collection_when_collection_exists(monkey
         MagicMock(return_value=mock_retriever_instance),
     )
 
-    import asyncio
-
-    asyncio.run(mcp_server._initialize_retriever())
+    await mcp_server._initialize_retriever()
 
     init_vector_db_mock.assert_not_called()
     assert mcp_server._retriever is mock_retriever_instance
 
 
-def test_initialize_retriever_creates_collection_when_missing(monkeypatch):
+@pytest.mark.asyncio
+async def test_initialize_retriever_creates_collection_when_missing(monkeypatch):
     """Initialize retriever by creating a new collection if absent."""
-    config = DEFAULT_CONFIG.update(collection_name="rag_collection")
+    config = DEFAULT_CONFIG.update(collection_name="new_collection")
     docs = [{"id": "d1", "text": "x", "metadata": {"source": "test"}}]
     mock_collection = MagicMock()
     mock_retriever_instance = MagicMock()
@@ -160,8 +174,12 @@ def test_initialize_retriever_creates_collection_when_missing(monkeypatch):
     mcp_server._retriever = None
     mcp_server._config = DEFAULT_CONFIG
 
-    monkeypatch.setattr(mcp_server, "_load_initial_config", lambda: config)
-    monkeypatch.setattr(mcp_server, "list_existing_collections", lambda _: [])
+    monkeypatch.setattr(
+        mcp_server, "_load_initial_config", MagicMock(return_value=config)
+    )
+    monkeypatch.setattr(
+        mcp_server, "list_existing_collections", MagicMock(return_value=[])
+    )
     monkeypatch.setattr(mcp_server, "get_sample_documents", lambda: docs)
     init_vector_db_mock = MagicMock(return_value=mock_collection)
     monkeypatch.setattr(mcp_server, "initialize_vector_db", init_vector_db_mock)
@@ -173,9 +191,7 @@ def test_initialize_retriever_creates_collection_when_missing(monkeypatch):
         MagicMock(return_value=mock_retriever_instance),
     )
 
-    import asyncio
-
-    asyncio.run(mcp_server._initialize_retriever())
+    await mcp_server._initialize_retriever()
 
     init_vector_db_mock.assert_called_once()
     open_collection_mock.assert_not_called()
