@@ -62,8 +62,8 @@ async def test_query_knowledge_base_returns_results(mock_retriever):
 async def test_query_knowledge_base_filters_low_scores(mock_retriever):
     """Test that results below min_score_threshold are filtered."""
     mock_retriever.retrieve.return_value = [
-        {"id": "d1", "text": "high", "metadata": {"source": "a.txt"}, "score": 0.85},
-        {"id": "d2", "text": "low", "metadata": {"source": "b.txt"}, "score": 0.30},  # Below threshold
+        {"id": "d1", "text": "high", "metadata": {"source": "a.txt", "source_url": None}, "score": 0.85},
+        {"id": "d2", "text": "low", "metadata": {"source": "b.txt","source_url": None}, "score": 0.30},  # Below threshold
     ]
     mcp_server._retriever = mock_retriever
     mcp_server._config = DEFAULT_CONFIG
