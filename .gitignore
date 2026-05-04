@@ -28,6 +28,5 @@ quality/spec_audits/
 frontend/tmp-e2e/screenshots/
 
 #claude/github specific files
-docs/plan/
 .claude/context/
 
