@@ -13,7 +13,6 @@ Protocol (server → client, in order):
     {"type": "error",   "message": str}   (on failure)
 """
 
-import logging
 import uuid
 from typing import Literal
 
@@ -26,8 +25,6 @@ from api_models import (
 )
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from hybrid_rag import RetrievalError
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -46,7 +43,7 @@ def _to_filtered_document_results(
         Filtered list of DocumentResult instances.
     """
     filtered = [r for r in results if float(r.get("score", 0.0)) >= min_score_threshold]
-    logger.debug(
+    api.logger.debug(
         "Filtered from %d to %d results (min_score=%s)",
         len(results),
         len(filtered),
@@ -80,7 +77,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
         websocket: Active WebSocket connection.
     """
     await websocket.accept()
-    logger.info("WebSocket client connected")
+    api.logger.info("WebSocket client connected")
 
     try:
         while True:
@@ -128,25 +125,25 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     cache_status=ws_cache_status,
                 )
                 await websocket.send_json(results_msg.model_dump())
-                logger.info(
+                api.logger.info(
                     "WebSocket query succeeded: %s... (%d results after filtering)",
                     query[:50],
                     len(doc_results),
                 )
 
             except RetrievalError as exc:
-                logger.error("WebSocket retrieval error: %s", exc)
+                api.logger.error("WebSocket retrieval error: %s", exc)
                 error_msg = WsErrorMessage(message=f"Retrieval failed: {str(exc)}")
                 await websocket.send_json(error_msg.model_dump())
             except Exception as exc:
-                logger.error("WebSocket unexpected error: %s", exc)
+                api.logger.error("WebSocket unexpected error: %s", exc)
                 error_msg = WsErrorMessage(message="An unexpected error occurred")
                 await websocket.send_json(error_msg.model_dump())
 
     except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
+        api.logger.info("WebSocket client disconnected")
     except Exception as exc:
-        logger.error("WebSocket error: %s", exc)
+        api.logger.error("WebSocket error: %s", exc)
         try:
             error_msg = WsErrorMessage(message="Connection error")
             await websocket.send_json(error_msg.model_dump())

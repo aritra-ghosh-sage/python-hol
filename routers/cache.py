@@ -4,7 +4,6 @@ Routes:
     GET /cache/stats  -- Return layered L1/L2/backend cache metrics.
 """
 
-import logging
 from datetime import datetime, timezone
 
 import api  # shared state — accessed inside function bodies to avoid circular-import issues
@@ -15,8 +14,6 @@ from api_models import (
     LayeredCacheStatsResponse,
 )
 from fastapi import APIRouter
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -109,7 +106,7 @@ async def get_cache_stats() -> LayeredCacheStatsResponse:
                     ttl_seconds=int(raw.get("ttl_seconds", 0) or 0),
                     corpus_version=api._corpus_version,
                 )
-                logger.debug(
+                api.logger.debug(
                     "L1 stats: backend=%s hits=%d misses=%d hit_rate=%.2f corpus_version=%s",
                     l1.backend,
                     l1.hits,
@@ -118,7 +115,7 @@ async def get_cache_stats() -> LayeredCacheStatsResponse:
                     l1.corpus_version,
                 )
             except Exception as l1_err:
-                logger.warning("Failed to read L1 cache stats: %s", l1_err)
+                api.logger.warning("Failed to read L1 cache stats: %s", l1_err)
                 l1 = _zeroed_l1
 
             try:
@@ -130,7 +127,7 @@ async def get_cache_stats() -> LayeredCacheStatsResponse:
                     error=raw_health.get("error"),
                 )
             except Exception as health_err:
-                logger.warning("Failed to read backend health: %s", health_err)
+                api.logger.warning("Failed to read backend health: %s", health_err)
                 backend_health = _degraded_health
 
             api._log_fallback_transition(backend_health.fallback_active)
@@ -151,7 +148,7 @@ async def get_cache_stats() -> LayeredCacheStatsResponse:
                     size=int(raw_l2.get("size", 0)),
                     capacity=int(raw_l2.get("capacity", 0)),
                 )
-                logger.debug(
+                api.logger.debug(
                     "L2 stats: hits=%d misses=%d hit_rate=%.2f size=%d/%d",
                     l2.hits,
                     l2.misses,
@@ -160,7 +157,7 @@ async def get_cache_stats() -> LayeredCacheStatsResponse:
                     l2.capacity,
                 )
             except Exception as l2_err:
-                logger.warning("Failed to read L2 embedding cache stats: %s", l2_err)
+                api.logger.warning("Failed to read L2 embedding cache stats: %s", l2_err)
                 l2 = _zeroed_l2
 
         return LayeredCacheStatsResponse(
@@ -171,7 +168,7 @@ async def get_cache_stats() -> LayeredCacheStatsResponse:
         )
 
     except Exception as outer_err:
-        logger.warning(
+        api.logger.warning(
             "Unexpected error building cache stats response: %s", outer_err
         )
         return LayeredCacheStatsResponse(
