@@ -150,6 +150,24 @@ class HybridRetrieverConfig:
             "collection_name": self.collection_name,
         }
 
+    @classmethod
+    def from_dict(cls, config_dict: dict[str, Any]) -> HybridRetrieverConfig:
+        """Create configuration from dictionary.
+
+        Args:
+            config_dict: Dictionary with configuration parameters.
+
+        Returns:
+            New HybridRetrieverConfig instance.
+
+        Example:
+            >>> config_dict = {"semantic_weight": 0.8, "keyword_weight": 0.2}
+            >>> config = HybridRetrieverConfig.from_dict(config_dict)
+            >>> config.semantic_weight
+            0.8
+        """
+        return cls(**config_dict)
+
 
 # Default configuration instance
 DEFAULT_CONFIG = HybridRetrieverConfig(
