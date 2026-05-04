@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -60,7 +61,7 @@ def save_config_to_disk(
     )
     temp_path = Path(tmp_name)
     try:
-        with open(fd, "w") as f:
+        with os.fdopen(fd, "w") as f:
             json.dump(config.to_dict(), f, indent=2)
         # Atomic rename — guaranteed same filesystem because temp is in the
         # same directory as the target.

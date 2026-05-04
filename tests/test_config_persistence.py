@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+import threading
 from pathlib import Path
 
 from hybrid_rag import (
@@ -145,8 +146,6 @@ class TestConfigPersistenceConcurrency:
         file must be cleaned up, and the final config.json must be parseable
         and satisfy the HybridRetrieverConfig schema.
         """
-        import threading
-
         num_writers = 10
         weights = [round(i / num_writers, 1) for i in range(1, num_writers + 1)]
         # Each writer uses a complementary pair that sums to 1.0
