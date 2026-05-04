@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "hybrid-rag": {
+      "command": "uv",
+      "args": ["run", "python", "mcp_server.py"],
+      "cwd": "/path/to/python-hol"
+    }
+  }
+}
