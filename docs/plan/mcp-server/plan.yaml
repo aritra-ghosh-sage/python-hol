@@ -108,26 +108,33 @@ tasks:
       inputs:
         - name: MCP_AUTH_TOKEN
           type: "env var (string)"
-          description: "Secret bearer token; server rejects requests without it."
+          description: "Secret bearer token; if unset or empty, HTTP transport fails closed and rejects requests."
+        - name: MCP_AUTH_DISABLED
+          type: "env var (boolean)"
+          description: "Optional explicit local-dev override to disable HTTP auth; must only be honored for localhost-bound development."
         - name: Authorization header
           type: "HTTP header"
           format: "Bearer <token>"
       outputs:
         - "HTTP 401 on missing or invalid token"
+        - "HTTP 401 when MCP_AUTH_TOKEN is unset or empty and auth is not explicitly disabled"
         - "HTTP 200 pass-through when token matches MCP_AUTH_TOKEN"
         - "Stdio transport: no change (auth bypass preserved)"
       invariants:
         - "Token stored only in environment variable, never in source code"
         - "Token comparison uses hmac.compare_digest() to prevent timing attacks"
+        - "HTTP transport fails closed by default when auth configuration is missing or invalid"
+        - "Any MCP_AUTH_DISABLED path must be explicit and restricted to localhost-only development usage"
         - "Stdio transport is never gated by auth checks"
 
     acceptance_criteria:
       - "Bearer token middleware rejects requests with missing/wrong token (HTTP 401)"
       - "Valid token allows access (HTTP 200)"
       - "Stdio transport unaffected"
-      - "MCP_AUTH_TOKEN='' or unset → server logs a warning and disables auth (dev mode)"
+      - "MCP_AUTH_TOKEN='' or unset → server rejects HTTP requests by default (fail closed)"
+      - "Auth may be disabled only when MCP_AUTH_DISABLED=true, and that override is restricted to localhost-only development usage"
       - "All existing tests pass unchanged"
-      - "New test file contains ≥ 5 tests covering: missing token, wrong token, valid token, empty-env dev mode, stdio bypass"
+      - "New test file contains ≥ 6 tests covering: missing token, wrong token, valid token, unset token fail-closed behavior, explicit local-dev auth-disabled path, stdio bypass"
       - "`uv run ruff check .` passes, `mypy mcp_server.py` passes"
 
     implementation_notes: >
