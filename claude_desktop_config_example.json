@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "hybrid-rag-stdio": {
+      "command": "uv",
+      "args": ["run", "python", "mcp_server.py"],
+      "cwd": "/path/to/python-hol"
+    },
+    "hybrid-rag-http": {
+      "command": "uv",
+      "args": ["run", "python", "mcp_server.py"],
+      "cwd": "/path/to/python-hol",
+      "env": {
+        "MCP_TRANSPORT": "http",
+        "MCP_HOST": "127.0.0.1",
+        "MCP_PORT": "8000"
+      }
+    }
+  }
+}
