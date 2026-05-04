@@ -651,19 +651,25 @@ risks:
     impact: high
     affected_tasks: [T3-K8S]
     description: >
-      Multiple MCP server pods sharing a single PVC (ReadWriteMany) may
-      corrupt the ChromaDB SQLite WAL under concurrent writes, especially
-      during ingest_documents calls (T2-INGEST).
+      Running multiple MCP server pods against a shared PVC (ReadWriteMany)
+      is unsafe for the current ChromaDB persistence model because the
+      embedded SQLite WAL can be corrupted under concurrent writes,
+      especially during ingest_documents calls (T2-INGEST). For this plan,
+      the supported default deployment is a single replica backed by a
+      ReadWriteOnce PVC.
     mitigation: >
-      1. Document that write operations (ingest) must route to a single
-         designated primary pod (ReadWriteOnce PVC).
-      2. Consider splitting read and write replicas (separate Deployments).
-      3. Long-term: migrate ChromaDB to its HTTP API mode (Chroma server)
-         to support true horizontal scaling.
+      1. Default the Kubernetes deployment to a single replica
+         (min: 1, max: 1) with a ReadWriteOnce PVC.
+      2. Document prominently that horizontal scaling is not supported while
+         ChromaDB is running in embedded/SQLite mode.
+      3. Only enable multi-replica deployments after migrating ChromaDB to
+         its HTTP API mode (Chroma server), which is the prerequisite for
+         safe horizontal scaling.
     contingency: >
-      If ReadWriteMany causes corruption in testing, default the Kubernetes
-      manifest to a single replica (min: 1, max: 1) until Chroma server mode
-      is implemented, and document this limitation prominently.
+      If there is any uncertainty in testing or implementation, fail closed
+      by keeping the Kubernetes manifest at a single replica with
+      ReadWriteOnce storage and treat multi-replica support as blocked until
+      Chroma server mode is implemented and validated.
 
   - id: R3
     title: "Token-based auth insufficient for multi-tenant deployments"
