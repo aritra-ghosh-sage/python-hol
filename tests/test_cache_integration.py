@@ -250,6 +250,7 @@ async def test_config_endpoint_clears_cache_on_update() -> None:
         patch.object(api_module, "_cache", mock_cache),
         patch.object(api_module, "_cache_generation", 0),
         patch.object(api_module, "_corpus_version", "gen0.n1"),
+        patch("routers.config.save_config_to_disk"),
     ):
         client = TestClient(api_module.app)
         response = client.put(
@@ -293,6 +294,7 @@ async def test_config_endpoint_clears_cache_and_returns_200() -> None:
         patch.object(api_module, "_cache", mock_cache),
         patch.object(api_module, "_cache_generation", 0),
         patch.object(api_module, "_corpus_version", "gen0.n1"),
+        patch("routers.config.save_config_to_disk"),
     ):
         client = TestClient(api_module.app)
         response = client.put(
@@ -657,6 +659,7 @@ async def test_config_clear_logs_operation() -> None:
         patch.object(api_module, "_cache", mock_cache),
         patch.object(api_module, "_cache_generation", 0),
         patch.object(api_module, "_corpus_version", "gen0.n1"),
+        patch("routers.config.save_config_to_disk"),
     ):
         with patch("api.logger") as mock_logger:
             client = TestClient(api_module.app)
