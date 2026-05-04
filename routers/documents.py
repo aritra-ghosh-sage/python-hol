@@ -14,9 +14,9 @@ import socket
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
-import api  # shared state — accessed inside function bodies to avoid circular-import issues
-import chromadb
-import requests
+import api  # shared state — accessed inside function bodies; api.requests + api.chromadb used
+# to ensure monkeypatch("api.requests.get") and monkeypatch(api.chromadb, "PersistentClient")
+# intercept calls in tests.
 from api_models import (
     CollectionInfo,
     CollectionsResponse,
@@ -161,7 +161,7 @@ def _extract_text_from_file(filename: str, content_bytes: bytes) -> str:
         try:
             pdf_file = io.BytesIO(content_bytes)
             reader = pypdf.PdfReader(pdf_file)
-            text_parts = [page.extract_text() for page in reader.pages]
+            text_parts = [page.extract_text() or "" for page in reader.pages]
             return "\n".join(text_parts)
         except Exception as exc:
             raise ValueError(f"Failed to extract PDF text: {str(exc)}")
@@ -233,11 +233,11 @@ async def add_documents(
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.5",
                 }
-                response = requests.get(
+                response = api.requests.get(
                     safe_url, headers=headers, timeout=15, allow_redirects=False
                 )
                 response.raise_for_status()
-            except requests.RequestException as exc:
+            except api.requests.RequestException as exc:
                 api.logger.error("Failed to fetch URL: %s", exc)
                 raise HTTPException(
                     status_code=502, detail=f"Failed to fetch URL: {str(exc)}"
@@ -525,7 +525,7 @@ async def get_collections() -> CollectionsResponse:
         )
 
     try:
-        client = chromadb.PersistentClient(path=KNOWLEDGE_DB_DIRECTORY)
+        client = api.chromadb.PersistentClient(path=KNOWLEDGE_DB_DIRECTORY)
         all_collections = client.list_collections()
         active_name = api._retriever.collection.name
 
