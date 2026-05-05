@@ -5,6 +5,7 @@ streamable HTTP transport (e.g., Claude Desktop, hosted MCP gateways).
 """
 
 import asyncio
+import signal
 import hashlib
 import json
 import logging
@@ -324,10 +325,82 @@ async def main() -> None:
     """Start the MCP server."""
     await _initialize_retriever()
     transport = _resolve_transport()
+
+    # Use an event to wait for shutdown signals (SIGINT, SIGTERM).
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _on_signal() -> None:
+        logger.info("Shutdown signal received, stopping MCP server...")
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _on_signal)
+        except NotImplementedError:
+            # add_signal_handler is not implemented on some platforms (Windows/uvloop),
+            # rely on default signal handling in those cases.
+            pass
+
+    # Run the MCP transport in the background so we can wait for signals.
     if transport == "stdio":
-        await mcp.run_stdio_async()
+        mcp_task = asyncio.create_task(mcp.run_stdio_async())
     else:
-        await mcp.run_streamable_http_async()
+        mcp_task = asyncio.create_task(mcp.run_streamable_http_async())
+
+    # Wait until a shutdown signal is received or the mcp task finishes.
+    # asyncio.wait() requires actual Task/Future objects (not raw coroutines),
+    # so wrap the shutdown_event.wait() coroutine in a Task.
+    shutdown_wait_task = asyncio.create_task(shutdown_event.wait())
+    try:
+        done, pending = await asyncio.wait(
+            [shutdown_wait_task, mcp_task], return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        # If the wait returned early for any reason, ensure we don't leave the
+        # shutdown_wait_task pending.
+        if not shutdown_wait_task.done():
+            shutdown_wait_task.cancel()
+            try:
+                await shutdown_wait_task
+            except asyncio.CancelledError:
+                pass
+
+    # If shutdown_event triggered, attempt graceful stop of MCP transport.
+    if shutdown_event.is_set():
+        # Try to call an explicit shutdown/stop method if available on FastMCP.
+        for method_name in ("shutdown", "stop", "close", "terminate"):
+            fn = getattr(mcp, method_name, None)
+            if callable(fn):
+                try:
+                    maybe = fn()
+                    if asyncio.iscoroutine(maybe):
+                        await maybe
+                    logger.info("Called mcp.%s() for graceful shutdown", method_name)
+                except Exception as e:
+                    logger.warning("mcp.%s() raised during shutdown: %s", method_name, e)
+                break
+
+        # Cancel the transport task if still running
+        if not mcp_task.done():
+            mcp_task.cancel()
+            try:
+                await mcp_task
+            except asyncio.CancelledError:
+                logger.info("MCP transport task cancelled")
+
+    # Cleanup shared resources (mirror api.py shutdown behavior)
+    try:
+        if _cache is not None:
+            try:
+                _cache.clear()
+                logger.info("Cache cleared on shutdown")
+            except Exception as e:
+                logger.warning("Error clearing cache on shutdown: %s", e)
+    finally:
+        # Release retriever reference to allow clean process exit
+        global _retriever
+        _retriever = None
 
 
 if __name__ == "__main__":
