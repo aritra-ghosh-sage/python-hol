@@ -122,16 +122,15 @@ def initialized_app() -> Generator[TestClient, None, None]:
     # Reset shared cache generation token for test isolation.
     api._cache_generation = 0
 
-    client = TestClient(api.app)
-
-    try:
-        yield client
-    finally:
-        if api._cache is not None:
-            try:
-                api._cache.clear()
-            except Exception as e:
-                logger.warning(f"Error clearing cache after test: {e}")
+    with TestClient(api.app) as client:
+        try:
+            yield client
+        finally:
+            if api._cache is not None:
+                try:
+                    api._cache.clear()
+                except Exception as e:
+                    logger.warning(f"Error clearing cache after test: {e}")
 
 
 @pytest.fixture(scope="function")
@@ -150,15 +149,15 @@ def fake_initialized_app() -> Generator[TestClient, None, None]:
     api._cache = InMemoryCache(ttl_seconds=3600, max_size=10000)
     api._cache_generation = 0
 
-    client = TestClient(api.app)
-    try:
-        yield client
-    finally:
-        if api._cache is not None:
-            try:
-                api._cache.clear()
-            except Exception:
-                pass
+    with TestClient(api.app) as client:
+        try:
+            yield client
+        finally:
+            if api._cache is not None:
+                try:
+                    api._cache.clear()
+                except Exception:
+                    pass
 
 
 @pytest.fixture(scope="function")
