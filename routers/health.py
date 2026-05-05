@@ -5,13 +5,9 @@ Routes:
     GET /        -- Root endpoint with API discovery links.
 """
 
-import logging
-
 import api  # shared state — accessed inside function bodies to avoid circular-import issues
 from api_models import HealthResponse
 from fastapi import APIRouter
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

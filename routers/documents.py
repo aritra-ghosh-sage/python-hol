@@ -40,6 +40,9 @@ from hybrid_rag import (
 
 router = APIRouter()
 
+# RFC 6598 CGNAT range — not covered by ipaddress.is_private in Python
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
 with_pdf_support = True
 try:
     import pypdf
@@ -50,9 +53,11 @@ except ImportError:
 def _validate_url_for_ssrf(url: str) -> str:
     """Validate a user-supplied URL for SSRF and return a safe reconstructed URL.
 
-    Checks the URL scheme, netloc, and resolves the hostname to reject private,
-    loopback, link-local, and reserved IP addresses (RFC 1918 / 4193 / 3927 /
-    cloud-metadata range 169.254.0.0/16).
+    Checks the URL scheme, netloc, and resolves ALL A/AAAA records for the
+    hostname to reject private, loopback, link-local, reserved, multicast, and
+    CGNAT (RFC 6598 100.64.0.0/10) IP addresses. All addresses are checked so
+    that a round-robin DNS entry with one public and one private IP cannot bypass
+    the check.
 
     Returns a URL reconstructed from the individual parsed components rather than
     the raw user-supplied string, so that downstream code (and static analysis
@@ -70,7 +75,7 @@ def _validate_url_for_ssrf(url: str) -> str:
         A safe URL string reconstructed from the validated parsed components.
 
     Raises:
-        HTTPException: 400 if scheme/host is invalid or IP is private/reserved.
+        HTTPException: 400 if scheme/host is invalid or any resolved IP is private/reserved.
         HTTPException: 502 if DNS resolution fails.
     """
     parsed = urlparse(url)
@@ -88,35 +93,37 @@ def _validate_url_for_ssrf(url: str) -> str:
 
     hostname = parsed.hostname or ""
     try:
-        resolved_ip = socket.gethostbyname(hostname)
+        addr_infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC)
     except socket.gaierror as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Failed to resolve hostname '{hostname}': {exc}",
         )
 
-    try:
-        addr = ipaddress.ip_address(resolved_ip)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid resolved IP address: {resolved_ip}",
-        )
-
-    if (
-        addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_reserved
-        or addr.is_multicast
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Requests to private, loopback, link-local, reserved, or multicast "
-                "IP addresses are not permitted."
-            ),
-        )
+    resolved_addrs = {info[4][0] for info in addr_infos}
+    for resolved_ip in resolved_addrs:
+        try:
+            addr = ipaddress.ip_address(resolved_ip)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid resolved IP address: {resolved_ip}",
+            )
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr in _CGNAT
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Requests to private, loopback, link-local, reserved, or multicast "
+                    "IP addresses are not permitted."
+                ),
+            )
 
     # Reconstruct the URL from the individually validated components so that
     # the value passed to requests.get() is derived from parsed/server-validated
@@ -298,11 +305,7 @@ async def add_documents(
         api.logger.info("Created %d chunks from source: %s", len(chunks), source_label)
 
         try:
-            collection = (
-                api._retriever._collection
-                if hasattr(api._retriever, "_collection")
-                else api._retriever.collection
-            )
+            collection = api._retriever.collection
             if not collection:
                 raise HTTPException(
                     status_code=500, detail="Vector database collection not accessible"
