@@ -29,6 +29,7 @@ from hybrid_rag import (
     initialize_vector_db,
     is_valid_collection_name,
     list_existing_collections,
+    load_config_from_disk,
     open_collection,
 )
 
@@ -41,11 +42,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-try:
-    from hybrid_rag.persistence import load_config_from_disk
-except ImportError:  # pragma: no cover - compatibility without persistence module
-    load_config_from_disk = None
 
 # Initialize FastMCP server
 mcp = FastMCP(
@@ -63,20 +59,31 @@ _corpus_version: str = "0"
 
 
 def _load_initial_config() -> HybridRetrieverConfig:
-    """Load startup configuration, preferring persisted settings when available."""
-    config = HybridRetrieverConfig(**DEFAULT_CONFIG.to_dict())
+    """Load startup configuration, preferring persisted settings when available.
 
-    if load_config_from_disk is not None:
-        try:
-            persisted_config = load_config_from_disk(KNOWLEDGE_DB_DIRECTORY)
-            if persisted_config is not None:
-                config = persisted_config
-                logger.info("Loaded persisted MCP configuration")
-        except (OSError, ValueError, TypeError):
-            logger.exception(
-                "Failed to load persisted configuration; falling back to defaults"
-            )
+    Attempts to load configuration from knowledge_db/config.json. If no persisted
+    config exists or loading fails, uses DEFAULT_CONFIG. Environment variable
+    COLLECTION_NAME (if set and valid) overrides the loaded collection_name.
 
+    Returns:
+        Loaded or default HybridRetrieverConfig.
+
+    Raises:
+        ValueError: If COLLECTION_NAME env var is invalid.
+    """
+    # Try to load persisted configuration first
+    try:
+        config = load_config_from_disk(KNOWLEDGE_DB_DIRECTORY)
+        if config is not None:
+            logger.info("Loaded persisted configuration from disk")
+        else:
+            logger.info("No persisted configuration found, using defaults")
+            config = HybridRetrieverConfig()
+    except Exception as e:
+        logger.warning("Failed to load persisted configuration: %s; using defaults", e)
+        config = HybridRetrieverConfig()
+
+    # Override collection_name with COLLECTION_NAME env var if present
     env_collection_name = os.getenv("COLLECTION_NAME")
     if env_collection_name:
         if not is_valid_collection_name(env_collection_name):
@@ -85,6 +92,7 @@ def _load_initial_config() -> HybridRetrieverConfig:
                 "alphanumeric/underscore/hyphen only"
             )
         config = config.update(collection_name=env_collection_name)
+        logger.info("Overriding collection_name from COLLECTION_NAME env var: %s", env_collection_name)
 
     return config
 
