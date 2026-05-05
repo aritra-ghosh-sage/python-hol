@@ -337,9 +337,9 @@ async def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, _on_signal)
-        except NotImplementedError:
-            # add_signal_handler is not implemented on some platforms (Windows/uvloop),
-            # rely on default signal handling in those cases.
+        except (NotImplementedError, RuntimeError):
+            # add_signal_handler is not implemented on some platforms (Windows/uvloop)
+            # and raises RuntimeError when called outside the main thread.
             pass
 
     # Run the MCP transport in the background so we can wait for signals.

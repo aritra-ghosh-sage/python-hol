@@ -98,7 +98,12 @@ def _validate_url_for_ssrf(url: str) -> str:
             detail="URLs with embedded credentials (userinfo) are not permitted.",
         )
 
-    hostname = parsed.hostname or ""
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid URL: missing or empty hostname.",
+        )
     try:
         addr_infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC)
     except socket.gaierror as exc:
@@ -137,9 +142,14 @@ def _validate_url_for_ssrf(url: str) -> str:
     # the value passed to requests.get() is derived from parsed/server-validated
     # data, not the raw user string.  urlunparse is a no-op if the components
     # are unchanged, but the data-flow path is now sanitized.
-    safe_netloc = (
-        f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
-    )
+    try:
+        port = parsed.port
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid URL: malformed port.")
+    if ":" in hostname:  # IPv6 literal — must be bracketed in netloc
+        safe_netloc = f"[{hostname}]:{port}" if port else f"[{hostname}]"
+    else:
+        safe_netloc = f"{hostname}:{port}" if port else hostname
     safe_url = urlunparse((
         parsed.scheme,
         safe_netloc,
