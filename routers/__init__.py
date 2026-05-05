@@ -10,18 +10,18 @@ Sub-modules:
     documents -- ``POST /documents``, ``GET /documents/sources``,
                  ``GET /collections``
     websocket -- ``WS /ws/chat``
+
+WHY: Routers/__init__.py is intentionally minimal (no imports).
+     Importing routers here would create a circular dependency:
+       api.py → routers/__init__.py → routers.cache → api.py (partially initialized)
+     Instead, api.py imports directly from submodules, bypassing __init__.py.
+     See api.py lines 635-640 for how the routers are imported.
 """
 
-from routers.cache import router as cache_router
-from routers.config import router as config_router
-from routers.documents import router as documents_router
-from routers.health import router as health_router
-from routers.websocket import router as websocket_router
-
 __all__ = [
-    "health_router",
-    "config_router",
-    "cache_router",
-    "documents_router",
-    "websocket_router",
+    "health",
+    "config",
+    "cache",
+    "documents",
+    "websocket",
 ]

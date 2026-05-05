@@ -27,6 +27,7 @@ quality/results/
 quality/spec_audits/
 frontend/tmp-e2e/screenshots/
 
-#claude/github specific files
+#claude/github/opencode specific files
 .claude/context/
+.opencode/
 
