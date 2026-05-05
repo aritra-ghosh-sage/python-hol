@@ -10,7 +10,6 @@ from api_models import ConfigResponse, ConfigUpdateRequest
 from fastapi import APIRouter, HTTPException
 from hybrid_rag import (
     HybridRetriever,
-    KNOWLEDGE_DB_DIRECTORY,
     get_sample_documents,
     initialize_vector_db,
     is_valid_collection_name,
@@ -138,10 +137,10 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
                 "Collection name changed to '%s', re-initializing vector DB",
                 api._config.collection_name,
             )
-            existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
+            existing = list_existing_collections(api.KNOWLEDGE_DB_DIRECTORY)
             if api._config.collection_name in existing:
                 new_collection = open_collection(
-                    persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                    persist_dir=api.KNOWLEDGE_DB_DIRECTORY,
                     collection_name=api._config.collection_name,
                 )
                 api.logger.info(
@@ -151,7 +150,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
                 documents = get_sample_documents()
                 new_collection = initialize_vector_db(
                     documents,
-                    persist_dir=KNOWLEDGE_DB_DIRECTORY,
+                    persist_dir=api.KNOWLEDGE_DB_DIRECTORY,
                     collection_name=api._config.collection_name,
                 )
                 api.logger.info(
@@ -182,7 +181,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
             api.logger.debug("Config updated; cache not initialized")
 
         try:
-            save_config_to_disk(api._config, KNOWLEDGE_DB_DIRECTORY)
+            save_config_to_disk(api._config, api.KNOWLEDGE_DB_DIRECTORY)
             api.logger.info("Configuration persisted to disk")
         except Exception as exc:
             api.logger.error("Failed to persist configuration to disk: %s", exc)

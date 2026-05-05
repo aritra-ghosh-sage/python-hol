@@ -124,9 +124,6 @@ logger = logging.getLogger(__name__)
 if __name__ == "__main__" and "api" not in sys.modules:
     sys.modules["api"] = sys.modules["__main__"]
     logger.info("✓ Registered __main__ as 'api' in sys.modules to fix router import issue (PR #92)")
-elif __name__ != "__main__" and __name__ not in sys.modules:
-    sys.modules[__name__] = sys.modules["__main__"]
-    logger.info(f"✓ Registered {__name__} in sys.modules")
 
 __all__ = [
     # Application
