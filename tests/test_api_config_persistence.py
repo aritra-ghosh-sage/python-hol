@@ -82,16 +82,16 @@ class TestConfigPersistenceAPI:
                 # Create new app instance to trigger startup
                 from api import app as new_app
 
-                client = TestClient(new_app)
+                # Use TestClient as context manager to trigger startup_event
+                with TestClient(new_app) as client:
+                    # Query config
+                    response = client.get("/config")
+                    assert response.status_code == 200
 
-                # Query config
-                response = client.get("/config")
-                assert response.status_code == 200
-
-                data = response.json()
-                assert data["semantic_weight"] == 0.9
-                assert data["keyword_weight"] == 0.1
-                assert data["enable_rerank"] is False
+                    data = response.json()
+                    assert data["semantic_weight"] == 0.9
+                    assert data["keyword_weight"] == 0.1
+                    assert data["enable_rerank"] is False
 
     def test_default_config_when_no_persisted_file(self, client_with_temp_db):
         """Test that default config is used when no persisted file exists."""

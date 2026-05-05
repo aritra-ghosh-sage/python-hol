@@ -44,6 +44,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Optional
@@ -102,6 +103,20 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# CRITICAL FIX FOR PR #92 ROUTER IMPORT ISSUE:
+# When api.py runs as a script (python api.py), Python creates a __main__ module.
+# When routers later do "import api", Python looks for the api module in sys.modules.
+# Without this fix, "import api" creates a SECOND module instance, causing global
+# variables set in __main__ to be invisible to the routers.
+# Solution: Explicitly register __main__ as "api" in sys.modules so all imports
+# reference the same module and share the same globals.
+if __name__ == "__main__" and "api" not in sys.modules:
+    sys.modules["api"] = sys.modules["__main__"]
+    logger.info("✓ Registered __main__ as 'api' in sys.modules to fix router import issue (PR #92)")
+elif __name__ != "__main__" and __name__ not in sys.modules:
+    sys.modules[__name__] = sys.modules["__main__"]
+    logger.info(f"✓ Registered {__name__} in sys.modules")
 
 __all__ = [
     # Application
@@ -234,16 +249,25 @@ def initialize_retriever() -> None:
 async def startup_event(app: FastAPI):
     """Application startup event handler.
     
-    Initializes both the hybrid retriever and the cache backend from environment settings.
+    Initializes the hybrid retriever and cache backend from environment settings.
+    Ensures routers are registered (failsafe in case of deferred import issues).
     Both are stored as globals and cleaned up on shutdown.
     
     Raises:
         Exception: If initialization fails, critical exception is logged.
     """
     global _retriever, _config, _cache
+    logger.info("🚀 Startup event triggered")
     try:
-        # Initialize retriever
+        # Register routers first (safe here, no circular imports at startup)
+        if not _routers_registered:
+            logger.info("Registering routers...")
+            _register_routers_on_app()
+        
+        # Then initialize retriever
+        logger.info("Calling initialize_retriever...")
         initialize_retriever()
+        logger.info("✓ Retriever initialization complete, _config=%s", _config)
         
         # Initialize cache from environment settings
         try:
@@ -268,9 +292,6 @@ async def startup_event(app: FastAPI):
                 logger.warning(f"Error clearing cache on shutdown: {e}")
         
         _retriever = None
-        _config = None
-        _cache = None
-        logger.info("Application shutdown complete")
 
 
 # FastAPI application
@@ -626,34 +647,94 @@ app.add_middleware(
 logger.info("CORS enabled for origins: %s", allow_origins)
 
 # ---------------------------------------------------------------------------
-# Register routers — each sub-module owns its own routes and imports this
-# module (``import api``) for shared state access.  The circular import is
-# safe because the cross-module attribute reads happen inside function bodies,
-# not at import time.
+# Re-export route handler functions for backward compatibility
+# NOTE: Imports are deferred to avoid circular imports (see lazy __getattr__ below).
+# Each router does ``import api`` which causes circular import at module load time.
+# Functions are lazy-loaded when first accessed via module.__getattr__.
 # ---------------------------------------------------------------------------
 
-from routers import (  # noqa: E402
-    cache_router,
-    config_router,
-    documents_router,
-    health_router,
-    websocket_router,
-)
+# Lazy function imports — see __getattr__ below for implementation
+_router_functions: dict[str, Any] = {}
+_routers_registered: bool = False
 
-# Re-export individual route handler functions so that existing tests that call
-# them directly (e.g. ``await api.websocket_chat(ws)`` or ``await api.update_config(...)``)
-# continue to work after the handlers moved to routers/.
-from routers.cache import get_cache_stats  # noqa: E402,F401
-from routers.config import get_config, update_config  # noqa: E402,F401
-from routers.documents import add_documents, get_collections, get_document_sources  # noqa: E402,F401
-from routers.health import health_check, root  # noqa: E402,F401
-from routers.websocket import websocket_chat  # noqa: E402,F401
+# Register routers immediately after module initialization to make them available to
+# both the app and test clients. This happens AFTER all other module-level code executes,
+# so circular imports from routers/*.py importing api are resolved by that point.
+def _register_routers_on_app() -> None:
+    """Register all routers on the app (called during startup)."""
+    global _routers_registered
+    if _routers_registered:
+        return
+    
+    try:
+        from routers.cache import router as cache_router  # noqa: F401
+        from routers.config import router as config_router  # noqa: F401
+        from routers.documents import router as documents_router  # noqa: F401
+        from routers.health import router as health_router  # noqa: F401
+        from routers.websocket import router as websocket_router  # noqa: F401
+        
+        app.include_router(health_router)
+        app.include_router(config_router)
+        app.include_router(cache_router)
+        app.include_router(documents_router)
+        app.include_router(websocket_router)
+        _routers_registered = True
+        logger.info("✓ Routers registered successfully")
+    except Exception as e:
+        logger.error(f"Failed to register routers: {e}", exc_info=True)
+        _routers_registered = False
+        raise
 
-app.include_router(health_router)
-app.include_router(config_router)
-app.include_router(cache_router)
-app.include_router(documents_router)
-app.include_router(websocket_router)
+
+def __getattr__(name: str) -> Any:
+    """Lazy-load route handler functions to avoid circular imports.
+    
+    When a function like `get_cache_stats` is accessed via `api.get_cache_stats`
+    or imported via `from api import get_cache_stats`, this function is called
+    to load the function on-demand from the appropriate router module.
+    
+    This approach avoids circular imports that would occur if we imported
+    these functions at module load time.
+    
+    Args:
+        name: The name of the attribute being accessed.
+        
+    Returns:
+        The requested function from the appropriate router module.
+        
+    Raises:
+        AttributeError: If the name is not a known router function.
+    """
+    # Map function names to (module_name, function_name) tuples
+    router_function_map = {
+        "get_cache_stats": ("routers.cache", "get_cache_stats"),
+        "get_config": ("routers.config", "get_config"),
+        "update_config": ("routers.config", "update_config"),
+        "add_documents": ("routers.documents", "add_documents"),
+        "get_document_sources": ("routers.documents", "get_document_sources"),
+        "get_collections": ("routers.documents", "get_collections"),
+        "health_check": ("routers.health", "health_check"),
+        "root": ("routers.health", "root"),
+        "websocket_chat": ("routers.websocket", "websocket_chat"),
+    }
+    
+    if name not in router_function_map:
+        raise AttributeError(f"module 'api' has no attribute '{name}'")
+    
+    # Lazy-load the function if not already cached
+    if name not in _router_functions:
+        module_name, func_name = router_function_map[name]
+        module = __import__(module_name, fromlist=[func_name])
+        _router_functions[name] = getattr(module, func_name)
+    
+    return _router_functions[name]
+
+
+# NOTE: Router registration is deferred to startup_event() to avoid circular imports.
+# Do NOT register routers here at module load time. The circular import sequence is:
+# api.py (line N) -> _register_routers_on_app() -> routers.cache -> import api (incomplete)
+# This causes the error: "cannot import name 'router' from partially initialized module"
+# Solution: Only register routers in startup_event() after all modules are fully loaded.
 
 
 if __name__ == "__main__":
