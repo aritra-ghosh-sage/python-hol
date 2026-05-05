@@ -75,7 +75,8 @@ def _validate_url_for_ssrf(url: str) -> str:
         A safe URL string reconstructed from the validated parsed components.
 
     Raises:
-        HTTPException: 400 if scheme/host is invalid or any resolved IP is private/reserved.
+        HTTPException: 400 if scheme/host is invalid, URL contains userinfo,
+            or any resolved IP is private/reserved/unspecified.
         HTTPException: 502 if DNS resolution fails.
     """
     parsed = urlparse(url)
@@ -89,6 +90,12 @@ def _validate_url_for_ssrf(url: str) -> str:
         raise HTTPException(
             status_code=400,
             detail="Invalid URL: missing hostname.",
+        )
+
+    if parsed.username or parsed.password:
+        raise HTTPException(
+            status_code=400,
+            detail="URLs with embedded credentials (userinfo) are not permitted.",
         )
 
     hostname = parsed.hostname or ""
@@ -115,6 +122,7 @@ def _validate_url_for_ssrf(url: str) -> str:
             or addr.is_link_local
             or addr.is_reserved
             or addr.is_multicast
+            or addr.is_unspecified
             or addr in _CGNAT
         ):
             raise HTTPException(
@@ -129,9 +137,12 @@ def _validate_url_for_ssrf(url: str) -> str:
     # the value passed to requests.get() is derived from parsed/server-validated
     # data, not the raw user string.  urlunparse is a no-op if the components
     # are unchanged, but the data-flow path is now sanitized.
+    safe_netloc = (
+        f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
+    )
     safe_url = urlunparse((
         parsed.scheme,
-        parsed.netloc,
+        safe_netloc,
         parsed.path,
         parsed.params,
         parsed.query,
@@ -215,11 +226,12 @@ async def add_documents(
         text_content = ""
         source_label: Optional[str] = request.source_label
 
-        api.logger.info(
-            "Ingest type: %s; cache %s",
-            request.ingest_type,
-            "will be cleared" if request.ingest_type == "update" else "will be preserved",
-        )
+        if "ingest_type" in request.model_fields_set:
+            api.logger.info("Ingest type: %s", request.ingest_type)
+        else:
+            api.logger.info("Ingest type: auto (will be resolved from collection)")
+
+        safe_url: Optional[str] = None
 
         if request.source_type == "text":
             text_content = request.content
@@ -251,7 +263,7 @@ async def add_documents(
                 )
 
             text_content = response.text
-            source_label = request.source_label or request.content
+            source_label = request.source_label or safe_url
 
         elif request.source_type == "file":
             try:
@@ -312,9 +324,7 @@ async def add_documents(
                 )
 
             doc_ids = [f"{source_label}_{i}" for i in range(len(chunks))]
-            parsed = urlparse(request.content)
-            is_http_url = parsed.scheme in ("http", "https") and bool(parsed.netloc)
-            source_url = request.content if is_http_url else None
+            source_url = safe_url  # None for text/file; validated URL for url type
             url_meta: dict = {"source_url": source_url} if source_url else {}
             metadatas = [
                 {

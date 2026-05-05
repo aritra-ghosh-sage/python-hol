@@ -101,8 +101,8 @@ class TestConfigPersistenceAPI:
 
         data = response.json()
         # Should have default values
-        assert data["semantic_weight"] == 0.7
-        assert data["keyword_weight"] == 0.3
+        assert data["semantic_weight"] == 0.65
+        assert data["keyword_weight"] == 0.35
         assert data["enable_rerank"] is True
 
     def test_multiple_updates_persist_latest(self, client_with_temp_db, temp_knowledge_db):

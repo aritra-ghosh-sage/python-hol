@@ -187,8 +187,6 @@ class HybridRetrieverConfig:
 
 # Default configuration instance
 DEFAULT_CONFIG = HybridRetrieverConfig(
-    semantic_weight=0.7,
-    keyword_weight=0.3,
     enable_rerank=True,
     collection_name="rag_collection",
 )
