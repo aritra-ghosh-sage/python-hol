@@ -47,7 +47,7 @@ import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import requests  # noqa: F401 — tests patch api.requests.get; import kept here for backward compat
 import chromadb  # noqa: F401 — tests patch api.chromadb.PersistentClient; import kept here for backward compat
@@ -96,6 +96,16 @@ from api_models import (
     WsResultsMessage,
     WsStatusMessage,
 )
+
+# TYPE_CHECKING imports — make route functions visible to static analyzers (Ruff, mypy, etc.)
+# These imports are only executed during type-checking, not at runtime.
+# At runtime, __getattr__() (defined below) provides the functions lazily to avoid circular imports.
+if TYPE_CHECKING:
+    from routers.cache import get_cache_stats
+    from routers.config import get_config, update_config
+    from routers.documents import add_documents, get_collections, get_document_sources
+    from routers.health import health_check, root
+    from routers.websocket import websocket_chat
 
 # Configure logging
 logging.basicConfig(
