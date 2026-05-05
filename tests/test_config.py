@@ -120,10 +120,20 @@ class TestHybridRetrieverConfig:
         config = HybridRetrieverConfig(collection_name="test_collection-v2")
         assert config.collection_name == "test_collection-v2"
 
+    def test_default_config_weights_match_dataclass_field_defaults(self) -> None:
+        """DEFAULT_CONFIG weights must match HybridRetrieverConfig field defaults.
+
+        This test verifies that DEFAULT_CONFIG inherits the dataclass defaults
+        (0.65/0.35) rather than overriding them with hardcoded values.
+        """
+        bare = HybridRetrieverConfig()
+        assert DEFAULT_CONFIG.semantic_weight == bare.semantic_weight
+        assert DEFAULT_CONFIG.keyword_weight == bare.keyword_weight
+
     def test_default_config_all_fields_match_expected_values(self):
         """DEFAULT_CONFIG has all expected field values including collection_name."""
-        assert DEFAULT_CONFIG.semantic_weight == 0.7
-        assert DEFAULT_CONFIG.keyword_weight == 0.3
+        assert DEFAULT_CONFIG.semantic_weight == 0.65
+        assert DEFAULT_CONFIG.keyword_weight == 0.35
         assert DEFAULT_CONFIG.enable_rerank is True
         assert DEFAULT_CONFIG.collection_name == "rag_collection"
         # Also check default values for fields not specified in DEFAULT_CONFIG

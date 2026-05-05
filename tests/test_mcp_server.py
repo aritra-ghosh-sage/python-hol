@@ -304,6 +304,26 @@ async def test_query_knowledge_base_populates_cache_on_miss(mock_retriever):
 
 
 @pytest.mark.asyncio
+async def test_main_surfaces_mcp_task_exception(monkeypatch):
+    """main() should propagate exceptions from the MCP transport task."""
+    monkeypatch.setattr(mcp_server, "_initialize_retriever", AsyncMock())
+    monkeypatch.setattr(mcp_server, "_resolve_transport", lambda: "stdio")
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(
+        type(loop), "add_signal_handler", lambda self, sig, handler: None
+    )
+
+    async def raise_error():
+        raise RuntimeError("transport crashed")
+
+    monkeypatch.setattr(mcp_server.mcp, "run_stdio_async", raise_error)
+
+    with pytest.raises(RuntimeError, match="transport crashed"):
+        await mcp_server.main()
+
+
+@pytest.mark.asyncio
 async def test_query_knowledge_base_fail_open_on_cache_error(mock_retriever):
     """query_knowledge_base falls back to retrieve() when the cache read raises."""
     mock_cache = MagicMock()
@@ -349,7 +369,7 @@ async def test_main_graceful_shutdown_calls_mcp_shutdown_and_clears_cache(monkey
 
     loop = asyncio.get_running_loop()
     # Replace add_signal_handler to invoke handler immediately to simulate SIGINT/SIGTERM
-    monkeypatch.setattr(loop, "add_signal_handler", lambda sig, handler: handler())
+    monkeypatch.setattr(type(loop), "add_signal_handler", lambda self, sig, handler: handler())
 
     # run_stdio_async never completes so the server would run until shutdown is triggered
     async def never_complete():
@@ -382,7 +402,7 @@ async def test_main_graceful_shutdown_uses_stop_when_shutdown_missing(monkeypatc
     monkeypatch.setattr(mcp_server, "_resolve_transport", lambda: "stdio")
 
     loop = asyncio.get_running_loop()
-    monkeypatch.setattr(loop, "add_signal_handler", lambda sig, handler: handler())
+    monkeypatch.setattr(type(loop), "add_signal_handler", lambda self, sig, handler: handler())
 
     async def never_complete():
         await asyncio.Event().wait()

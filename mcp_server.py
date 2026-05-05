@@ -79,10 +79,10 @@ def _load_initial_config() -> HybridRetrieverConfig:
             logger.info("Loaded persisted configuration from disk")
         else:
             logger.info("No persisted configuration found, using defaults")
-            config = HybridRetrieverConfig()
+            config = DEFAULT_CONFIG
     except Exception as e:
         logger.warning("Failed to load persisted configuration: %s; using defaults", e)
-        config = HybridRetrieverConfig()
+        config = DEFAULT_CONFIG
 
     # Override collection_name with COLLECTION_NAME env var if present
     env_collection_name = os.getenv("COLLECTION_NAME")
@@ -365,6 +365,10 @@ async def main() -> None:
                 await shutdown_wait_task
             except asyncio.CancelledError:
                 pass
+
+    # Surface transport exception if task exited before a shutdown signal
+    if mcp_task in done and not shutdown_event.is_set():
+        mcp_task.result()  # re-raises any stored exception
 
     # If shutdown_event triggered, attempt graceful stop of MCP transport.
     if shutdown_event.is_set():

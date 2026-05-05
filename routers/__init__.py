@@ -15,7 +15,7 @@ WHY: Routers/__init__.py is intentionally minimal (no imports).
      Importing routers here would create a circular dependency:
        api.py → routers/__init__.py → routers.cache → api.py (partially initialized)
      Instead, api.py imports directly from submodules, bypassing __init__.py.
-     See api.py lines 635-640 for how the routers are imported.
+     See _register_routers_on_app() in api.py for how routers are registered.
 """
 
 __all__ = [

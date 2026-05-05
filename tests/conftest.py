@@ -56,7 +56,7 @@ def _make_fake_retriever() -> HybridRetriever:
     collection.count.return_value = 5
     obj.collection = collection
     obj.config = HybridRetrieverConfig(
-        semantic_weight=0.7, keyword_weight=0.3, enable_rerank=False
+        semantic_weight=0.65, keyword_weight=0.35, enable_rerank=False
     )
     obj.reranker = None
     obj.encoder = MagicMock()
@@ -96,8 +96,8 @@ def initialized_app() -> Generator[TestClient, None, None]:
     logger.info("Initializing retriever for test...")
     try:
         config = HybridRetrieverConfig(
-            semantic_weight=0.7,
-            keyword_weight=0.3,
+            semantic_weight=0.65,
+            keyword_weight=0.35,
             enable_rerank=True
         )
         documents = get_sample_documents()

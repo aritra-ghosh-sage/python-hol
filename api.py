@@ -209,7 +209,7 @@ def initialize_retriever() -> None:
             # Initialize with default configuration if no persisted config
             logger.info("No persisted configuration found, using defaults")
             _config = HybridRetrieverConfig(
-                semantic_weight=0.7, keyword_weight=0.3, enable_rerank=True
+                semantic_weight=0.65, keyword_weight=0.35, enable_rerank=True
             )
 
         # Initialize vector database

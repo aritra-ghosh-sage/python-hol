@@ -131,3 +131,31 @@ class TestIngestionPathWiring:
         assert any(
             m.get("section_h1") == "Overview" for m in captured_metadatas
         ), f"No section_h1='Overview' found in {captured_metadatas}"
+
+
+class TestValidateUrlForSsrf:
+    """Unit tests for _validate_url_for_ssrf."""
+
+    def test_unspecified_ipv4_raises_400(self) -> None:
+        from routers.documents import _validate_url_for_ssrf
+        from fastapi import HTTPException
+        import pytest
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_url_for_ssrf("http://0.0.0.0/evil")
+        assert exc_info.value.status_code == 400
+
+    def test_userinfo_in_url_raises_400(self) -> None:
+        from routers.documents import _validate_url_for_ssrf
+        from fastapi import HTTPException
+        import pytest
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_url_for_ssrf("http://user:pass@example.com/path")
+        assert exc_info.value.status_code == 400
+
+    def test_userinfo_username_only_raises_400(self) -> None:
+        from routers.documents import _validate_url_for_ssrf
+        from fastapi import HTTPException
+        import pytest
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_url_for_ssrf("http://user@example.com/path")
+        assert exc_info.value.status_code == 400
