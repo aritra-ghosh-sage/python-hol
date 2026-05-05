@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import mcp_server
 from hybrid_rag import DEFAULT_CONFIG
+import asyncio
 
 
 @pytest.fixture
@@ -337,3 +338,72 @@ def test_build_corpus_version_token_without_retriever():
     token = mcp_server._build_corpus_version_token()
 
     assert token == "gen0.n0"
+
+
+@pytest.mark.asyncio
+async def test_main_graceful_shutdown_calls_mcp_shutdown_and_clears_cache(monkeypatch):
+    """Simulate a shutdown signal and ensure mcp.shutdown is called and cache cleared."""
+    # Arrange
+    monkeypatch.setattr(mcp_server, "_initialize_retriever", AsyncMock())
+    monkeypatch.setattr(mcp_server, "_resolve_transport", lambda: "stdio")
+
+    loop = asyncio.get_running_loop()
+    # Replace add_signal_handler to invoke handler immediately to simulate SIGINT/SIGTERM
+    monkeypatch.setattr(loop, "add_signal_handler", lambda sig, handler: handler())
+
+    # run_stdio_async never completes so the server would run until shutdown is triggered
+    async def never_complete():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(mcp_server.mcp, "run_stdio_async", never_complete)
+
+    # Provide an async shutdown method to be called by main()
+    shutdown_mock = AsyncMock()
+    setattr(mcp_server.mcp, "shutdown", shutdown_mock)
+
+    # Populate cache and retriever so cleanup can be observed
+    mcp_server._cache = MagicMock()
+    mcp_server._retriever = MagicMock()
+
+    # Act
+    await mcp_server.main()
+
+    # Assert
+    shutdown_mock.assert_awaited_once()
+    mcp_server._cache.clear.assert_called_once()
+    assert mcp_server._retriever is None
+
+
+@pytest.mark.asyncio
+async def test_main_graceful_shutdown_uses_stop_when_shutdown_missing(monkeypatch):
+    """If mcp.shutdown missing, main() should try fallback method like stop()."""
+    # Arrange
+    monkeypatch.setattr(mcp_server, "_initialize_retriever", AsyncMock())
+    monkeypatch.setattr(mcp_server, "_resolve_transport", lambda: "stdio")
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "add_signal_handler", lambda sig, handler: handler())
+
+    async def never_complete():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(mcp_server.mcp, "run_stdio_async", never_complete)
+
+    # Ensure 'shutdown' is not callable; provide 'stop' as the fallback async method
+    try:
+        delattr(mcp_server.mcp, "shutdown")
+    except Exception:
+        pass
+    stop_mock = AsyncMock()
+    setattr(mcp_server.mcp, "stop", stop_mock)
+
+    mcp_server._cache = MagicMock()
+    mcp_server._retriever = MagicMock()
+
+    # Act
+    await mcp_server.main()
+
+    # Assert
+    stop_mock.assert_awaited_once()
+    mcp_server._cache.clear.assert_called_once()
+    assert mcp_server._retriever is None
