@@ -502,6 +502,11 @@ def chunk_document(
         raise ValueError("chunk_overlap must be >= 0")
     if chunk_overlap >= chunk_size:
         raise ValueError("chunk_overlap must be < chunk_size")
+    # Normalise whitespace before chunking so that noisy HTML/pasted content
+    # (excessive blank lines, run-on spaces) does not inflate chunk boundaries
+    # or pollute embeddings, while preserving semantic structures (code blocks,
+    # tables, lists) that depend on indentation and alignment.
+    text = _normalize_whitespace(text)
     # Note 13: The size_splitter is created ONCE here and passed down to every
     # private helper.  This is the "shared resource" pattern: all three paths
     # need identical size-cap behaviour, so building the splitter in one place
