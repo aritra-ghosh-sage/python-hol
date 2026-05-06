@@ -22,6 +22,9 @@ implementation_docs/
 knowledge_db/
 knowledge_db/chroma.sqlite3
 
+# Local model cache (downloaded on first run, ~100–400 MB)
+models/
+
 quality/code_reviews/
 quality/results/
 quality/spec_audits/

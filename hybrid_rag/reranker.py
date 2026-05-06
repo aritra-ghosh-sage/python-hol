@@ -2,15 +2,12 @@
 
 import logging
 import math
-import os
 from typing import Any
 
-from dotenv import load_dotenv
 from sentence_transformers import CrossEncoder
 
 from .constants import DEFAULT_RERANKER_MODEL_PATH
-
-load_dotenv()
+from .vectordb import ensure_model_local
 
 __all__ = ["CrossEncoderReranker"]
 
@@ -43,8 +40,7 @@ class CrossEncoderReranker:
         """Initialize the cross-encoder reranker, loading from local path when available.
 
         On first run the model is downloaded from Hugging Face and persisted to
-        *model_path*. Subsequent calls load directly from disk, removing the
-        dependency on the Hugging Face endpoint at inference time.
+        *model_path*. Subsequent calls load directly from disk.
 
         Args:
             model_path: Directory path to store/load the cross-encoder model.
@@ -54,31 +50,10 @@ class CrossEncoderReranker:
             ImportError: If sentence-transformers is not installed.
         """
         try:
-            hf_token = os.environ.get("HF_TOKEN")
-            local_path = os.path.abspath(model_path)
-
-            if os.path.isdir(local_path) and os.path.exists(
-                os.path.join(local_path, "config.json")
-            ):
-                logger.info(
-                    "Loading cross-encoder model from local path: %s", local_path
-                )
-                self.model = CrossEncoder(local_path, token=hf_token)
-            else:
-                logger.info(
-                    "Downloading cross-encoder model '%s' and saving to %s",
-                    self._MODEL_NAME,
-                    local_path,
-                )
-                self.model = CrossEncoder(self._MODEL_NAME, token=hf_token)
-                os.makedirs(local_path, exist_ok=True)
-                self.model.save(local_path)
-                logger.info(
-                    "Cross-encoder model saved locally at %s; "
-                    "future loads will use this path.",
-                    local_path,
-                )
-
+            local_path = ensure_model_local(
+                self._MODEL_NAME, model_path, CrossEncoder
+            )
+            self.model = CrossEncoder(local_path)
             logger.info("Cross-encoder reranker initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize cross-encoder reranker: {e}")

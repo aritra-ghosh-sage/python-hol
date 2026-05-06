@@ -37,6 +37,8 @@ class ConfigResponse(BaseModel):
     enable_rerank: bool
     pre_rerank_top_k: int
     collection_name: str
+    embedding_model_path: str
+    reranker_model_path: str
 
 
 class HealthResponse(BaseModel):
@@ -50,6 +52,12 @@ class ConfigUpdateRequest(BaseModel):
     """Request model for configuration updates.
 
     All fields are optional — only provided fields will be updated.
+
+    Note: embedding_model_path and reranker_model_path are intentionally omitted.
+    Model paths are configuration state, not tunable parameters; they are set
+    via environment or config file at initialization, not via the runtime API.
+    Changing model paths at runtime would require reloading all models, which
+    is not supported in this internal tool context.
     """
 
     semantic_top_k: Optional[int] = Field(

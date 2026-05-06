@@ -13,7 +13,9 @@ keeping the rest of the library free of direct database calls.
 import logging
 import os
 import re
-from typing import Any, cast
+from typing import Any, Callable, TypeVar, cast
+
+_M = TypeVar("_M")
 
 # Note 3: urlparse is added in ADR-0001 T2 to detect whether a document's
 # "source" field is a real HTTP/HTTPS URL. This drives the conditional
@@ -63,18 +65,64 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+def ensure_model_local(
+    model_name: str,
+    model_path: str,
+    loader: Callable[[str], _M],
+) -> str:
+    """Guarantee a sentence-transformers-compatible model is available locally.
+
+    Checks whether *model_path* already contains a saved model (detected by the
+    presence of ``config.json``). If found, the local path is returned as-is. If
+    not, the model is downloaded via *loader*, saved to *model_path*, and that
+    path is returned. The save is atomic: uses a temporary directory and renames
+    on completion to prevent partial writes.
+
+    This single implementation is the only download-or-load workflow in the
+    codebase; both the embedding model (SentenceTransformer) and the reranker
+    (CrossEncoder) delegate here.
+
+    Args:
+        model_name: Hugging Face model identifier used when a local copy is absent.
+        model_path: Directory to store/load the model.
+        loader: Callable that accepts a model name/path and returns a model
+            instance with a ``save(path)`` method (e.g. SentenceTransformer,
+            CrossEncoder).
+
+    Returns:
+        Absolute path to the local model directory.
+
+    Raises:
+        Exception: If download or save fails (from loader or model.save()).
+    """
+    import shutil
+
+    local_path = os.path.abspath(model_path)
+    if os.path.isdir(local_path) and os.path.exists(
+        os.path.join(local_path, "config.json")
+    ):
+        logger.info("Loading model from local path: %s", local_path)
+    else:
+        logger.info("Downloading model '%s' to %s", model_name, local_path)
+        model = loader(model_name)
+        tmp_path = local_path + ".tmp"
+        try:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            os.makedirs(tmp_path, exist_ok=True)
+            model.save(tmp_path)  # type: ignore[union-attr]
+            os.rename(tmp_path, local_path)
+        except Exception as e:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            raise
+        logger.info("Model saved to %s; future loads will use this path.", local_path)
+    return local_path
+
+
 def _ensure_embedding_model_local(model_path: str) -> str:
-    """Guarantee the sentence-transformer model is available at a local path.
+    """Return a local path for the sentence-transformer embedding model.
 
-    Checks whether *model_path* already contains a valid saved
-    sentence-transformer model (detected by the presence of ``config.json``).
-    If the model is found locally it is used as-is. If not, the model is
-    downloaded from Hugging Face using :data:`DEFAULT_EMBEDDING_MODEL`, saved
-    to *model_path*, and that path is returned.
-
-    This ensures that all downstream consumers (``initialize_vector_db``,
-    ``open_collection``) only ever hit the Hugging Face endpoint on the very
-    first call; every subsequent call is fully offline.
+    Thin wrapper around :func:`ensure_model_local` that binds the HF model
+    name and loader for the embedding model.
 
     Args:
         model_path: Directory to store/load the sentence-transformer model.
@@ -84,25 +132,7 @@ def _ensure_embedding_model_local(model_path: str) -> str:
     """
     from sentence_transformers import SentenceTransformer as _ST
 
-    local_path = os.path.abspath(model_path)
-    if os.path.isdir(local_path) and os.path.exists(
-        os.path.join(local_path, "config.json")
-    ):
-        logger.info("Loading embedding model from local path: %s", local_path)
-    else:
-        logger.info(
-            "Downloading embedding model '%s' and saving to %s",
-            DEFAULT_EMBEDDING_MODEL,
-            local_path,
-        )
-        model = _ST(DEFAULT_EMBEDDING_MODEL)
-        os.makedirs(local_path, exist_ok=True)
-        model.save(local_path)
-        logger.info(
-            "Embedding model saved locally at %s; future loads will use this path.",
-            local_path,
-        )
-    return local_path
+    return ensure_model_local(DEFAULT_EMBEDDING_MODEL, model_path, _ST)
 
 
 def chunk_text(
