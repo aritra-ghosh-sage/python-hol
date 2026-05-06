@@ -148,3 +148,18 @@ Commit: `<type>(<scope>): <subject>` (types: `feat`, `fix`, `docs`, `style`, `re
 ## Environment
 
 Copy `.env.local.example` to `.env.local`. Python 3.13+ and Node 20.9+ required.
+
+## GitHub Access
+
+GitHub MCP is not needed — `gh pr view`, `gh pr diff`, `gh api` cover all PR access without it.
+
+## Routers — Shared State Access
+
+All router modules (`routers/*.py`) access `api.logger`, `api.requests.get()`, `api.chromadb.PersistentClient()` via the `api` module (not local imports). This keeps existing `monkeypatch("api.requests.get")` patches working. Never add `import requests` or `import chromadb` directly in routers.
+
+## Known Pre-existing Test Failures
+
+These fail in CI/sandbox environments and should not be fixed:
+- `test_all_acceptance_criteria_implemented` — checks routes on bare `FastAPI()` with no routers registered
+- `test_url_html_ingestion_stores_heading_metadata` — DNS blocked in sandbox
+- `test_ingest_update_clears_cache` / `test_ingest_add_preserves_cache` — 404 on uninitialized app fixture
