@@ -111,7 +111,7 @@ def ensure_model_local(
             os.makedirs(tmp_path, exist_ok=True)
             model.save(tmp_path)  # type: ignore[union-attr]
             os.rename(tmp_path, local_path)
-        except Exception as e:
+        except Exception:
             shutil.rmtree(tmp_path, ignore_errors=True)
             raise
         logger.info("Model saved to %s; future loads will use this path.", local_path)
