@@ -27,6 +27,7 @@ def client_with_temp_db(temp_knowledge_db):
                 yield client
 
 
+@pytest.mark.slow
 class TestConfigPersistenceAPI:
     """Test config persistence through the API layer."""
 

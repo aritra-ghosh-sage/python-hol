@@ -30,6 +30,26 @@ logging.basicConfig(
 )
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--run-slow",
+        action="store_true",
+        default=False,
+        help="Run tests marked @pytest.mark.slow (downloads models, makes network calls).",
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    if config.getoption("--run-slow"):
+        return
+    skip_slow = pytest.mark.skip(reason="slow test — pass --run-slow to enable")
+    for item in items:
+        if item.get_closest_marker("slow"):
+            item.add_marker(skip_slow)
+
+
 def _is_retriever_collection_healthy() -> bool:
     """Return True when the global retriever has an accessible collection."""
     if api._retriever is None:
@@ -78,7 +98,7 @@ def setup_test_environment() -> None:
 
 
 @pytest.fixture(scope="function")
-def initialized_app() -> Generator[TestClient, None, None]:
+def initialized_app(request: pytest.FixtureRequest) -> Generator[TestClient, None, None]:
     """Create and initialize the app with retriever and cache.
 
     This fixture:
@@ -90,6 +110,8 @@ def initialized_app() -> Generator[TestClient, None, None]:
     Yields:
         TestClient: A test client for the initialized app
     """
+    if not request.config.getoption("--run-slow", default=False):
+        pytest.skip("slow test — pass --run-slow to enable (downloads embedding model)")
     # Always initialize a fresh retriever per test to avoid stale collection handles.
     # Some tests recreate/delete the same underlying collection name, which can invalidate
     # previously held retriever references across modules.
@@ -149,15 +171,22 @@ def fake_initialized_app() -> Generator[TestClient, None, None]:
     api._cache = InMemoryCache(ttl_seconds=3600, max_size=10000)
     api._cache_generation = 0
 
-    with TestClient(api.app) as client:
-        try:
-            yield client
-        finally:
-            if api._cache is not None:
-                try:
-                    api._cache.clear()
-                except Exception:
-                    pass
+    # Patch initialize_retriever to a no-op so the lifespan runs (registers routers)
+    # without triggering a HuggingFace model download. State is already injected above.
+    original_initialize = api.initialize_retriever
+    api.initialize_retriever = lambda: None
+    try:
+        with TestClient(api.app) as client:
+            try:
+                yield client
+            finally:
+                if api._cache is not None:
+                    try:
+                        api._cache.clear()
+                    except Exception:
+                        pass
+    finally:
+        api.initialize_retriever = original_initialize
 
 
 @pytest.fixture(scope="function")
