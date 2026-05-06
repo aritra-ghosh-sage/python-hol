@@ -135,6 +135,244 @@ def _ensure_embedding_model_local(model_path: str) -> str:
     return ensure_model_local(DEFAULT_EMBEDDING_MODEL, model_path, _ST)
 
 
+def _has_table_structure(text: str) -> bool:
+    """Detect if text contains table markup (markdown or HTML).
+
+    Tables require careful whitespace handling because alignment matters.
+
+    Args:
+        text: Text to check for table structure.
+
+    Returns:
+        True if text contains pipe-delimited (markdown) or <table> (HTML) markup.
+    """
+    lines = text.split("\n")
+    pipe_rows = sum(1 for line in lines if "|" in line and line.strip())
+    if pipe_rows >= 2:
+        return True
+    return "<table" in text.lower()
+
+
+def _has_code_block(text: str) -> bool:
+    """Detect if text contains code blocks that need structure preservation.
+
+    Code blocks (markdown, preformatted) should not have indentation collapsed.
+
+    Args:
+        text: Text to check for code blocks.
+
+    Returns:
+        True if text contains markdown code fences (```), HTML <pre>, or 4-space indentation.
+    """
+    # Markdown code fences
+    if "```" in text:
+        return True
+    # HTML preformatted
+    if "<pre" in text.lower():
+        return True
+    # Indented code (4-space indent on non-empty line)
+    for line in text.split("\n"):
+        if line.startswith("    ") and line.strip():
+            return True
+    return False
+
+
+def _has_list_structure(text: str) -> bool:
+    """Detect if text contains markdown/HTML lists with nesting.
+
+    Lists with indentation require careful whitespace handling.
+
+    Args:
+        text: Text to check for list structure.
+
+    Returns:
+        True if text contains list markers (-, *, +, numbers) with indentation.
+    """
+    has_list = False
+    has_indented_list = False
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        leading_spaces = len(line) - len(stripped)
+        is_list = stripped.startswith(("- ", "* ", "+ ", "• ")) or (
+            stripped and stripped[0].isdigit() and ". " in stripped[:4]
+        )
+        if is_list:
+            has_list = True
+            if leading_spaces > 0:
+                has_indented_list = True
+    return has_list and has_indented_list
+
+
+def _normalize_whitespace_aggressive(text: str) -> str:
+    """Aggressively normalize: collapse all whitespace, remove all blank lines.
+
+    Used for noisy HTML/pasted content without structure concerns.
+    """
+    lines = (re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+def _normalize_whitespace_preserve_structure(text: str) -> str:
+    """Normalize while preserving semantic structures (lists, code, tables).
+
+    Strategy:
+      - Detect code blocks (```, <pre>, 4-space indent block) and preserve as-is
+      - Detect tables (|, <table>) and preserve alignment
+      - Detect lists (-, *, numbers) and preserve indentation (including nested)
+      - Apply aggressive normalization to normal text
+    """
+    result = []
+    in_code_block = False
+    in_indented_code = False
+    code_block_indent = 0
+    lines_list = text.splitlines()
+
+    for idx, line in enumerate(lines_list):
+        stripped = line.lstrip()
+        leading_spaces = len(line) - len(stripped)
+
+        # Detect markdown code fence (toggle code block mode)
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            result.append(line)
+            continue
+
+        # Preserve content inside markdown code blocks exactly as-is
+        if in_code_block:
+            result.append(line)
+            continue
+
+        # Detect indented code block (4-space indent, context: surrounded by text)
+        # Rule: 4+ spaces OR existing indented code block until dedent
+        if not in_indented_code and leading_spaces >= 4 and stripped:
+            # Start indented code block if preceded by non-empty line
+            if idx > 0 and lines_list[idx - 1].strip():
+                in_indented_code = True
+                code_block_indent = leading_spaces
+        elif in_indented_code:
+            # Continue indented code block if still indented or blank
+            if stripped and leading_spaces < code_block_indent:
+                in_indented_code = False
+            elif not stripped:
+                # Blank line in indented code block
+                result.append(line)
+                continue
+
+        if in_indented_code:
+            # Preserve indented code exactly
+            result.append(line)
+            continue
+
+        # Preserve HTML <pre> blocks exactly as-is
+        if stripped.startswith("<pre"):
+            result.append(line)
+            continue
+
+        # Preserve lines that are part of HTML <pre> content
+        if "</pre>" not in line and "<pre" in "\n".join(result[-5:] if result else []):
+            result.append(line)
+            continue
+
+        # Detect table rows (pipes) — preserve line structure
+        if "|" in line and line.count("|") >= 2:
+            result.append(line)
+            continue
+
+        # Detect HTML table elements
+        if any(tag in line.lower() for tag in ["<table", "<tr", "<td", "<th", "</table>"]):
+            result.append(line)
+            continue
+
+        # Detect list markers: -, *, +, numbered (1., 2., etc.)
+        # Do this BEFORE stripping leading spaces to detect nested items
+        is_list_item = (
+            stripped.startswith(("- ", "* ", "+ ", "• ")) or
+            re.match(r"^\d+\.\s", stripped)
+        )
+
+        # For ANY list item (including nested), preserve leading indentation
+        # and only collapse internal whitespace
+        if is_list_item:
+            if stripped:
+                collapsed_content = re.sub(r"[ \t]+", " ", stripped)
+                result.append(" " * leading_spaces + collapsed_content)
+            else:
+                result.append(line)
+            continue
+
+        # For indented content that's not a list item (continuation of list, nested text),
+        # preserve leading spaces but collapse internal whitespace
+        if leading_spaces > 0 and stripped and not is_list_item:
+            collapsed_content = re.sub(r"[ \t]+", " ", stripped)
+            result.append(" " * leading_spaces + collapsed_content)
+            continue
+
+        # Q&A format: preserve "Q:" and "A:" patterns with minimal collapse
+        if stripped.startswith(("Q:", "A:")) and leading_spaces == 0:
+            collapsed = re.sub(r"[ \t]+", " ", line).strip()
+            if collapsed:
+                result.append(collapsed)
+            continue
+
+        # Normal text: aggressive normalization
+        cleaned = re.sub(r"[ \t]+", " ", line).strip()
+        if cleaned:
+            result.append(cleaned)
+
+    # Remove consecutive blank lines (but preserve some structure)
+    final_result = []
+    prev_blank = False
+    for line in result:
+        is_blank = not line.strip()
+        if not (is_blank and prev_blank):
+            final_result.append(line)
+        prev_blank = is_blank
+
+    return "\n".join(final_result)
+
+
+def _normalize_whitespace(text: str) -> str:
+    """Normalize whitespace in source text, preserving FAQ/Confluence structures.
+
+    Smart normalization that:
+      - Removes excessive blank lines and run-on spaces from noisy HTML/pasted content
+      - Preserves code block indentation (markdown ```, HTML <pre>, 4-space indent)
+      - Preserves table alignment (markdown |, HTML <table>)
+      - Preserves list hierarchy (leading spaces before -, *, numbers)
+      - Handles Q&A format
+
+    This prevents noise patterns like "\\n \\n \\n \\n" from cluttering
+    embeddings while keeping semantic structures intact.
+
+    Args:
+        text: Raw source text, potentially containing excessive whitespace
+            and semantic structures.
+
+    Returns:
+        Cleaned text with excessive whitespace removed but structures preserved.
+
+    Example:
+        >>> _normalize_whitespace(" \\n \\n Tiles \\n \\n Get started")
+        'Tiles\\nGet started'
+
+        >>> code = "```python\\n    x = 1\\n    return x\\n```"
+        >>> result = _normalize_whitespace(code)
+        >>> "    x = 1" in result
+        True
+    """
+    # Detect if text has structures we need to preserve carefully
+    has_code = _has_code_block(text)
+    has_table = _has_table_structure(text)
+    has_lists = _has_list_structure(text)
+
+    if has_code or has_table or has_lists:
+        # Use structure-preserving normalization
+        return _normalize_whitespace_preserve_structure(text)
+    else:
+        # Use aggressive normalization for simple text
+        return _normalize_whitespace_aggressive(text)
+
+
 def chunk_text(
     text: str, chunk_size: int = 400, chunk_overlap: int = 50
 ) -> list[str]:
