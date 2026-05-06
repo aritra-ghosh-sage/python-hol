@@ -15,8 +15,6 @@ import os
 import re
 from typing import Any, Callable, TypeVar, cast
 
-_M = TypeVar("_M")
-
 # Note 3: urlparse is added in ADR-0001 T2 to detect whether a document's
 # "source" field is a real HTTP/HTTPS URL. This drives the conditional
 # source_url metadata field in initialize_vector_db().
@@ -42,8 +40,14 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from .constants import KNOWLEDGE_DB_DIRECTORY, DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_MODEL_PATH
+from .constants import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_MODEL_PATH,
+    KNOWLEDGE_DB_DIRECTORY,
+)
 from .exceptions import VectorDBError
+
+_M = TypeVar("_M")
 
 # Note 6: __all__ declares the public surface area of this module.
 # Any name NOT listed here is considered an implementation detail and
