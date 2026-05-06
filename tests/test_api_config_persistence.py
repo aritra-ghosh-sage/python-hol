@@ -2,7 +2,7 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -80,19 +80,35 @@ class TestConfigPersistenceAPI:
         # Now initialize with patched directory
         with patch("api.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db):
             with patch("hybrid_rag.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db):
+                with patch(
+                    "hybrid_rag.persistence.list_existing_collections",
+                    return_value=["rag_collection"],
+                ):
+                    with patch(
+                        "api.list_existing_collections", return_value=["rag_collection"]
+                    ):
+                        with patch("api.open_collection", return_value=MagicMock()):
+                            with patch(
+                                "api.HybridRetriever",
+                                return_value=MagicMock(),
+                            ):
+                                with patch(
+                                    "api._build_corpus_version_token",
+                                    return_value="gen0.n0",
+                                ):
                 # Create new app instance to trigger startup
-                from api import app as new_app
+                                    from api import app as new_app
 
                 # Use TestClient as context manager to trigger startup_event
-                with TestClient(new_app) as client:
-                    # Query config
-                    response = client.get("/config")
-                    assert response.status_code == 200
+                                    with TestClient(new_app) as client:
+                                        # Query config
+                                        response = client.get("/config")
+                                        assert response.status_code == 200
 
-                    data = response.json()
-                    assert data["semantic_weight"] == 0.9
-                    assert data["keyword_weight"] == 0.1
-                    assert data["enable_rerank"] is False
+                                        data = response.json()
+                                        assert data["semantic_weight"] == 0.9
+                                        assert data["keyword_weight"] == 0.1
+                                        assert data["enable_rerank"] is False
 
     def test_default_config_when_no_persisted_file(self, client_with_temp_db):
         """Test that default config is used when no persisted file exists."""
