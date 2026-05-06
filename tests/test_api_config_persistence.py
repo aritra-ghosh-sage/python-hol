@@ -1,8 +1,9 @@
 """Integration tests for API config persistence across restarts."""
 
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -77,22 +78,40 @@ class TestConfigPersistenceAPI:
         with open(config_file, "w") as f:
             json.dump(persisted_config, f)
 
-        # Now initialize with patched directory
-        with patch("api.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db):
-            with patch("hybrid_rag.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db):
-                # Create new app instance to trigger startup
-                from api import app as new_app
+        # Initialize with patched directory using ExitStack to avoid deep nesting
+        with ExitStack() as stack:
+            stack.enter_context(patch("api.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db))
+            stack.enter_context(
+                patch("hybrid_rag.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db)
+            )
+            stack.enter_context(
+                patch(
+                    "hybrid_rag.persistence.list_existing_collections",
+                    return_value=["rag_collection"],
+                )
+            )
+            stack.enter_context(
+                patch("api.list_existing_collections", return_value=["rag_collection"])
+            )
+            stack.enter_context(patch("api.open_collection", return_value=MagicMock()))
+            stack.enter_context(patch("api.HybridRetriever", return_value=MagicMock()))
+            stack.enter_context(
+                patch("api._build_corpus_version_token", return_value="gen0.n0")
+            )
 
-                # Use TestClient as context manager to trigger startup_event
-                with TestClient(new_app) as client:
-                    # Query config
-                    response = client.get("/config")
-                    assert response.status_code == 200
+            # Create new app instance to trigger startup
+            from api import app as new_app
 
-                    data = response.json()
-                    assert data["semantic_weight"] == 0.9
-                    assert data["keyword_weight"] == 0.1
-                    assert data["enable_rerank"] is False
+            # Use TestClient as context manager to trigger startup_event
+            with TestClient(new_app) as client:
+                # Verify persisted config values are loaded on startup
+                response = client.get("/config")
+                assert response.status_code == 200
+
+                data = response.json()
+                assert data["semantic_weight"] == 0.9
+                assert data["keyword_weight"] == 0.1
+                assert data["enable_rerank"] is False
 
     def test_default_config_when_no_persisted_file(self, client_with_temp_db):
         """Test that default config is used when no persisted file exists."""
