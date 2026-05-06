@@ -18,6 +18,7 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL",
     "DEFAULT_EMBEDDING_MODEL_PATH",
     "DEFAULT_RERANKER_MODEL_PATH",
+    "DEFAULT_QUERY_PREFIX",
     "COLLECTION_NAME_INVALID_MSG",
 ]
 
@@ -61,6 +62,10 @@ DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 # or the corresponding config-file mechanism used by the application.
 DEFAULT_EMBEDDING_MODEL_PATH = "./models/embedding"
 DEFAULT_RERANKER_MODEL_PATH = "./models/reranker"
+
+# BGE asymmetric retrieval prefix. bge-small-en-v1.5 was trained with this prefix
+# on the query side; omitting it degrades retrieval recall on asymmetric tasks.
+DEFAULT_QUERY_PREFIX = "Represent this sentence: "
 
 # Note 6: MIN_RELEVANCE_SCORE acts as a quality gate. The retriever discards
 # any candidate document whose combined hybrid score falls below this threshold

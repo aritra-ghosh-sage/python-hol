@@ -128,11 +128,12 @@ class TestGetOrEncodeEmbedding:
         assert retriever._embedding_cache_hits == 0
 
     def test_cache_key_is_sha256_hash(self, retriever_fast: HybridRetriever) -> None:
-        """Cache key is SHA-256 hash of query text."""
+        """Cache key is SHA-256 hash of the prefixed query text."""
         query = "test query for hashing"
         retriever_fast._get_or_encode_embedding(query)
 
-        expected_key = hashlib.sha256(query.encode()).hexdigest()
+        prefixed = retriever_fast.config.query_prefix + query
+        expected_key = hashlib.sha256(prefixed.encode()).hexdigest()
         assert expected_key in retriever_fast._embedding_cache
 
     def test_embedding_is_numpy_array(self, retriever_fast: HybridRetriever) -> None:

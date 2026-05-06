@@ -156,8 +156,10 @@ class HybridRetriever:
             >>> np.array_equal(embedding, cached_embedding)
             True
         """
-        # Compute cache key from query text
-        cache_key: str = hashlib.sha256(query_text.encode()).hexdigest()
+        # Compute cache key from the prefixed text so the key is correct even if
+        # query_prefix is changed at runtime via config update.
+        prefixed_query: str = self.config.query_prefix + query_text
+        cache_key: str = hashlib.sha256(prefixed_query.encode()).hexdigest()
 
         # Check cache
         if cache_key in self._embedding_cache:
@@ -176,7 +178,7 @@ class HybridRetriever:
             f"(total misses: {self._embedding_cache_misses})"
         )
 
-        embedding: np.ndarray = self.encoder.encode(query_text)  # type: ignore[assignment]
+        embedding: np.ndarray = self.encoder.encode(prefixed_query)  # type: ignore[assignment]
         # Store in cache
         self._embedding_cache[cache_key] = embedding
 

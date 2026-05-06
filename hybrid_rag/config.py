@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 if TYPE_CHECKING:
     from .cache import CacheBackend
 
-from .constants import DEFAULT_EMBEDDING_MODEL_PATH, DEFAULT_RERANKER_MODEL_PATH
+from .constants import DEFAULT_EMBEDDING_MODEL_PATH, DEFAULT_QUERY_PREFIX, DEFAULT_RERANKER_MODEL_PATH
 
 __all__ = [
     "HybridRetrieverConfig",
@@ -47,6 +47,9 @@ class HybridRetrieverConfig:
             model. On first use the model is downloaded from Hugging Face and saved here;
             subsequent starts load it from disk. Defaults to
             DEFAULT_RERANKER_MODEL_PATH ("./models/reranker").
+        query_prefix: String prepended to query text before embedding. BGE models are
+            trained with asymmetric prefixes; using this prefix improves retrieval recall.
+            Defaults to DEFAULT_QUERY_PREFIX ("Represent this sentence: ").
 
     Raises:
         ValueError: If weights don't sum to approximately 1.0 or are not in valid range.
@@ -64,6 +67,7 @@ class HybridRetrieverConfig:
     collection_name: str = "rag_collection"
     embedding_model_path: str = DEFAULT_EMBEDDING_MODEL_PATH
     reranker_model_path: str = DEFAULT_RERANKER_MODEL_PATH
+    query_prefix: str = DEFAULT_QUERY_PREFIX
 
     def __post_init__(self) -> None:
         """Validate configuration parameters after initialization."""
@@ -129,6 +133,7 @@ class HybridRetrieverConfig:
             "collection_name",
             "embedding_model_path",
             "reranker_model_path",
+            "query_prefix",
         }
         unknown_params = set(kwargs.keys()) - valid_params
         if unknown_params:
@@ -164,6 +169,7 @@ class HybridRetrieverConfig:
             "collection_name": self.collection_name,
             "embedding_model_path": self.embedding_model_path,
             "reranker_model_path": self.reranker_model_path,
+            "query_prefix": self.query_prefix,
         }
 
     @classmethod

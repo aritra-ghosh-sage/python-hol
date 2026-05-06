@@ -77,6 +77,7 @@ class TestHybridRetrieverConfig:
             "collection_name",
             "embedding_model_path",
             "reranker_model_path",
+            "query_prefix",
         }
         assert set(config_dict.keys()) == expected_fields
         assert config_dict["collection_name"] == "complete_test"
