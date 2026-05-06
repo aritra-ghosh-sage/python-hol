@@ -427,3 +427,21 @@ async def test_main_graceful_shutdown_uses_stop_when_shutdown_missing(monkeypatc
     stop_mock.assert_awaited_once()
     mcp_server._cache.clear.assert_called_once()
     assert mcp_server._retriever is None
+
+
+class TestResolveTransport:
+    """Unit tests for _resolve_transport."""
+
+    def test_unset_env_defaults_to_stdio(self, monkeypatch):
+        monkeypatch.delenv("MCP_TRANSPORT", raising=False)
+        assert mcp_server._resolve_transport() == "stdio"
+
+    def test_http_value_returns_streamable_http(self, monkeypatch):
+        for value in ("http", "streamable-http", "streamable_http", "HTTP", "Streamable-HTTP"):
+            monkeypatch.setenv("MCP_TRANSPORT", value)
+            assert mcp_server._resolve_transport() == "streamable-http"
+
+    def test_invalid_value_raises_value_error(self, monkeypatch):
+        monkeypatch.setenv("MCP_TRANSPORT", "grpc")
+        with pytest.raises(ValueError, match="Unsupported MCP_TRANSPORT"):
+            mcp_server._resolve_transport()

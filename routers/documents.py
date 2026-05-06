@@ -27,7 +27,6 @@ from api_models import (
 )
 from fastapi import APIRouter, HTTPException
 from hybrid_rag import (
-    KNOWLEDGE_DB_DIRECTORY,
     VectorDBError,
     chunk_document,
 )
@@ -548,7 +547,7 @@ async def get_collections() -> CollectionsResponse:
         )
 
     try:
-        client = api.chromadb.PersistentClient(path=KNOWLEDGE_DB_DIRECTORY)
+        client = api.chromadb.PersistentClient(path=api.KNOWLEDGE_DB_DIRECTORY)
         all_collections = client.list_collections()
         active_name = api._retriever.collection.name
 
