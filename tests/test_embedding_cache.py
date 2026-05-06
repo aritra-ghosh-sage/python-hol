@@ -99,6 +99,7 @@ class TestGetOrEncodeEmbedding:
         assert retriever_fast._embedding_cache_misses == 1
         assert retriever_fast._embedding_cache_hits == 0
 
+    @pytest.mark.slow
     def test_embedding_cache_hit_on_second_call(
         self, retriever: HybridRetriever
     ) -> None:
@@ -111,6 +112,7 @@ class TestGetOrEncodeEmbedding:
         assert retriever._embedding_cache_misses == 1
         assert retriever._embedding_cache_hits == 1
 
+    @pytest.mark.slow
     def test_different_queries_produce_different_embeddings(
         self, retriever: HybridRetriever
     ) -> None:
@@ -146,6 +148,7 @@ class TestGetOrEncodeEmbedding:
 class TestRetrieveWithEmbeddingCache:
     """Test retrieve() method uses embedding cache."""
 
+    @pytest.mark.slow
     def test_retrieve_updates_cache_hits(self, retriever: HybridRetriever) -> None:
         """retrieve() uses _get_or_encode_embedding and updates cache stats."""
         query = "How do I use Google Maps?"
@@ -169,6 +172,7 @@ class TestRetrieveWithEmbeddingCache:
         # Results should be the same
         assert len(results1) == len(results2)
 
+    @pytest.mark.slow
     def test_retrieve_works_normally(self, retriever: HybridRetriever) -> None:
         """retrieve() still returns correct results with embedding cache."""
         query = "Google Maps offline navigation"
@@ -210,14 +214,14 @@ class TestEmbeddingCacheStats:
         assert "hit_rate" in stats
 
     def test_embedding_cache_stats_values(
-        self, retriever: HybridRetriever
+        self, retriever_fast: HybridRetriever
     ) -> None:
         """_get_embedding_cache_stats returns correct values."""
         query = "test query for stats"
-        retriever._get_or_encode_embedding(query)
-        retriever._get_or_encode_embedding(query)
+        retriever_fast._get_or_encode_embedding(query)
+        retriever_fast._get_or_encode_embedding(query)
 
-        stats = retriever._get_embedding_cache_stats()
+        stats = retriever_fast._get_embedding_cache_stats()
 
         assert stats["hits"] == 1
         assert stats["misses"] == 1
@@ -226,16 +230,16 @@ class TestEmbeddingCacheStats:
         assert stats["hit_rate"] == 0.5
 
     def test_embedding_cache_hit_rate_calculation(
-        self, retriever: HybridRetriever
+        self, retriever_fast: HybridRetriever
     ) -> None:
         """hit_rate is calculated correctly: hits / (hits + misses)."""
-        retriever._get_or_encode_embedding("query1")
-        retriever._get_or_encode_embedding("query2")
-        retriever._get_or_encode_embedding("query3")
-        retriever._get_or_encode_embedding("query1")
-        retriever._get_or_encode_embedding("query2")
+        retriever_fast._get_or_encode_embedding("query1")
+        retriever_fast._get_or_encode_embedding("query2")
+        retriever_fast._get_or_encode_embedding("query3")
+        retriever_fast._get_or_encode_embedding("query1")
+        retriever_fast._get_or_encode_embedding("query2")
 
-        stats = retriever._get_embedding_cache_stats()
+        stats = retriever_fast._get_embedding_cache_stats()
         assert stats["hit_rate"] == 0.4
 
     def test_embedding_cache_hit_rate_zero_when_no_activity(

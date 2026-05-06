@@ -5,6 +5,7 @@ streamable HTTP transport (e.g., Claude Desktop, hosted MCP gateways).
 """
 
 import asyncio
+import signal
 import hashlib
 import json
 import logging
@@ -29,6 +30,7 @@ from hybrid_rag import (
     initialize_vector_db,
     is_valid_collection_name,
     list_existing_collections,
+    load_config_from_disk,
     open_collection,
 )
 
@@ -41,11 +43,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-try:
-    from hybrid_rag.persistence import load_config_from_disk
-except ImportError:  # pragma: no cover - compatibility without persistence module
-    load_config_from_disk = None
 
 # Initialize FastMCP server
 mcp = FastMCP(
@@ -63,20 +60,31 @@ _corpus_version: str = "0"
 
 
 def _load_initial_config() -> HybridRetrieverConfig:
-    """Load startup configuration, preferring persisted settings when available."""
-    config = HybridRetrieverConfig(**DEFAULT_CONFIG.to_dict())
+    """Load startup configuration, preferring persisted settings when available.
 
-    if load_config_from_disk is not None:
-        try:
-            persisted_config = load_config_from_disk(KNOWLEDGE_DB_DIRECTORY)
-            if persisted_config is not None:
-                config = persisted_config
-                logger.info("Loaded persisted MCP configuration")
-        except (OSError, ValueError, TypeError):
-            logger.exception(
-                "Failed to load persisted configuration; falling back to defaults"
-            )
+    Attempts to load configuration from knowledge_db/config.json. If no persisted
+    config exists or loading fails, uses DEFAULT_CONFIG. Environment variable
+    COLLECTION_NAME (if set and valid) overrides the loaded collection_name.
 
+    Returns:
+        Loaded or default HybridRetrieverConfig.
+
+    Raises:
+        ValueError: If COLLECTION_NAME env var is invalid.
+    """
+    # Try to load persisted configuration first
+    try:
+        config = load_config_from_disk(KNOWLEDGE_DB_DIRECTORY)
+        if config is not None:
+            logger.info("Loaded persisted configuration from disk")
+        else:
+            logger.info("No persisted configuration found, using defaults")
+            config = DEFAULT_CONFIG
+    except Exception as e:
+        logger.warning("Failed to load persisted configuration: %s; using defaults", e)
+        config = DEFAULT_CONFIG
+
+    # Override collection_name with COLLECTION_NAME env var if present
     env_collection_name = os.getenv("COLLECTION_NAME")
     if env_collection_name:
         if not is_valid_collection_name(env_collection_name):
@@ -85,6 +93,7 @@ def _load_initial_config() -> HybridRetrieverConfig:
                 "alphanumeric/underscore/hyphen only"
             )
         config = config.update(collection_name=env_collection_name)
+        logger.info("Overriding collection_name from COLLECTION_NAME env var: %s", env_collection_name)
 
     return config
 
@@ -316,10 +325,86 @@ async def main() -> None:
     """Start the MCP server."""
     await _initialize_retriever()
     transport = _resolve_transport()
+
+    # Use an event to wait for shutdown signals (SIGINT, SIGTERM).
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _on_signal() -> None:
+        logger.info("Shutdown signal received, stopping MCP server...")
+        shutdown_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _on_signal)
+        except (NotImplementedError, RuntimeError):
+            # add_signal_handler is not implemented on some platforms (Windows/uvloop)
+            # and raises RuntimeError when called outside the main thread.
+            pass
+
+    # Run the MCP transport in the background so we can wait for signals.
     if transport == "stdio":
-        await mcp.run_stdio_async()
+        mcp_task = asyncio.create_task(mcp.run_stdio_async())
     else:
-        await mcp.run_streamable_http_async()
+        mcp_task = asyncio.create_task(mcp.run_streamable_http_async())
+
+    # Wait until a shutdown signal is received or the mcp task finishes.
+    # asyncio.wait() requires actual Task/Future objects (not raw coroutines),
+    # so wrap the shutdown_event.wait() coroutine in a Task.
+    shutdown_wait_task = asyncio.create_task(shutdown_event.wait())
+    try:
+        done, pending = await asyncio.wait(
+            [shutdown_wait_task, mcp_task], return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        # If the wait returned early for any reason, ensure we don't leave the
+        # shutdown_wait_task pending.
+        if not shutdown_wait_task.done():
+            shutdown_wait_task.cancel()
+            try:
+                await shutdown_wait_task
+            except asyncio.CancelledError:
+                pass
+
+    # Surface transport exception if task exited before a shutdown signal
+    if mcp_task in done and not shutdown_event.is_set():
+        mcp_task.result()  # re-raises any stored exception
+
+    # If shutdown_event triggered, attempt graceful stop of MCP transport.
+    if shutdown_event.is_set():
+        # Try to call an explicit shutdown/stop method if available on FastMCP.
+        for method_name in ("shutdown", "stop", "close", "terminate"):
+            fn = getattr(mcp, method_name, None)
+            if callable(fn):
+                try:
+                    maybe = fn()
+                    if asyncio.iscoroutine(maybe):
+                        await maybe
+                    logger.info("Called mcp.%s() for graceful shutdown", method_name)
+                except Exception as e:
+                    logger.warning("mcp.%s() raised during shutdown: %s", method_name, e)
+                break
+
+        # Cancel the transport task if still running
+        if not mcp_task.done():
+            mcp_task.cancel()
+            try:
+                await mcp_task
+            except asyncio.CancelledError:
+                logger.info("MCP transport task cancelled")
+
+    # Cleanup shared resources (mirror api.py shutdown behavior)
+    try:
+        if _cache is not None:
+            try:
+                _cache.clear()
+                logger.info("Cache cleared on shutdown")
+            except Exception as e:
+                logger.warning("Error clearing cache on shutdown: %s", e)
+    finally:
+        # Release retriever reference to allow clean process exit
+        global _retriever
+        _retriever = None
 
 
 if __name__ == "__main__":

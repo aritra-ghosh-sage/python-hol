@@ -24,8 +24,11 @@ class TestGetCollections:
         self, fake_initialized_app: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Active collection appears in the response."""
-        api._retriever.collection.name = ACTIVE_COLLECTION_NAME  # type: ignore[union-attr]
-        api._retriever.collection.count.return_value = 5  # type: ignore[union-attr]
+        # Replace with a fully mocked collection
+        mock_collection = MagicMock()
+        mock_collection.name = ACTIVE_COLLECTION_NAME
+        mock_collection.count.return_value = 5
+        api._retriever.collection = mock_collection  # type: ignore[union-attr]
 
         # Mock chromadb client to return the active collection
         mock_collection = MagicMock()
@@ -44,8 +47,11 @@ class TestGetCollections:
         self, fake_initialized_app: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """All collections returned by list_existing_collections appear in response with correct counts."""
-        api._retriever.collection.name = ACTIVE_COLLECTION_NAME  # type: ignore[union-attr]
-        api._retriever.collection.count.return_value = 10  # type: ignore[union-attr]
+        # Replace with a fully mocked collection
+        mock_collection = MagicMock()
+        mock_collection.name = ACTIVE_COLLECTION_NAME
+        mock_collection.count.return_value = 10
+        api._retriever.collection = mock_collection  # type: ignore[union-attr]
 
         # Mock collections
         mock_active = MagicMock()
@@ -85,8 +91,11 @@ class TestGetCollections:
         self, fake_initialized_app: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Each CollectionInfo carries the correct name and count."""
-        api._retriever.collection.name = ACTIVE_COLLECTION_NAME  # type: ignore[union-attr]
-        api._retriever.collection.count.return_value = 7  # type: ignore[union-attr]
+        # Replace with a fully mocked collection
+        mock_collection = MagicMock()
+        mock_collection.name = ACTIVE_COLLECTION_NAME
+        mock_collection.count.return_value = 7
+        api._retriever.collection = mock_collection  # type: ignore[union-attr]
 
         # Mock chromadb client to return the active collection
         mock_collection = MagicMock()
@@ -124,7 +133,10 @@ class TestGetCollections:
         self, fake_initialized_app: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """VectorDBError from chromadb client surfaces as HTTP 500."""
-        api._retriever.collection.name = ACTIVE_COLLECTION_NAME  # type: ignore[union-attr]
+        # Replace with a fully mocked collection
+        mock_collection = MagicMock()
+        mock_collection.name = ACTIVE_COLLECTION_NAME
+        api._retriever.collection = mock_collection  # type: ignore[union-attr]
 
         def _raise_on_persistent_client(path: str):
             raise VectorDBError("Failed to create ChromaDB client")

@@ -1,9 +1,21 @@
 
 """FastAPI REST API for Hybrid RAG Retrieval Service.
 
-This module provides a production-ready REST API for the hybrid RAG library,
-including health checks, retrieval endpoints, configuration management,
-document ingestion, and WebSocket-based chat.
+This module is the application entry point.  It owns all shared mutable
+state (retriever, config, cache), exposes the public helpers used by the
+route sub-modules in ``routers/``, and wires everything together via
+``app.include_router()``.
+
+Module layout
+-------------
+api.py          -- Global state, initialization, core utilities, app factory.
+api_models.py   -- All Pydantic request/response models (zero state imports).
+routers/
+  health.py     -- GET /health, GET /
+  config.py     -- GET /config, PUT /config
+  cache.py      -- GET /cache/stats
+  documents.py  -- POST /documents, GET /documents/sources, GET /collections
+  websocket.py  -- WS /ws/chat
 
 CACHING ARCHITECTURE:
     L1 WebSocket Cache: The /ws/chat endpoint is the sole retrieval path; results
@@ -28,52 +40,72 @@ Monitoring:
 For detailed caching documentation, see docs/CACHE_DEPLOYMENT.md and docs/CACHE_PERF_REPORT.md
 """
 
-import base64
-import io
 import hashlib
 import json
 import logging
 import os
+import sys
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Literal, Optional
-from urllib.parse import urlparse
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any, Optional
 
-import chromadb
-import requests
-from fastapi import Body, FastAPI, HTTPException, WebSocketDisconnect, WebSocket
+import requests  # noqa: F401 — tests patch api.requests.get; import kept here for backward compat
+import chromadb  # noqa: F401 — tests patch api.chromadb.PersistentClient; import kept here for backward compat
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from pydantic import BaseModel as PydanticBaseModel
 
 from hybrid_rag import (
-    HybridRetriever,
-    HybridRetrieverConfig,
-    RetrievalError,
-    RetrieverNotInitializedError,
-    VectorDBError,
-    initialize_vector_db,
-    open_collection,
-    get_sample_documents,
-    chunk_text,  # noqa: F401 - retained for future callers (ADR-0001 T4)
-    chunk_document,
     CACHE_TELEMETRY_LABELS,
     KNOWLEDGE_DB_DIRECTORY,
+    HybridRetriever,
+    HybridRetrieverConfig,
+    RetrieverNotInitializedError,
+    VectorDBError,
+    chunk_text,  # noqa: F401 - retained for future callers (ADR-0001 T4)
+    get_sample_documents,
+    initialize_vector_db,
     list_existing_collections,
-    is_valid_collection_name,
     load_config_from_disk,
-    save_config_to_disk,
+    open_collection,
 )
 from hybrid_rag.cache import CacheBackend
 from hybrid_rag.config import CacheSettings, create_cache_backend
 
-with_pdf_support = True
-try:
-    import pypdf
-except ImportError:
-    with_pdf_support = False
+# Re-export all Pydantic models so existing callers (tests, client code) that
+# do ``from api import WsResultsMessage`` or ``import api; api.DocumentResult``
+# continue to work without modification.
+from api_models import (
+    BackendHealthStats,
+    CacheStatsResponse,
+    CollectionInfo,
+    CollectionsResponse,
+    ConfigResponse,
+    ConfigUpdateRequest,
+    DocumentIngestionRequest,
+    DocumentIngestionResponse,
+    DocumentResult,
+    DocumentSource,
+    HealthResponse,
+    L1QueryCacheStats,
+    L2EmbeddingCacheStats,
+    LayeredCacheStatsResponse,
+    SourcesResponse,
+    WsErrorMessage,
+    WsMessageBase,
+    WsQueryMessage,
+    WsResultsMessage,
+    WsStatusMessage,
+)
+
+# TYPE_CHECKING imports — make route functions visible to static analyzers (Ruff, mypy, etc.)
+# These imports are only executed during type-checking, not at runtime.
+# At runtime, __getattr__() (defined below) provides the functions lazily to avoid circular imports.
+if TYPE_CHECKING:
+    from routers.cache import get_cache_stats
+    from routers.config import get_config, update_config
+    from routers.documents import add_documents, get_collections, get_document_sources
+    from routers.health import health_check, root
+    from routers.websocket import websocket_chat
 
 # Configure logging
 logging.basicConfig(
@@ -82,9 +114,62 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-__all__ = ["app", "initialize_retriever"]
+# CRITICAL FIX FOR PR #92 ROUTER IMPORT ISSUE:
+# When api.py runs as a script (python api.py), Python creates a __main__ module.
+# When routers later do "import api", Python looks for the api module in sys.modules.
+# Without this fix, "import api" creates a SECOND module instance, causing global
+# variables set in __main__ to be invisible to the routers.
+# Solution: Explicitly register __main__ as "api" in sys.modules so all imports
+# reference the same module and share the same globals.
+if __name__ == "__main__" and "api" not in sys.modules:
+    sys.modules["api"] = sys.modules["__main__"]
+    logger.info("✓ Registered __main__ as 'api' in sys.modules to fix router import issue (PR #92)")
 
-# Global retriever and cache instances
+__all__ = [
+    # Application
+    "app",
+    "initialize_retriever",
+    # Route handler functions — re-exported so tests can call them directly
+    # (e.g. ``await api.websocket_chat(ws)``) without modification.
+    "websocket_chat",
+    "health_check",
+    "root",
+    "get_config",
+    "update_config",
+    "get_cache_stats",
+    "add_documents",
+    "get_document_sources",
+    "get_collections",
+    # Models — re-exported so ``from api import X`` and ``api.X`` continue to
+    # work for existing tests and client code after the models moved to api_models.py.
+    "BackendHealthStats",
+    "CacheStatsResponse",
+    "CollectionInfo",
+    "CollectionsResponse",
+    "ConfigResponse",
+    "ConfigUpdateRequest",
+    "DocumentIngestionRequest",
+    "DocumentIngestionResponse",
+    "DocumentResult",
+    "DocumentSource",
+    "HealthResponse",
+    "L1QueryCacheStats",
+    "L2EmbeddingCacheStats",
+    "LayeredCacheStatsResponse",
+    "SourcesResponse",
+    "WsErrorMessage",
+    "WsMessageBase",
+    "WsQueryMessage",
+    "WsResultsMessage",
+    "WsStatusMessage",
+]
+
+# ---------------------------------------------------------------------------
+# Global mutable state
+# Tests access these directly (e.g. ``api._retriever = mock``), so they must
+# remain at module level in this file.
+# ---------------------------------------------------------------------------
+
 _retriever: Optional[HybridRetriever] = None
 _config: Optional[HybridRetrieverConfig] = None
 _cache: Optional[CacheBackend] = None
@@ -100,396 +185,6 @@ _corpus_version: str = "0"
 # (False → True = activation, True → False = deactivation) without flooding
 # the log stream with repeated messages while the state is stable.
 _last_fallback_state: Optional[bool] = None
-
-# Pydantic models for request/response validation
-class DocumentResult(BaseModel):
-    """Model representing a single retrieved document."""
-
-    id: str = Field(..., description="Document identifier")
-    text: str = Field(..., description="Document text content")
-    source: str = Field(..., description="Document source label or URL")
-    source_url: Optional[str] = Field(None, description="Original URL when source has a custom label")
-    score: float = Field(..., description="Relevance score (may be negative due to fusion/reranking)")
-
-
-class ConfigResponse(BaseModel):
-    """Response model for configuration endpoint."""
-
-    semantic_top_k: int
-    keyword_top_k: int
-    final_top_k: int
-    semantic_weight: float
-    keyword_weight: float
-    enable_rerank: bool
-    pre_rerank_top_k: int
-    collection_name: str
-
-
-class HealthResponse(BaseModel):
-    """Response model for health check endpoint."""
-
-    status: str = Field(..., description="Service status")
-    retriever_ready: str = Field(..., description="Retriever readiness status")
-
-
-class ConfigUpdateRequest(BaseModel):
-    """Request model for configuration updates.
-
-    All fields are optional - only provided fields will be updated.
-    """
-
-    semantic_top_k: Optional[int] = Field(
-        None, gt=0, description="Number of semantic search results"
-    )
-    keyword_top_k: Optional[int] = Field(
-        None, gt=0, description="Number of keyword search results"
-    )
-    final_top_k: Optional[int] = Field(
-        None, gt=0, description="Maximum final results to return"
-    )
-    semantic_weight: Optional[float] = Field(
-        None, ge=0.0, le=1.0, description="Weight for semantic search (0-1)"
-    )
-    keyword_weight: Optional[float] = Field(
-        None, ge=0.0, le=1.0, description="Weight for keyword search (0-1)"
-    )
-    enable_rerank: Optional[bool] = Field(
-        None, description="Enable cross-encoder reranking"
-    )
-    pre_rerank_top_k: Optional[int] = Field(
-        None, gt=0, description="Candidates to rerank before selection"
-    )
-    collection_name: Optional[str] = Field(
-        None,
-        min_length=6,
-        max_length=20,
-        description=(
-            "ChromaDB collection name (6-20 chars, "
-            "alphanumeric/underscore/hyphen)"
-        ),
-    )
-
-
-class DocumentIngestionRequest(BaseModel):
-    """Request model for adding custom documents.
-
-    Attributes:
-        source_type: Type of data source: 'text', 'url', or 'file'.
-        content: Text content, URL, or base64-encoded file.
-        filename: Original filename for file uploads.
-        source_label: User-friendly label for the data source.
-        ingest_type: Optional override for the ingest operation type.
-            When omitted (the default), the backend derives whether this is an
-            'add' (new source) or 'update' (existing source) by querying the
-            vector collection.  Providing this field explicitly bypasses the
-            derivation and honours the caller's intent:
-            - 'add': treat as new source, preserve existing cache entries.
-            - 'update': treat as a re-ingest, delete stale chunks and clear cache.
-    """
-
-    source_type: Literal["text", "url", "file"] = Field(
-        ..., description="Type of data source: 'text', 'url', or 'file'"
-    )
-    content: str = Field(
-        ..., min_length=1, description="Text content, URL, or base64-encoded file"
-    )
-    filename: Optional[str] = Field(
-        None, description="Original filename (for file uploads)"
-    )
-    source_label: Optional[str] = Field(
-        None, description="User-friendly label for the data source"
-    )
-    ingest_type: Literal["add", "update"] = Field(
-        "update",
-        description=(
-            "Ingest type override.  Omit to let the backend derive add/update from "
-            "the collection state.  Provide explicitly to force a specific path."
-        ),
-    )
-
-
-class DocumentIngestionResponse(BaseModel):
-    """Response model for document ingestion."""
-
-    status: str = Field(..., description="Operation status ('success' or 'error')")
-    documents_added: int = Field(..., description="Number of documents added")
-    chunks_created: int = Field(..., description="Number of chunks created")
-    message: Optional[str] = Field(None, description="Additional message")
-
-
-class DocumentSource(BaseModel):
-    """Model representing a document source."""
-
-    source: str = Field(..., description="Source identifier")
-    count: int = Field(..., description="Number of chunks from this source")
-
-
-class SourcesResponse(BaseModel):
-    """Response model for listing document sources."""
-
-    sources: list[DocumentSource] = Field(
-        ..., description="List of available document sources"
-    )
-
-
-class CollectionInfo(BaseModel):
-    """Model representing a ChromaDB collection."""
-
-    name: str = Field(..., description="Collection name")
-    count: int = Field(..., description="Number of documents in the collection")
-
-
-class CollectionsResponse(BaseModel):
-    """Response model for listing ChromaDB collections."""
-
-    collections: list[CollectionInfo] = Field(
-        ..., description="List of available ChromaDB collections"
-    )
-
-
-class CacheStatsResponse(BaseModel):
-    """Response model for cache statistics.
-    
-    Contains detailed cache performance metrics for monitoring and debugging.
-    Implements fail-open principle: never raises errors, always provides best-effort stats.
-    
-    Attributes:
-        backend: Cache backend identifier ('memory' or 'redis').
-        hits: Total number of cache hits since initialization.
-        misses: Total number of cache misses since initialization.
-        hit_rate: Cache hit rate as a float (0.0-1.0).
-            Calculated as: hits / (hits + misses), or 0.0 if no activity.
-        size: Current number of entries in the cache.
-        max_size: Maximum capacity of the cache in entries.
-        ttl_seconds: Configured time-to-live for cache entries in seconds.
-        timestamp: When these statistics were captured (UTC datetime).
-    
-    Example:
-        >>> response = CacheStatsResponse(
-        ...     backend="memory",
-        ...     hits=1500,
-        ...     misses=350,
-        ...     hit_rate=0.811,
-        ...     size=125,
-        ...     max_size=10000,
-        ...     ttl_seconds=3600,
-        ...     timestamp=datetime.now(timezone.utc)
-        ... )
-        >>> print(f"Hit rate: {response.hit_rate:.1%}")  # 81.1%
-    """
-
-    backend: str = Field(..., description="Cache backend ('memory' or 'redis')")
-    hits: int = Field(..., ge=0, description="Total cache hits")
-    misses: int = Field(..., ge=0, description="Total cache misses")
-    hit_rate: float = Field(..., ge=0.0, le=1.0, description="Cache hit rate (0.0-1.0)")
-    size: int = Field(..., ge=0, description="Current cache size in entries")
-    max_size: int = Field(..., ge=0, description="Maximum cache capacity")
-    ttl_seconds: int = Field(..., ge=0, description="Configured TTL in seconds")
-    timestamp: datetime = Field(..., description="When stats were captured (UTC)")
-
-
-# ---------------------------------------------------------------------------
-# OPTB-008: Layered cache stats schema
-# WHY: The flat CacheStatsResponse mixes L1 counters, L2 embedding stats,
-# and backend health into a single level, making it hard for operators to
-# distinguish which cache layer is healthy/unhealthy.  The layered schema
-# separates concerns into three named sections so monitoring dashboards and
-# alerting rules can target the exact section that matters.
-# ---------------------------------------------------------------------------
-
-class L1QueryCacheStats(BaseModel):
-    """Statistics for the L1 query-response cache (ASGI middleware layer).
-
-    WHY 'corpus_version': The corpus version token controls cache key
-    namespacing.  Exposing it here lets operators quickly verify that
-    invalidation events (add/update ingest, config changes) have propagated
-    and that stale entries cannot be served under the new version.
-
-    Attributes:
-        backend: Backend identifier ('memory' or 'redis').
-        hits: Total cache hits since last reset.
-        misses: Total cache misses since last reset.
-        hit_rate: Fraction of accesses that were hits (0.0–1.0).
-        size: Current number of entries in the L1 cache.
-        max_size: Configured maximum capacity of the L1 cache.
-        ttl_seconds: Configured TTL for L1 entries.
-        corpus_version: The active corpus version token used in cache keys.
-
-    Example:
-        >>> l1 = L1QueryCacheStats(
-        ...     backend="memory", hits=500, misses=100, hit_rate=0.833,
-        ...     size=50, max_size=1000, ttl_seconds=600,
-        ...     corpus_version="gen2.n108"
-        ... )
-    """
-
-    backend: str = Field(..., description="Cache backend ('memory' or 'redis')")
-    hits: int = Field(..., ge=0, description="Total L1 cache hits")
-    misses: int = Field(..., ge=0, description="Total L1 cache misses")
-    hit_rate: float = Field(..., ge=0.0, le=1.0, description="L1 hit rate (0.0–1.0)")
-    size: int = Field(..., ge=0, description="Current L1 cache size in entries")
-    max_size: int = Field(..., ge=0, description="L1 maximum capacity")
-    ttl_seconds: int = Field(..., ge=0, description="L1 configured TTL in seconds")
-    corpus_version: str = Field(
-        ..., description="Active corpus version token controlling cache key namespace"
-    )
-
-
-class L2EmbeddingCacheStats(BaseModel):
-    """Statistics for the L2 embedding LRU cache (inside HybridRetriever).
-
-    WHY: L2 caches sentence-transformer embeddings to avoid redundant model
-    inference on repeated or similar queries.  Monitoring capacity vs. size
-    reveals when the LRU is evicting aggressively (cache too small).
-
-    Attributes:
-        hits: Total embedding cache hits since retriever init.
-        misses: Total embedding cache misses since retriever init.
-        hit_rate: Fraction of embedding lookups served from cache (0.0–1.0).
-        size: Number of embeddings currently held in the LRU.
-        capacity: Maximum number of embeddings the LRU can hold.
-
-    Example:
-        >>> l2 = L2EmbeddingCacheStats(
-        ...     hits=1200, misses=200, hit_rate=0.857, size=300, capacity=5000
-        ... )
-    """
-
-    hits: int = Field(..., ge=0, description="Total L2 embedding cache hits")
-    misses: int = Field(..., ge=0, description="Total L2 embedding cache misses")
-    hit_rate: float = Field(..., ge=0.0, le=1.0, description="L2 hit rate (0.0–1.0)")
-    size: int = Field(..., ge=0, description="Number of embeddings currently cached")
-    capacity: int = Field(..., ge=0, description="Maximum L2 LRU cache capacity")
-
-
-class BackendHealthStats(BaseModel):
-    """Connectivity and health report for the cache backend.
-
-    WHY: For Redis deployments, monitoring dashboards need to distinguish
-    between 'cache miss' (normal) and 'Redis unreachable, serving without
-    cache' (incident).  'fallback_active' provides this binary signal.
-    'latency_ms' lets SLO dashboards alert on degraded-but-connected Redis.
-
-    Attributes:
-        connected: True when the backend is currently reachable.
-        latency_ms: Round-trip ping latency in ms, or None for in-memory.
-        fallback_active: True when operating without the intended backend.
-        error: Last error string if unhealthy, else None.
-
-    Example:
-        >>> healthy = BackendHealthStats(
-        ...     connected=True, latency_ms=0.8, fallback_active=False, error=None
-        ... )
-        >>> degraded = BackendHealthStats(
-        ...     connected=False, latency_ms=None, fallback_active=True,
-        ...     error="Connection refused"
-        ... )
-    """
-
-    connected: bool = Field(..., description="True when backend is reachable")
-    latency_ms: Optional[float] = Field(
-        None, description="Ping round-trip latency in ms (None for in-memory backends)"
-    )
-    fallback_active: bool = Field(
-        ..., description="True when operating without the intended backend"
-    )
-    error: Optional[str] = Field(
-        None, description="Last error message if unhealthy, else None"
-    )
-
-
-class LayeredCacheStatsResponse(BaseModel):
-    """Layered cache statistics response with three distinct sections.
-
-    WHY (OPTB-008): The flat CacheStatsResponse collapses L1, L2, and health
-    info into one level, making it impossible to route specific alerts (e.g.
-    'L2 hit rate < 40%') without knowing which keys belong to which layer.
-    The layered schema gives consumers an unambiguous contract.
-
-    All L1 metrics (hits, misses, hit_rate, size, backend, etc.) are accessed
-    via l1_query_cache.  The deprecated top-level mirrors were removed; clients
-    must use the nested paths.
-
-    Attributes:
-        l1_query_cache: L1 query-response cache metrics + corpus_version.
-        l2_embedding_cache: L2 embedding LRU cache metrics from HybridRetriever.
-        backend_health: Redis/memory backend connectivity and latency.
-        timestamp: When these statistics were captured (UTC).
-
-    Example:
-        >>> response = LayeredCacheStatsResponse(
-        ...     l1_query_cache=L1QueryCacheStats(...),
-        ...     l2_embedding_cache=L2EmbeddingCacheStats(...),
-        ...     backend_health=BackendHealthStats(...),
-        ...     timestamp=datetime.now(timezone.utc),
-        ... )
-    """
-
-    l1_query_cache: L1QueryCacheStats = Field(
-        ..., description="L1 query-response cache statistics"
-    )
-    l2_embedding_cache: L2EmbeddingCacheStats = Field(
-        ..., description="L2 embedding LRU cache statistics from HybridRetriever"
-    )
-    backend_health: BackendHealthStats = Field(
-        ..., description="Cache backend connectivity and health"
-    )
-    timestamp: datetime = Field(..., description="When stats were captured (UTC)")
-
-
-class WsMessageBase(BaseModel):
-    """Base model for WebSocket messages."""
-
-    type: str = Field(..., description="Message type")
-
-
-class WsQueryMessage(BaseModel):
-    """WebSocket message sent by client (query request)."""
-
-    query: str = Field(
-        ..., min_length=1, max_length=500, description="Search query"
-    )
-    enable_rerank: Optional[bool] = Field(
-        None, description="Override reranking setting"
-    )
-
-
-class WsStatusMessage(BaseModel):
-    """WebSocket status message sent by server."""
-
-    type: Literal["status"] = "status"
-    message: str = Field(..., description="Status message")
-
-
-class WsResultsMessage(BaseModel):
-    """WebSocket results message sent by server.
-
-    T03 WS cache-status contract: the ``cache_status`` field carries
-    the retrieval-layer cache outcome (HIT / MISS / ERROR).  The field uses
-    the retrieval-layer signal (``cache.retrieval_*``) rather than the
-    HTTP-middleware signal (``cache.http_*``) because WebSocket traffic
-    bypasses the middleware.
-    """
-
-    type: Literal["results"] = "results"
-    query: str = Field(..., description="Original query")
-    results: list[DocumentResult] = Field(..., description="Retrieved documents")
-    total_results: int = Field(..., description="Total number of results")
-    cache_status: Literal["HIT", "MISS", "ERROR"] = Field(
-        "MISS",
-        description=(
-            "T03 WS cache-status contract: retrieval-layer cache outcome. "
-            "HIT = served from cache; MISS = cache bypassed; ERROR = cache fault."
-        ),
-    )
-
-
-class WsErrorMessage(BaseModel):
-    """WebSocket error message sent by server."""
-
-    type: Literal["error"] = "error"
-    message: str = Field(..., description="Error message")
-
 
 def initialize_retriever() -> None:
     """Initialize the global hybrid retriever instance.
@@ -514,7 +209,7 @@ def initialize_retriever() -> None:
             # Initialize with default configuration if no persisted config
             logger.info("No persisted configuration found, using defaults")
             _config = HybridRetrieverConfig(
-                semantic_weight=0.7, keyword_weight=0.3, enable_rerank=True
+                semantic_weight=0.65, keyword_weight=0.35, enable_rerank=True
             )
 
         # Initialize vector database
@@ -561,16 +256,25 @@ def initialize_retriever() -> None:
 async def startup_event(app: FastAPI):
     """Application startup event handler.
     
-    Initializes both the hybrid retriever and the cache backend from environment settings.
+    Initializes the hybrid retriever and cache backend from environment settings.
+    Ensures routers are registered (failsafe in case of deferred import issues).
     Both are stored as globals and cleaned up on shutdown.
     
     Raises:
         Exception: If initialization fails, critical exception is logged.
     """
     global _retriever, _config, _cache
+    logger.info("🚀 Startup event triggered")
     try:
-        # Initialize retriever
+        # Register routers first (safe here, no circular imports at startup)
+        if not _routers_registered:
+            logger.info("Registering routers...")
+            _register_routers_on_app()
+        
+        # Then initialize retriever
+        logger.info("Calling initialize_retriever...")
         initialize_retriever()
+        logger.info("✓ Retriever initialization complete, _config=%s", _config)
         
         # Initialize cache from environment settings
         try:
@@ -595,9 +299,6 @@ async def startup_event(app: FastAPI):
                 logger.warning(f"Error clearing cache on shutdown: {e}")
         
         _retriever = None
-        _config = None
-        _cache = None
-        logger.info("Application shutdown complete")
 
 
 # FastAPI application
@@ -936,30 +637,13 @@ def _shared_retrieve_documents(
     return results
 
 
-def _to_filtered_document_results(
-    results: list[dict[str, Any]], min_score_threshold: float
-) -> list[DocumentResult]:
-    """Filter retrieval results and convert them to API response models."""
-    filtered_results = [r for r in results if float(r.get("score", 0.0)) >= min_score_threshold]
-    logger.debug(
-        "Filtered from %s to %s results (min_score=%s)",
-        len(results),
-        len(filtered_results),
-        min_score_threshold,
-    )
-    return [
-        DocumentResult(
-            id=r["id"],
-            text=r["text"],
-            source=r["metadata"]["source"],
-            source_url=r["metadata"].get("source_url"),
-            score=float(r["score"]),
-        )
-        for r in filtered_results
-    ]
+# ---------------------------------------------------------------------------
+# CORS middleware
+# ---------------------------------------------------------------------------
 
-# Add CORS middleware
-allow_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
+allow_origins = os.getenv(
+    "CORS_ORIGINS", "http://localhost:3000,http://localhost:3001"
+).split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
@@ -967,1061 +651,97 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-logger.info(f"CORS enabled for origins: {allow_origins}")
+logger.info("CORS enabled for origins: %s", allow_origins)
 
+# ---------------------------------------------------------------------------
+# Re-export route handler functions for backward compatibility
+# NOTE: Imports are deferred to avoid circular imports (see lazy __getattr__ below).
+# Each router does ``import api`` which causes circular import at module load time.
+# Functions are lazy-loaded when first accessed via module.__getattr__.
+# ---------------------------------------------------------------------------
 
-@app.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket) -> None:
-    """WebSocket endpoint for real-time document queries.
+# Lazy function imports — see __getattr__ below for implementation
+_router_functions: dict[str, Any] = {}
+_routers_registered: bool = False
 
-    Client sends: {"query": str, "enable_rerank": bool?}
-    Server sends (in sequence):
-      - {"type": "status", "message": str}
-      - {"type": "results", "query": str, "results": [...], "total_results": int}
-      - {"type": "error", "message": str} (on failure)
-    """
-    await websocket.accept()
-    logger.info("WebSocket client connected")
-
+# Register routers immediately after module initialization to make them available to
+# both the app and test clients. This happens AFTER all other module-level code executes,
+# so circular imports from routers/*.py importing api are resolved by that point.
+def _register_routers_on_app() -> None:
+    """Register all routers on the app (called during startup)."""
+    global _routers_registered
+    if _routers_registered:
+        return
+    
     try:
-        while True:
-            data = await websocket.receive_json()
-            query = data.get("query", "").strip()
-            enable_rerank = data.get("enable_rerank")
-
-            if not query or len(query) < 1 or len(query) > 500:
-                error_msg = WsErrorMessage(
-                    message="Query must be between 1 and 500 characters"
-                )
-                await websocket.send_json(error_msg.model_dump())
-                continue
-
-            if _retriever is None or _config is None:
-                error_msg = WsErrorMessage(message="Retriever not initialized")
-                await websocket.send_json(error_msg.model_dump())
-                continue
-
-            try:
-                status_msg = WsStatusMessage(message="Retrieving documents...")
-                await websocket.send_json(status_msg.model_dump())
-
-                ws_correlation_id = str(uuid.uuid4())
-                ws_cache_status_out: list[str] = []
-                results = _shared_retrieve_documents(
-                    query,
-                    enable_rerank=enable_rerank,
-                    correlation_id=ws_correlation_id,
-                    _out_cache_status=ws_cache_status_out,
-                )
-                doc_results = _to_filtered_document_results(
-                    results, min_score_threshold=0.40
-                )
-
-                _raw_status = ws_cache_status_out[0] if ws_cache_status_out else "MISS"
-                ws_cache_status: Literal["HIT", "MISS", "ERROR"] = (
-                    _raw_status if _raw_status in ("HIT", "MISS", "ERROR") else "MISS"
-                )
-
-                results_msg = WsResultsMessage(
-                    query=query,
-                    results=doc_results,
-                    total_results=len(doc_results),
-                    cache_status=ws_cache_status,
-                )
-                await websocket.send_json(results_msg.model_dump())
-                logger.info(
-                    f"WebSocket query succeeded: {query[:50]}... ({len(doc_results)} results after filtering)"
-                )
-
-            except RetrievalError as e:
-                logger.error(f"WebSocket retrieval error: {e}")
-                error_msg = WsErrorMessage(message=f"Retrieval failed: {str(e)}")
-                await websocket.send_json(error_msg.model_dump())
-            except Exception as e:
-                logger.error(f"WebSocket unexpected error: {e}")
-                error_msg = WsErrorMessage(message="An unexpected error occurred")
-                await websocket.send_json(error_msg.model_dump())
-
-    except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
+        from routers.cache import router as cache_router  # noqa: F401
+        from routers.config import router as config_router  # noqa: F401
+        from routers.documents import router as documents_router  # noqa: F401
+        from routers.health import router as health_router  # noqa: F401
+        from routers.websocket import router as websocket_router  # noqa: F401
+        
+        app.include_router(health_router)
+        app.include_router(config_router)
+        app.include_router(cache_router)
+        app.include_router(documents_router)
+        app.include_router(websocket_router)
+        _routers_registered = True
+        logger.info("✓ Routers registered successfully")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        try:
-            error_msg = WsErrorMessage(message="Connection error")
-            await websocket.send_json(error_msg.model_dump())
-        except Exception:
-            pass
+        logger.error(f"Failed to register routers: {e}", exc_info=True)
+        _routers_registered = False
+        raise
 
 
-@app.get(
-    "/health",
-    response_model=HealthResponse,
-    tags=["Health"],
-    summary="Health check endpoint",
-)
-async def health_check() -> HealthResponse:
-    """Check the health status of the retrieval service.
-
-    Returns:
-        HealthResponse with service status and retriever readiness.
-
-    Example:
-        GET /health
-        Response: {"status": "healthy", "retriever_ready": "yes"}
-    """
-    is_ready = _retriever is not None
-    return HealthResponse(
-        status="healthy", retriever_ready="yes" if is_ready else "no"
-    )
-
-
-@app.get(
-    "/config",
-    response_model=ConfigResponse,
-    tags=["Configuration"],
-    summary="Get retriever configuration",
-)
-async def get_config() -> ConfigResponse:
-    """Get the current retriever configuration.
-
-    Returns:
-        ConfigResponse with all configuration parameters.
-
-    Raises:
-        HTTPException: 503 if retriever not initialized.
-
-    Example:
-        GET /config
-        Response: {
-            "semantic_top_k": 10,
-            "keyword_top_k": 10,
-            ...
-        }
-    """
-    if _config is None:
-        logger.error("Retriever not initialized")
-        raise HTTPException(
-            status_code=503,
-            detail="Retriever not initialized. Try again later.",
-        )
-
-    return ConfigResponse(
-        semantic_top_k=_config.semantic_top_k,
-        keyword_top_k=_config.keyword_top_k,
-        final_top_k=_config.final_top_k,
-        semantic_weight=_config.semantic_weight,
-        keyword_weight=_config.keyword_weight,
-        enable_rerank=_config.enable_rerank,
-        pre_rerank_top_k=_config.pre_rerank_top_k,
-        collection_name=_config.collection_name,
-    )
-
-
-@app.put(
-    "/config",
-    response_model=ConfigResponse,
-    tags=["Configuration"],
-    summary="Update retriever configuration",
-)
-async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
-    """Update the retriever configuration with new values.
-
-    Only provided fields are updated. Configuration updates are validated
-    before being applied, ensuring semantic_weight + keyword_weight = 1.0
-    and all parameters are within valid ranges.
-
+def __getattr__(name: str) -> Any:
+    """Lazy-load route handler functions to avoid circular imports.
+    
+    When a function like `get_cache_stats` is accessed via `api.get_cache_stats`
+    or imported via `from api import get_cache_stats`, this function is called
+    to load the function on-demand from the appropriate router module.
+    
+    This approach avoids circular imports that would occur if we imported
+    these functions at module load time.
+    
     Args:
-        request: ConfigUpdateRequest with fields to update (all optional).
-
+        name: The name of the attribute being accessed.
+        
     Returns:
-        ConfigResponse with the updated configuration.
-
+        The requested function from the appropriate router module.
+        
     Raises:
-        HTTPException: 400 if validation fails, 503 if not initialized.
-
-    Example:
-        PUT /config
-        {
-            "semantic_weight": 0.8,
-            "keyword_weight": 0.2
-        }
-        Response: {
-            "semantic_top_k": 10,
-            "semantic_weight": 0.8,
-            "keyword_weight": 0.2,
-            ...
-        }
+        AttributeError: If the name is not a known router function.
     """
-    global _config, _cache_generation, _corpus_version, _retriever
-
-    if _config is None:
-        logger.error("Retriever not initialized")
-        raise HTTPException(
-            status_code=503,
-            detail="Retriever not initialized. Try again later.",
-        )
-
-    try:
-        # Extract only provided fields
-        update_dict = request.model_dump(exclude_unset=True)
-
-        if not update_dict:
-            logger.debug("No configuration updates provided")
-            return ConfigResponse(
-                semantic_top_k=_config.semantic_top_k,
-                keyword_top_k=_config.keyword_top_k,
-                final_top_k=_config.final_top_k,
-                semantic_weight=_config.semantic_weight,
-                keyword_weight=_config.keyword_weight,
-                enable_rerank=_config.enable_rerank,
-                pre_rerank_top_k=_config.pre_rerank_top_k,
-                collection_name=_config.collection_name,
-            )
-
-        logger.info(f"Updating configuration with: {update_dict}")
-
-        # If collection_name is changing, validate it before applying
-        new_collection_name = update_dict.get("collection_name")
-        collection_changed = (
-            new_collection_name is not None
-            and new_collection_name != _config.collection_name
-        )
-        if new_collection_name is not None and not is_valid_collection_name(new_collection_name):
-            raise ValueError(
-                f"Invalid collection name '{new_collection_name}': must be 6-20 chars, "
-                "alphanumeric/underscore/hyphen only"
-            )
-
-        # Create updated configuration (validates automatically in __post_init__)
-        _config = _config.update(**update_dict)
-
-        # Re-initialize vector database when collection_name changes
-        if collection_changed:
-            logger.info(
-                "Collection name changed to '%s', re-initializing vector DB",
-                _config.collection_name,
-            )
-            existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
-            if _config.collection_name in existing:
-                # Open without touching contents — user may have populated this collection
-                new_collection = open_collection(
-                    persist_dir=KNOWLEDGE_DB_DIRECTORY,
-                    collection_name=_config.collection_name,
-                )
-                logger.info("Switched to existing collection '%s'", _config.collection_name)
-            else:
-                # New collection — seed with sample documents so retrieval works immediately
-                documents = get_sample_documents()
-                new_collection = initialize_vector_db(
-                    documents,
-                    persist_dir=KNOWLEDGE_DB_DIRECTORY,
-                    collection_name=_config.collection_name,
-                )
-                logger.info(
-                    "Created new collection '%s' with sample documents", _config.collection_name
-                )
-            _retriever = HybridRetriever(new_collection, _config)
-            logger.info("Retriever re-initialized with collection '%s'", _config.collection_name)
-
-        # Clear cache to invalidate all L1 entries (ADR-006 - Fix for blocking issue #1)
-        # This ensures the new configuration is used for subsequent queries
-        prev_version = _corpus_version
-        _cache_generation += 1
-        # Rebuild the authoritative corpus_version token now that the generation
-        # counter has been bumped.  This propagates the config-change invalidation
-        # into every future cache key without needing to clear the store.
-        _corpus_version = _build_corpus_version_token()
-        # OPTB-012: Structured invalidation log — records the version transition
-        # so operators can correlate config changes with cache miss spikes.
-        logger.info(
-            "cache.invalidation event=config_change prev_version=%s new_version=%s",
-            prev_version,
-            _corpus_version,
-        )
-        if _cache is not None:
-            try:
-                lazy_cache.clear()  # Use lazy_cache to defer to global _cache
-                logger.info("Config updated; cache cleared")
-            except Exception as e:
-                logger.warning(f"Failed to clear cache after config update: {e}")
-        else:
-            logger.debug("Config updated; cache not initialized")
-
-        # Persist the configuration to disk
-        try:
-            save_config_to_disk(_config, KNOWLEDGE_DB_DIRECTORY)
-            logger.info("Configuration persisted to disk")
-        except Exception as e:
-            logger.error(f"Failed to persist configuration to disk: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Configuration updated in memory but could not be persisted to disk. "
-                "Settings will revert on restart.",
-            )
-
-        logger.info("Configuration updated successfully")
-        return ConfigResponse(
-            semantic_top_k=_config.semantic_top_k,
-            keyword_top_k=_config.keyword_top_k,
-            final_top_k=_config.final_top_k,
-            semantic_weight=_config.semantic_weight,
-            keyword_weight=_config.keyword_weight,
-            enable_rerank=_config.enable_rerank,
-            pre_rerank_top_k=_config.pre_rerank_top_k,
-            collection_name=_config.collection_name,
-        )
-
-    except ValueError as e:
-        logger.warning(f"Configuration validation failed: {e}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Configuration validation failed: {str(e)}",
-        )
-    except TypeError as e:
-        logger.warning(f"Invalid configuration parameter: {e}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid configuration parameter: {str(e)}",
-        )
-    except Exception as e:
-        logger.error(f"Configuration update failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Configuration update failed: {str(e)}",
-        )
-
-
-
-@app.get(
-    "/cache/stats",
-    response_model=LayeredCacheStatsResponse,
-    tags=["Cache"],
-    summary="Get layered cache statistics",
-)
-async def get_cache_stats() -> LayeredCacheStatsResponse:
-    """Get layered cache statistics for monitoring and debugging.
-
-    Returns a three-section response covering L1 query-response cache metrics,
-    L2 embedding LRU cache metrics, and backend connectivity health.
-
-    WHY layered schema (OPTB-008): The previous flat schema mixed L1 counters
-    with backend health, making it impossible to route specific alerts (e.g.
-    'only L2 is degraded').  The three-section layout gives consumers an
-    unambiguous contract and allows section-level alerting rules.
-
-    Implements fail-open principle: always returns HTTP 200, even when the
-    cache backend is unavailable, the retriever is not initialized, or an
-    unexpected exception is raised.  Degraded sections return zeroed values
-    and backend_health.fallback_active=True to signal the degraded state.
-
-    Returns:
-        LayeredCacheStatsResponse with l1_query_cache, l2_embedding_cache,
-        backend_health, and timestamp sections.
-
-    Example:
-        GET /cache/stats
-        Response: {
-            "l1_query_cache": {
-                "backend": "memory",
-                "hits": 1500, "misses": 350, "hit_rate": 0.811,
-                "size": 125, "max_size": 10000, "ttl_seconds": 3600,
-                "corpus_version": "gen2.n108"
-            },
-            "l2_embedding_cache": {
-                "hits": 800, "misses": 200, "hit_rate": 0.800,
-                "size": 300, "capacity": 5000
-            },
-            "backend_health": {
-                "connected": true, "latency_ms": 0.8,
-                "fallback_active": false, "error": null
-            },
-            "timestamp": "2026-04-22T10:30:45.123456Z"
-        }
-    """
-    # -----------------------------------------------------------------------
-    # Zero-value sentinels used when a section cannot be populated.
-    # Returning zeroes (not None) guarantees the schema shape is always valid
-    # and consumers never need null-checks on numeric fields.
-    # -----------------------------------------------------------------------
-    _zeroed_l1 = L1QueryCacheStats(
-        backend="none",
-        hits=0,
-        misses=0,
-        hit_rate=0.0,
-        size=0,
-        max_size=0,
-        ttl_seconds=0,
-        corpus_version=_corpus_version,
-    )
-    _zeroed_l2 = L2EmbeddingCacheStats(
-        hits=0, misses=0, hit_rate=0.0, size=0, capacity=0
-    )
-    _degraded_health = BackendHealthStats(
-        connected=False,
-        latency_ms=None,
-        fallback_active=True,
-        error=None,
-    )
-
-    try:
-        # ------------------------------------------------------------------
-        # L1 section — sourced from the active cache backend.
-        # ------------------------------------------------------------------
-        if _cache is None:
-            # Cache not yet initialised or was torn down after a backend error.
-            l1 = _zeroed_l1
-            backend_health = _degraded_health
-        else:
-            try:
-                raw = lazy_cache.stats()
-                hits = int(raw.get("hits", 0))
-                misses = int(raw.get("misses", 0))
-                total = hits + misses
-                hit_rate = (hits / total) if total > 0 else 0.0
-
-                l1 = L1QueryCacheStats(
-                    backend=str(raw.get("backend", "unknown")),
-                    hits=hits,
-                    misses=misses,
-                    hit_rate=hit_rate,
-                    size=int(raw.get("size", 0) or 0),
-                    max_size=int(raw.get("max_size", 0) or 0),
-                    ttl_seconds=int(raw.get("ttl_seconds", 0) or 0),
-                    # corpus_version surfaces the active key-namespace token so
-                    # operators can verify invalidation events took effect.
-                    corpus_version=_corpus_version,
-                )
-                logger.debug(
-                    "L1 stats: backend=%s hits=%d misses=%d hit_rate=%.2f corpus_version=%s",
-                    l1.backend,
-                    l1.hits,
-                    l1.misses,
-                    l1.hit_rate,
-                    l1.corpus_version,
-                )
-            except Exception as l1_err:
-                # Fail-open for L1: return zeroes rather than propagating.
-                logger.warning("Failed to read L1 cache stats: %s", l1_err)
-                l1 = _zeroed_l1
-
-            # ----------------------------------------------------------------
-            # Backend health — uses the CacheBackend.health() method which
-            # performs a live Redis PING for RedisCache or returns an always-
-            # connected response for InMemoryCache.
-            # ----------------------------------------------------------------
-            try:
-                raw_health = lazy_cache.health()
-                backend_health = BackendHealthStats(
-                    connected=bool(raw_health.get("connected", False)),
-                    latency_ms=raw_health.get("latency_ms"),
-                    fallback_active=bool(raw_health.get("fallback_active", False)),
-                    error=raw_health.get("error"),
-                )
-            except Exception as health_err:
-                logger.warning("Failed to read backend health: %s", health_err)
-                backend_health = _degraded_health
-
-            # OPTB-012: Emit structured log on fallback state transitions.
-            # _log_fallback_transition() is idempotent for stable states so it
-            # is safe to call on every /cache/stats poll.
-            _log_fallback_transition(backend_health.fallback_active)
-
-        # ------------------------------------------------------------------
-        # L2 section — sourced from the retriever's public embedding cache
-        # accessor.  Returns zeroes if the retriever is not yet initialised.
-        # ------------------------------------------------------------------
-        if _retriever is None:
-            l2 = _zeroed_l2
-        else:
-            try:
-                raw_l2 = _retriever.get_embedding_cache_stats()
-                l2_hits = int(raw_l2.get("hits", 0))
-                l2_misses = int(raw_l2.get("misses", 0))
-                l2_total = l2_hits + l2_misses
-                l2_hit_rate = (l2_hits / l2_total) if l2_total > 0 else 0.0
-                l2 = L2EmbeddingCacheStats(
-                    hits=l2_hits,
-                    misses=l2_misses,
-                    hit_rate=l2_hit_rate,
-                    size=int(raw_l2.get("size", 0)),
-                    capacity=int(raw_l2.get("capacity", 0)),
-                )
-                logger.debug(
-                    "L2 stats: hits=%d misses=%d hit_rate=%.2f size=%d/%d",
-                    l2.hits,
-                    l2.misses,
-                    l2.hit_rate,
-                    l2.size,
-                    l2.capacity,
-                )
-            except Exception as l2_err:
-                logger.warning("Failed to read L2 embedding cache stats: %s", l2_err)
-                l2 = _zeroed_l2
-
-        return LayeredCacheStatsResponse(
-            l1_query_cache=l1,
-            l2_embedding_cache=l2,
-            backend_health=backend_health,
-            timestamp=datetime.now(timezone.utc),
-        )
-
-    except Exception as outer_err:
-        # Outer fail-open guard: an unexpected error in the orchestration
-        # logic itself must never produce a 5xx response.
-        logger.warning("Unexpected error building cache stats response: %s", outer_err)
-        return LayeredCacheStatsResponse(
-            l1_query_cache=_zeroed_l1,
-            l2_embedding_cache=_zeroed_l2,
-            backend_health=_degraded_health,
-            timestamp=datetime.now(timezone.utc),
-        )
-
-
-
-
-# --- MCP Protocol Endpoints ---
-
-class MCPHealthResponse(PydanticBaseModel):
-    status: str = "ok"
-
-@app.get("/mcp/health", response_model=MCPHealthResponse, tags=["MCP"], summary="MCP health check")
-async def mcp_health():
-    return MCPHealthResponse()
-
-class MCPConfigResponse(PydanticBaseModel):
-    semantic_top_k: int
-    keyword_top_k: int
-    final_top_k: int
-    semantic_weight: float
-    keyword_weight: float
-    enable_rerank: bool
-    pre_rerank_top_k: int
-    collection_name: str
-
-@app.get("/mcp/config", response_model=MCPConfigResponse, tags=["MCP"], summary="Get MCP config")
-async def mcp_get_config():
-    if _config is None:
-        return JSONResponse(status_code=503, content={"detail": "Retriever not initialized"})
-    return MCPConfigResponse(
-        semantic_top_k=_config.semantic_top_k,
-        keyword_top_k=_config.keyword_top_k,
-        final_top_k=_config.final_top_k,
-        semantic_weight=_config.semantic_weight,
-        keyword_weight=_config.keyword_weight,
-        enable_rerank=_config.enable_rerank,
-        pre_rerank_top_k=_config.pre_rerank_top_k,
-        collection_name=_config.collection_name,
-    )
-
-class MCPConfigUpdateRequest(PydanticBaseModel):
-    semantic_top_k: Optional[int] = None
-    keyword_top_k: Optional[int] = None
-    final_top_k: Optional[int] = None
-    semantic_weight: Optional[float] = None
-    keyword_weight: Optional[float] = None
-    enable_rerank: Optional[bool] = None
-    pre_rerank_top_k: Optional[int] = None
-    collection_name: Optional[str] = None
-
-@app.put("/mcp/config", response_model=MCPConfigResponse, tags=["MCP"], summary="Update MCP config")
-async def mcp_update_config(request: MCPConfigUpdateRequest):
-    global _config, _cache_generation, _corpus_version, _retriever
-    if _config is None:
-        return JSONResponse(status_code=503, content={"detail": "Retriever not initialized"})
-    update_dict = request.model_dump(exclude_unset=True)
-    if not update_dict:
-        return MCPConfigResponse(**_config.__dict__)
-    new_collection_name = update_dict.get("collection_name")
-    collection_changed = (
-        new_collection_name is not None and new_collection_name != _config.collection_name
-    )
-    if new_collection_name is not None and not is_valid_collection_name(new_collection_name):
-        return JSONResponse(status_code=400, content={"detail": f"Invalid collection name '{new_collection_name}': must be 6-20 chars, alphanumeric/underscore/hyphen only"})
-    _config = _config.update(**update_dict)
-    if collection_changed:
-        existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
-        if _config.collection_name in existing:
-            new_collection = open_collection(
-                persist_dir=KNOWLEDGE_DB_DIRECTORY,
-                collection_name=_config.collection_name,
-            )
-        else:
-            documents = get_sample_documents()
-            new_collection = initialize_vector_db(
-                documents,
-                persist_dir=KNOWLEDGE_DB_DIRECTORY,
-                collection_name=_config.collection_name,
-            )
-        _retriever = HybridRetriever(new_collection, _config)
-    _cache_generation += 1
-    _corpus_version = _build_corpus_version_token()
-    if _cache is not None:
-        try:
-            lazy_cache.clear()
-        except Exception:
-            pass
-    return MCPConfigResponse(**_config.__dict__)
-
-class MCPQueryRequest(PydanticBaseModel):
-    query: str
-    enable_rerank: Optional[bool] = None
-
-class MCPQueryResponse(PydanticBaseModel):
-    results: list[dict]
-    total_results: int
-
-@app.post("/mcp/query", response_model=MCPQueryResponse, tags=["MCP"], summary="Query via MCP protocol")
-async def mcp_query(request: MCPQueryRequest = Body(...)):
-    if _retriever is None or _config is None:
-        return JSONResponse(status_code=503, content={"detail": "Retriever not initialized"})
-    query = request.query.strip()
-    if not query or len(query) < 1 or len(query) > 500:
-        return JSONResponse(status_code=400, content={"detail": "Query must be between 1 and 500 characters"})
-    try:
-        results = _shared_retrieve_documents(query, enable_rerank=request.enable_rerank)
-        doc_results = _to_filtered_document_results(results, min_score_threshold=0.40)
-        # Convert DocumentResult models to dicts for response
-        return MCPQueryResponse(
-            results=[d.model_dump() for d in doc_results],
-            total_results=len(doc_results),
-        )
-    except RetrievalError as e:
-        return JSONResponse(status_code=500, content={"detail": f"Retrieval failed: {str(e)}"})
-    except Exception:
-        return JSONResponse(status_code=500, content={"detail": "An unexpected error occurred"})
-
-
-def _extract_text_from_file(filename: str, content_bytes: bytes) -> str:
-    """Extract text from various file formats."""
-    filename_lower = filename.lower()
-
-    if filename_lower.endswith(".txt"):
-        return content_bytes.decode("utf-8", errors="ignore")
-    elif filename_lower.endswith(".md"):
-        return content_bytes.decode("utf-8", errors="ignore")
-    elif filename_lower.endswith(".pdf"):
-        if not with_pdf_support:
-            raise ValueError(
-                "PDF support not available. Install pypdf: pip install pypdf"
-            )
-        try:
-            pdf_file = io.BytesIO(content_bytes)
-            reader = pypdf.PdfReader(pdf_file)
-            text_parts = []
-            for page in reader.pages:
-                text_parts.append(page.extract_text())
-            return "\n".join(text_parts)
-        except Exception as e:
-            raise ValueError(f"Failed to extract PDF text: {str(e)}")
-    else:
-        raise ValueError(
-            f"Unsupported file format: {filename}. Supported: .txt, .md, .pdf"
-        )
-
-
-@app.post(
-    "/documents",
-    response_model=DocumentIngestionResponse,
-    tags=["Documents"],
-    summary="Add custom documents",
-)
-async def add_documents(request: DocumentIngestionRequest) -> DocumentIngestionResponse:
-    """Add custom documents to the retrieval system.
-
-    Supports three types of document sources:
-    - text: Raw text content (paste directly)
-    - url: URL to fetch content from
-    - file: Base64-encoded file (txt, md, pdf)
-
-    Args:
-        request: DocumentIngestionRequest with source type, content, and optional label.
-
-    Returns:
-        DocumentIngestionResponse with status and document/chunk counts.
-
-    Raises:
-        HTTPException: 400 on validation error, 503 if retriever not initialized, 500 on failure.
-    """
-    global _cache_generation, _corpus_version
-
-    if _retriever is None or _config is None:
-        logger.error("Retriever not initialized")
-        raise HTTPException(
-            status_code=503,
-            detail="Retriever service not initialized. Try again later.",
-        )
-
-    try:
-        text_content = ""
-        # source_label is resolved per source_type branch below when not explicitly provided.
-        source_label = request.source_label
-
-        # Log ingest type (ADR-003 - Fix for blocking issue #3)
-        logger.info(f"Ingest type: {request.ingest_type}; cache {'will be cleared' if request.ingest_type == 'update' else 'will be preserved'}")
-
-        if request.source_type == "text":
-            text_content = request.content
-            # When no explicit label is provided, derive a deterministic one from the
-            # content so that different unlabelled text uploads are treated as distinct
-            # sources.  The generic fallback ("text") would map everything to the same
-            # source and cause the update path to delete unrelated prior ingests.
-            if not source_label:
-                content_hash = hashlib.sha256(request.content.encode()).hexdigest()[:12]
-                source_label = f"text_{content_hash}"
-            logger.info(f"Ingesting text document: {source_label}")
-
-        elif request.source_type == "url":
-            logger.info(f"Fetching content from URL: {request.content}")
-            try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.5",
-                }
-                response = requests.get(request.content, headers=headers, timeout=15)
-                response.raise_for_status()
-            except requests.RequestException as e:
-                logger.error(f"Failed to fetch URL: {e}")
-                raise HTTPException(
-                    status_code=502, detail=f"Failed to fetch URL: {str(e)}"
-                )
-
-            text_content = response.text
-            source_label = request.source_label or request.content
-
-        elif request.source_type == "file":
-            # Decode base64
-            try:
-                file_bytes = base64.b64decode(request.content)
-            except Exception as e:
-                logger.error(f"Failed to decode base64: {e}")
-                raise HTTPException(
-                    status_code=400, detail="Invalid base64 encoding"
-                )
-
-            if not request.filename:
-                raise HTTPException(
-                    status_code=400, detail="filename required for file uploads"
-                )
-
-            # Use the filename as the stable identifier so repeated uploads of the
-            # same file are treated as updates rather than independent new sources.
-            source_label = request.source_label or request.filename
-
-            # Extract text from file
-            try:
-                text_content = _extract_text_from_file(request.filename, file_bytes)
-                logger.info(f"Extracted text from file: {request.filename}")
-            except ValueError as e:
-                logger.error(f"Failed to extract file content: {e}")
-                raise HTTPException(status_code=400, detail=str(e))
-
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported source_type: {request.source_type}",
-            )
-
-        # Chunk the text content
-        # Note A1: chunk_size=400 aligns with ADR-0001 T1 — reduced from 500 to
-        # 400 characters to improve retrieval precision and provide more headroom
-        # under BAAI/bge-small-en-v1.5's 512-token max sequence length
-        # (ADR-0001 EMB-006), avoiding the observed risk of silent tail truncation.
-        _source_hint = request.content if request.source_type == "url" else (request.filename or "")
-        chunk_dicts = chunk_document(text_content, source_hint=_source_hint,
-                                      chunk_size=400, chunk_overlap=50)
-        if not chunk_dicts:
-            logger.error(f"No content to chunk from source: {source_label}")
-            if request.source_type == "url":
-                detail = (
-                    f"No readable text could be extracted from {source_label}. "
-                    "The page may require JavaScript, a login, or bot verification."
-                )
-            else:
-                detail = f"No content to chunk from source: {source_label}"
-            raise HTTPException(status_code=400, detail=detail)
-        chunks = [cd["text"] for cd in chunk_dicts]
-
-        logger.info(f"Created {len(chunks)} chunks from source: {source_label}")
-
-        # Add chunks to vector database collection
-        try:
-            # Use the collection from the global retriever
-            collection = _retriever._collection if hasattr(_retriever, "_collection") else _retriever.collection
-            if not collection:
-                raise HTTPException(
-                    status_code=500, detail="Vector database collection not accessible"
-                )
-
-            # Prepare documents for ChromaDB
-            doc_ids = [f"{source_label}_{i}" for i in range(len(chunks))]
-            parsed = urlparse(request.content)
-            is_http_url = parsed.scheme in ("http", "https") and bool(parsed.netloc)
-            source_url = request.content if is_http_url else None
-            url_meta: dict[str, str] = {"source_url": source_url} if source_url else {}
-            metadatas = [
-                {"source": source_label, "chunk_index": i, **url_meta,
-                 **{k: v for k, v in chunk_dicts[i]["metadata"].items()
-                    if k in ("section_h1", "section_h2") and v is not None}}
-                for i in range(len(chunks))
-            ]
-
-            # Determine effective ingest type.
-            # When the client explicitly sets ingest_type (present in model_fields_set)
-            # we honour that contract.  When omitted (the default), we derive the type
-            # from the collection so the backend can self-heal without client cooperation.
-            #
-            # Derivation: primary check by source label, secondary by source_url to handle
-            # the case where the same URL was previously ingested under a different label.
-            if "ingest_type" in request.model_fields_set:
-                effective_ingest_type = request.ingest_type
-                source_is_new = (effective_ingest_type == "add")
-                matched_by_url = False
-            else:
-                # Pass include=[] so ChromaDB returns only ids, not full documents.
-                existing_by_label = collection.get(
-                    where={"source": source_label}, limit=1, include=[]
-                )
-                matched_by_url = False
-                if not existing_by_label["ids"] and source_url:
-                    existing_by_url = collection.get(
-                        where={"source_url": source_url}, limit=1, include=[]
-                    )
-                    matched_by_url = bool(existing_by_url["ids"])
-
-                source_is_new = not existing_by_label["ids"] and not matched_by_url
-                effective_ingest_type = "add" if source_is_new else "update"
-
-            logger.info(
-                "Ingest source_is_new=%s effective_ingest_type=%s source=%s",
-                source_is_new,
-                effective_ingest_type,
-                source_label,
-            )
-
-            # For updates, remove stale chunks before adding new ones so the corpus
-            # never holds duplicate content for the same source.
-            # When the match was by source_url (label changed), delete by URL to reach
-            # the old chunks that are indexed under the previous label.
-            if effective_ingest_type == "update":
-                old_ids_by_label = collection.get(
-                    where={"source": source_label}, include=[]
-                )["ids"]
-                if old_ids_by_label:
-                    collection.delete(ids=old_ids_by_label)
-                    logger.info(
-                        "Deleted %d stale chunks for source=%s",
-                        len(old_ids_by_label),
-                        source_label,
-                    )
-                if matched_by_url and source_url:
-                    old_ids_by_url = collection.get(
-                        where={"source_url": source_url}, include=[]
-                    )["ids"]
-                    remaining = [id_ for id_ in old_ids_by_url if id_ not in set(old_ids_by_label)]
-                    if remaining:
-                        collection.delete(ids=remaining)
-                        logger.info(
-                            "Deleted %d stale chunks for source_url=%s (label changed)",
-                            len(remaining),
-                            source_url,
-                        )
-
-            # Add to collection
-            collection.add(
-                ids=doc_ids,
-                documents=chunks,
-                metadatas=metadatas,
-            )
-            logger.info(
-                f"Added {len(chunks)} chunks to collection from source: {source_label}"
-            )
-
-            if effective_ingest_type == "update":
-                prev_version = _corpus_version
-                _cache_generation += 1
-                _corpus_version = _build_corpus_version_token()
-                logger.info(
-                    "cache.invalidation event=ingest_update prev_version=%s new_version=%s",
-                    prev_version,
-                    _corpus_version,
-                )
-                if _cache is not None:
-                    try:
-                        lazy_cache.clear()
-                        logger.info("Ingest complete (type='update'); cache cleared")
-                    except Exception as e:
-                        logger.warning(f"Failed to clear cache after ingest: {e}")
-                else:
-                    logger.debug("Ingest complete (type='update'); cache not initialized")
-            else:
-                # New source: don't bump the generation counter — cached results for
-                # existing queries are still valid.  Rebuild the token on the count
-                # dimension so queries issued after this add see the grown corpus.
-                prev_version = _corpus_version
-                _corpus_version = _build_corpus_version_token()
-                logger.info(
-                    "cache.invalidation event=ingest_add prev_version=%s new_version=%s",
-                    prev_version,
-                    _corpus_version,
-                )
-                logger.info("Ingest complete (type='add'); cache preserved")
-
-            return DocumentIngestionResponse(
-                status="success",
-                documents_added=1,
-                chunks_created=len(chunks),
-                message=f"Successfully ingested {len(chunks)} chunks from {source_label}",
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to add documents to collection: {e}")
-            raise HTTPException(
-                status_code=500, detail=f"Failed to add documents: {str(e)}"
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error during document ingestion: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Document ingestion failed: {str(e)}",
-        )
-
-
-@app.get(
-    "/documents/sources",
-    response_model=SourcesResponse,
-    tags=["Documents"],
-    summary="List document sources",
-)
-async def get_document_sources() -> SourcesResponse:
-    """Get list of all document sources in the retrieval system.
-
-    Returns:
-        SourcesResponse with list of sources and chunk counts.
-
-    Raises:
-        HTTPException: 503 if retriever not initialized, 500 on failure.
-    """
-    if _retriever is None:
-        logger.error("Retriever not initialized")
-        raise HTTPException(
-            status_code=503,
-            detail="Retriever service not initialized. Try again later.",
-        )
-
-    try:
-        collection = _retriever._collection if hasattr(_retriever, "_collection") else _retriever.collection
-        if not collection:
-            raise HTTPException(
-                status_code=500, detail="Vector database collection not accessible"
-            )
-
-        # Get all documents and count by source
-        all_docs = collection.get()
-        source_counts: dict[str, int] = {}
-
-        if all_docs and all_docs["metadatas"]:
-            for metadata in all_docs["metadatas"]:
-                source = metadata.get("source", "unknown")
-                source_counts[source] = source_counts.get(source, 0) + 1
-
-        sources = [
-            DocumentSource(source=src, count=count)
-            for src, count in sorted(source_counts.items())
-        ]
-
-        logger.info(f"Retrieved {len(sources)} document sources")
-        return SourcesResponse(sources=sources)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to retrieve document sources: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve sources: {str(e)}",
-        )
-
-
-@app.get(
-    "/collections",
-    response_model=CollectionsResponse,
-    tags=["Documents"],
-    summary="List ChromaDB collections",
-)
-async def get_collections() -> CollectionsResponse:
-    """Get list of all ChromaDB collections in the vector database.
-
-    Returns:
-        CollectionsResponse with list of collections and their document counts.
-
-    Raises:
-        HTTPException: 503 if retriever not initialized, 500 on failure.
-    """
-    if _retriever is None:
-        logger.error("Retriever not initialized")
-        raise HTTPException(
-            status_code=503,
-            detail="Retriever service not initialized. Try again later.",
-        )
-
-    # Validate that the retriever's collection handle is accessible
-    if _retriever.collection is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Vector database collection not initialized.",
-        )
-
-    try:
-        # Create single client to enumerate all collections and fetch counts
-        client = chromadb.PersistentClient(path=KNOWLEDGE_DB_DIRECTORY)
-        all_collections = client.list_collections()
-        active_name = _retriever.collection.name
-
-        collections: list[CollectionInfo] = []
-        for chroma_collection in all_collections:
-            name = chroma_collection.name
-            if name == active_name:
-                # Use already-open active collection handle
-                count = _retriever.collection.count()
-            else:
-                # Fetch count from disk for non-active collection
-                count = client.get_collection(name).count()
-            collections.append(CollectionInfo(name=name, count=count))
-
-        logger.info(f"Retrieved {len(collections)} collections")
-        return CollectionsResponse(collections=collections)
-
-    except VectorDBError as e:
-        logger.error(f"Failed to list collections: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to list collections: {str(e)}",
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to retrieve collections: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve collections: {str(e)}",
-        )
-
-
-# Application info endpoints
-@app.get("/", tags=["Info"], summary="API information")
-async def root() -> dict:
-    """Root endpoint with API information."""
-    return {
-        "name": "Hybrid RAG Retriever API",
-        "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/health",
-        "websocket": "/ws/chat",
+    # Map function names to (module_name, function_name) tuples
+    router_function_map = {
+        "get_cache_stats": ("routers.cache", "get_cache_stats"),
+        "get_config": ("routers.config", "get_config"),
+        "update_config": ("routers.config", "update_config"),
+        "add_documents": ("routers.documents", "add_documents"),
+        "get_document_sources": ("routers.documents", "get_document_sources"),
+        "get_collections": ("routers.documents", "get_collections"),
+        "health_check": ("routers.health", "health_check"),
+        "root": ("routers.health", "root"),
+        "websocket_chat": ("routers.websocket", "websocket_chat"),
     }
+    
+    if name not in router_function_map:
+        raise AttributeError(f"module 'api' has no attribute '{name}'")
+    
+    # Lazy-load the function if not already cached
+    if name not in _router_functions:
+        module_name, func_name = router_function_map[name]
+        module = __import__(module_name, fromlist=[func_name])
+        _router_functions[name] = getattr(module, func_name)
+    
+    return _router_functions[name]
+
+
+# NOTE: Router registration is deferred to startup_event() to avoid circular imports.
+# Do NOT register routers here at module load time. The circular import sequence is:
+# api.py (line N) -> _register_routers_on_app() -> routers.cache -> import api (incomplete)
+# This causes the error: "cannot import name 'router' from partially initialized module"
+# Solution: Only register routers in startup_event() after all modules are fully loaded.
 
 
 if __name__ == "__main__":
