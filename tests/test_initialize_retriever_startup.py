@@ -215,3 +215,120 @@ class TestInitializeRetrieverOpenCollectionError:
 
         with pytest.raises(VectorDBError, match="simulated corrupt collection"):
             api.initialize_retriever()
+
+
+# ---------------------------------------------------------------------------
+# Test class 4: config hydration — env var and config.json precedence
+# ---------------------------------------------------------------------------
+
+
+class TestInitializeRetrieverConfigHydration:
+    """initialize_retriever() applies the correct config hydration cascade."""
+
+    def _patch_base(self, monkeypatch: pytest.MonkeyPatch, tmp_path_str: str) -> None:
+        _reset_api_state()
+        monkeypatch.setattr("api.KNOWLEDGE_DB_DIRECTORY", tmp_path_str)
+        monkeypatch.setattr("api.HybridRetriever", MagicMock(return_value=MagicMock()))
+        monkeypatch.setattr("api._build_corpus_version_token", lambda: "gen0.n0")
+        monkeypatch.setattr("api.open_collection", MagicMock(return_value=MagicMock()))
+        monkeypatch.setattr("api.initialize_vector_db", MagicMock(return_value=MagicMock()))
+        monkeypatch.setattr("api.get_sample_documents", MagicMock(return_value=[]))
+        # list_existing_collections is called twice: once inside resolve_startup_config
+        # (hybrid_rag.persistence) and once in api.initialize_retriever for open/create.
+        monkeypatch.setattr("api.list_existing_collections", MagicMock(return_value=[]))
+
+    def test_env_var_overrides_disk_config_when_collection_exists(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """COLLECTION_NAME env var wins when its collection exists in ChromaDB."""
+        self._patch_base(monkeypatch, str(tmp_path))
+        monkeypatch.setenv("COLLECTION_NAME", "env_coll_1")
+        from hybrid_rag import DEFAULT_CONFIG
+        mock_save = MagicMock()
+        monkeypatch.setattr(
+            "hybrid_rag.persistence.list_existing_collections",
+            MagicMock(return_value=["env_coll_1", "rag_collection"]),
+        )
+        monkeypatch.setattr(
+            "hybrid_rag.persistence.load_config_from_disk",
+            MagicMock(return_value=DEFAULT_CONFIG),
+        )
+        monkeypatch.setattr("hybrid_rag.persistence.save_config_to_disk", mock_save)
+
+        api.initialize_retriever()
+
+        assert api._config.collection_name == "env_coll_1"
+        mock_save.assert_called_once()
+        assert mock_save.call_args[0][0].collection_name == "env_coll_1"
+
+    def test_env_var_ignored_when_collection_absent(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """COLLECTION_NAME env var is ignored when its collection is not in ChromaDB."""
+        self._patch_base(monkeypatch, str(tmp_path))
+        monkeypatch.setenv("COLLECTION_NAME", "ghost_col_1")
+        monkeypatch.setattr(
+            "hybrid_rag.persistence.list_existing_collections",
+            MagicMock(return_value=["rag_collection"]),
+        )
+        monkeypatch.setattr(
+            "hybrid_rag.persistence.load_config_from_disk", MagicMock(return_value=None)
+        )
+
+        api.initialize_retriever()
+
+        assert api._config.collection_name == "rag_collection"
+
+    def test_disk_config_used_when_collection_verified_and_no_env_var(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """config.json collection_name is used when verified and no env var is set."""
+        self._patch_base(monkeypatch, str(tmp_path))
+        monkeypatch.delenv("COLLECTION_NAME", raising=False)
+        from hybrid_rag import DEFAULT_CONFIG
+        disk_cfg = DEFAULT_CONFIG.update(semantic_weight=0.9, keyword_weight=0.1)
+        monkeypatch.setattr(
+            "hybrid_rag.persistence.list_existing_collections",
+            MagicMock(return_value=["rag_collection"]),
+        )
+        monkeypatch.setattr(
+            "hybrid_rag.persistence.load_config_from_disk", MagicMock(return_value=disk_cfg)
+        )
+
+        api.initialize_retriever()
+
+        assert api._config.semantic_weight == 0.9
+
+    def test_default_config_used_when_disk_collection_absent(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Falls back to DEFAULT_CONFIG when config.json collection is not in ChromaDB."""
+        self._patch_base(monkeypatch, str(tmp_path))
+        monkeypatch.delenv("COLLECTION_NAME", raising=False)
+        from hybrid_rag import DEFAULT_CONFIG, HybridRetrieverConfig
+        stale_cfg = HybridRetrieverConfig(collection_name="old_col_99")
+        monkeypatch.setattr(
+            "hybrid_rag.persistence.list_existing_collections",
+            MagicMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            "hybrid_rag.persistence.load_config_from_disk", MagicMock(return_value=stale_cfg)
+        )
+
+        api.initialize_retriever()
+
+        assert api._config == DEFAULT_CONFIG
+
+    def test_invalid_env_var_raises_before_chromadb(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Invalid COLLECTION_NAME format raises ValueError without touching ChromaDB."""
+        self._patch_base(monkeypatch, str(tmp_path))
+        monkeypatch.setenv("COLLECTION_NAME", "bad.name!")
+        mock_list = MagicMock()
+        monkeypatch.setattr("hybrid_rag.persistence.list_existing_collections", mock_list)
+
+        with pytest.raises(ValueError, match="Invalid COLLECTION_NAME"):
+            api.initialize_retriever()
+
+        mock_list.assert_not_called()

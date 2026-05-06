@@ -28,10 +28,9 @@ from hybrid_rag import (
     create_cache_backend,
     get_sample_documents,
     initialize_vector_db,
-    is_valid_collection_name,
     list_existing_collections,
-    load_config_from_disk,
     open_collection,
+    resolve_startup_config,
 )
 
 # Load environment variables
@@ -60,42 +59,18 @@ _corpus_version: str = "0"
 
 
 def _load_initial_config() -> HybridRetrieverConfig:
-    """Load startup configuration, preferring persisted settings when available.
+    """Load startup configuration using the standard three-level precedence cascade.
 
-    Attempts to load configuration from knowledge_db/config.json. If no persisted
-    config exists or loading fails, uses DEFAULT_CONFIG. Environment variable
-    COLLECTION_NAME (if set and valid) overrides the loaded collection_name.
+    Delegates to ``hybrid_rag.resolve_startup_config``. See that function for
+    the full precedence rules (COLLECTION_NAME env var → config.json → DEFAULT_CONFIG).
 
     Returns:
-        Loaded or default HybridRetrieverConfig.
+        Resolved HybridRetrieverConfig.
 
     Raises:
-        ValueError: If COLLECTION_NAME env var is invalid.
+        ValueError: If COLLECTION_NAME env var has an invalid format.
     """
-    # Try to load persisted configuration first
-    try:
-        config = load_config_from_disk(KNOWLEDGE_DB_DIRECTORY)
-        if config is not None:
-            logger.info("Loaded persisted configuration from disk")
-        else:
-            logger.info("No persisted configuration found, using defaults")
-            config = DEFAULT_CONFIG
-    except Exception as e:
-        logger.warning("Failed to load persisted configuration: %s; using defaults", e)
-        config = DEFAULT_CONFIG
-
-    # Override collection_name with COLLECTION_NAME env var if present
-    env_collection_name = os.getenv("COLLECTION_NAME")
-    if env_collection_name:
-        if not is_valid_collection_name(env_collection_name):
-            raise ValueError(
-                f"Invalid COLLECTION_NAME '{env_collection_name}': must be 6-20 chars, "
-                "alphanumeric/underscore/hyphen only"
-            )
-        config = config.update(collection_name=env_collection_name)
-        logger.info("Overriding collection_name from COLLECTION_NAME env var: %s", env_collection_name)
-
-    return config
+    return resolve_startup_config(KNOWLEDGE_DB_DIRECTORY)
 
 
 def _build_corpus_version_token() -> str:

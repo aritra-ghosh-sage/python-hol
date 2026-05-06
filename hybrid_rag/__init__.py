@@ -74,6 +74,7 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL",
     "save_config_to_disk",
     "load_config_from_disk",
+    "resolve_startup_config",
 ]
 
 # Public API imports
@@ -97,7 +98,7 @@ from .exceptions import (
     RetrieverNotInitializedError,
     VectorDBError,
 )
-from .persistence import load_config_from_disk, save_config_to_disk
+from .persistence import load_config_from_disk, resolve_startup_config, save_config_to_disk
 from .reranker import CrossEncoderReranker
 from .retriever import HybridRetriever
 from .vectordb import (

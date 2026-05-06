@@ -7,14 +7,16 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from .config import HybridRetrieverConfig
-from .constants import KNOWLEDGE_DB_DIRECTORY
+from .config import DEFAULT_CONFIG, HybridRetrieverConfig
+from .constants import COLLECTION_NAME_INVALID_MSG, KNOWLEDGE_DB_DIRECTORY
+from .vectordb import is_valid_collection_name, list_existing_collections
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "save_config_to_disk",
     "load_config_from_disk",
+    "resolve_startup_config",
 ]
 
 
@@ -112,3 +114,84 @@ def load_config_from_disk(
     except Exception as e:
         logger.error(f"Failed to load configuration from {config_path}: {e}")
         return None
+
+
+def resolve_startup_config(
+    persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
+) -> HybridRetrieverConfig:
+    """Resolve startup configuration using the standard three-level precedence cascade.
+
+    Hydration order (highest → lowest precedence):
+      1. ``COLLECTION_NAME`` env var — if set, format-validated, and the named
+         collection exists in ChromaDB, its value overrides ``collection_name``
+         and is written back to config.json to keep both sources in sync.
+      2. ``{persist_dir}/config.json`` — if it exists and its ``collection_name``
+         exists in ChromaDB, it is used as the base config.
+      3. ``DEFAULT_CONFIG`` — fallback when neither of the above applies.
+
+    Args:
+        persist_dir: Directory containing config.json and the ChromaDB store.
+
+    Returns:
+        Resolved HybridRetrieverConfig.
+
+    Raises:
+        ValueError: If ``COLLECTION_NAME`` env var has an invalid format.
+
+    Example:
+        >>> config = resolve_startup_config()
+        >>> print(config.collection_name)
+        rag_collection
+    """
+    from .vectordb import is_valid_collection_name, list_existing_collections
+
+    env_collection_name = os.getenv("COLLECTION_NAME")
+    if env_collection_name and not is_valid_collection_name(env_collection_name):
+        raise ValueError(
+            f"Invalid COLLECTION_NAME '{env_collection_name}': {COLLECTION_NAME_INVALID_MSG}"
+        )
+
+    existing = list_existing_collections(persist_dir)
+
+    base_config = DEFAULT_CONFIG
+    try:
+        disk_config = load_config_from_disk(persist_dir)
+        if disk_config is not None:
+            if disk_config.collection_name in existing:
+                base_config = disk_config
+                logger.info(
+                    "Loaded persisted configuration from disk (collection '%s' verified)",
+                    disk_config.collection_name,
+                )
+            else:
+                logger.warning(
+                    "config.json collection_name '%s' not found in ChromaDB; using DEFAULT_CONFIG",
+                    disk_config.collection_name,
+                )
+        else:
+            logger.info("No persisted configuration found, using defaults")
+    except Exception as e:
+        logger.warning("Failed to load persisted configuration: %s; using defaults", e)
+
+    if env_collection_name:
+        if env_collection_name in existing:
+            base_config = base_config.update(collection_name=env_collection_name)
+            logger.info(
+                "Overriding collection_name from COLLECTION_NAME env var: %s",
+                env_collection_name,
+            )
+            try:
+                save_config_to_disk(base_config, persist_dir)
+                logger.info(
+                    "Persisted env var collection_name '%s' to config.json",
+                    env_collection_name,
+                )
+            except Exception as e:
+                logger.warning("Failed to persist collection_name to config.json: %s", e)
+        else:
+            logger.warning(
+                "COLLECTION_NAME env var '%s' not found in ChromaDB; ignoring",
+                env_collection_name,
+            )
+
+    return base_config

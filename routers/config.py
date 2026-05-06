@@ -9,6 +9,7 @@ import api  # shared state — accessed inside function bodies to avoid circular
 from api_models import ConfigResponse, ConfigUpdateRequest
 from fastapi import APIRouter, HTTPException
 from hybrid_rag import (
+    COLLECTION_NAME_INVALID_MSG,
     HybridRetriever,
     get_sample_documents,
     initialize_vector_db,
@@ -126,8 +127,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
             new_collection_name
         ):
             raise ValueError(
-                f"Invalid collection name '{new_collection_name}': must be 6-20 chars, "
-                "alphanumeric/underscore/hyphen only"
+                f"Invalid collection name '{new_collection_name}': {COLLECTION_NAME_INVALID_MSG}"
             )
 
         api._config = api._config.update(**update_dict)
