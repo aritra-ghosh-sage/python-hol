@@ -56,7 +56,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from hybrid_rag import (
     CACHE_TELEMETRY_LABELS,
-    DEFAULT_CONFIG,
     KNOWLEDGE_DB_DIRECTORY,
     HybridRetriever,
     HybridRetrieverConfig,

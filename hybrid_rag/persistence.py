@@ -143,8 +143,6 @@ def resolve_startup_config(
         >>> print(config.collection_name)
         rag_collection
     """
-    from .vectordb import is_valid_collection_name, list_existing_collections
-
     env_collection_name = os.getenv("COLLECTION_NAME")
     if env_collection_name and not is_valid_collection_name(env_collection_name):
         raise ValueError(

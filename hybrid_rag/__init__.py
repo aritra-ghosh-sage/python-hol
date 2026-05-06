@@ -72,6 +72,7 @@ __all__ = [
     "KNOWLEDGE_DB_DIRECTORY",
     "CACHE_TELEMETRY_LABELS",
     "DEFAULT_EMBEDDING_MODEL",
+    "COLLECTION_NAME_INVALID_MSG",
     "save_config_to_disk",
     "load_config_from_disk",
     "resolve_startup_config",
@@ -87,6 +88,7 @@ from .config import (
 )
 from .constants import (
     CACHE_TELEMETRY_LABELS,
+    COLLECTION_NAME_INVALID_MSG,
     DEFAULT_EMBEDDING_MODEL,
     KNOWLEDGE_DB_DIRECTORY,
     MIN_RELEVANCE_SCORE,
