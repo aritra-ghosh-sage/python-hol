@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 if TYPE_CHECKING:
     from .cache import CacheBackend
 
+from .constants import DEFAULT_EMBEDDING_MODEL_PATH, DEFAULT_RERANKER_MODEL_PATH
+
 __all__ = [
     "HybridRetrieverConfig",
     "DEFAULT_CONFIG",
@@ -37,6 +39,14 @@ class HybridRetrieverConfig:
             configuration. This class stores and serializes the value, but does not itself
             select or initialize the active vector store collection. Defaults to
             "rag_collection".
+        embedding_model_path: Local directory path to store/load the sentence-transformer
+            embedding model. On first use the model is downloaded from Hugging Face and
+            saved here; subsequent starts load it from disk. Defaults to
+            DEFAULT_EMBEDDING_MODEL_PATH ("./models/embedding").
+        reranker_model_path: Local directory path to store/load the cross-encoder reranker
+            model. On first use the model is downloaded from Hugging Face and saved here;
+            subsequent starts load it from disk. Defaults to
+            DEFAULT_RERANKER_MODEL_PATH ("./models/reranker").
 
     Raises:
         ValueError: If weights don't sum to approximately 1.0 or are not in valid range.
@@ -52,6 +62,8 @@ class HybridRetrieverConfig:
     enable_rerank: bool = True
     pre_rerank_top_k: int = 50
     collection_name: str = "rag_collection"
+    embedding_model_path: str = DEFAULT_EMBEDDING_MODEL_PATH
+    reranker_model_path: str = DEFAULT_RERANKER_MODEL_PATH
 
     def __post_init__(self) -> None:
         """Validate configuration parameters after initialization."""
@@ -115,6 +127,8 @@ class HybridRetrieverConfig:
             "enable_rerank",
             "pre_rerank_top_k",
             "collection_name",
+            "embedding_model_path",
+            "reranker_model_path",
         }
         unknown_params = set(kwargs.keys()) - valid_params
         if unknown_params:
@@ -148,6 +162,8 @@ class HybridRetrieverConfig:
             "enable_rerank": self.enable_rerank,
             "pre_rerank_top_k": self.pre_rerank_top_k,
             "collection_name": self.collection_name,
+            "embedding_model_path": self.embedding_model_path,
+            "reranker_model_path": self.reranker_model_path,
         }
 
     @classmethod

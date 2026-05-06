@@ -85,6 +85,7 @@ class TestInitializeRetrieverExistingCollection:
         mock_open_collection.assert_called_once_with(
             persist_dir=str(tmp_path),
             collection_name=expected_collection_name,
+            embedding_model_path=api._config.embedding_model_path,
         )
         assert mock_init_vector_db.call_count == 0
 
@@ -153,6 +154,7 @@ class TestInitializeRetrieverNewCollection:
             _SAMPLE_DOCS,
             persist_dir=str(tmp_path),
             collection_name=expected_collection_name,
+            embedding_model_path=api._config.embedding_model_path,
         )
         assert mock_open_collection.call_count == 0
 

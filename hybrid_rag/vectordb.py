@@ -11,8 +11,11 @@ keeping the rest of the library free of direct database calls.
 # immediately clear which dependencies require installation versus which
 # are built into Python.
 import logging
+import os
 import re
-from typing import Any, cast
+from typing import Any, Callable, TypeVar, cast
+
+_M = TypeVar("_M")
 
 # Note 3: urlparse is added in ADR-0001 T2 to detect whether a document's
 # "source" field is a real HTTP/HTTPS URL. This drives the conditional
@@ -39,7 +42,7 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from .constants import KNOWLEDGE_DB_DIRECTORY, DEFAULT_EMBEDDING_MODEL
+from .constants import KNOWLEDGE_DB_DIRECTORY, DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_MODEL_PATH
 from .exceptions import VectorDBError
 
 # Note 6: __all__ declares the public surface area of this module.
@@ -60,6 +63,76 @@ __all__ = [
 # Using __name__ means log entries automatically carry the full dotted module
 # path (e.g., "hybrid_rag.vectordb"), making log filtering and tracing easy.
 logger = logging.getLogger(__name__)
+
+
+def ensure_model_local(
+    model_name: str,
+    model_path: str,
+    loader: Callable[[str], _M],
+) -> str:
+    """Guarantee a sentence-transformers-compatible model is available locally.
+
+    Checks whether *model_path* already contains a saved model (detected by the
+    presence of ``config.json``). If found, the local path is returned as-is. If
+    not, the model is downloaded via *loader*, saved to *model_path*, and that
+    path is returned. The save is atomic: uses a temporary directory and renames
+    on completion to prevent partial writes.
+
+    This single implementation is the only download-or-load workflow in the
+    codebase; both the embedding model (SentenceTransformer) and the reranker
+    (CrossEncoder) delegate here.
+
+    Args:
+        model_name: Hugging Face model identifier used when a local copy is absent.
+        model_path: Directory to store/load the model.
+        loader: Callable that accepts a model name/path and returns a model
+            instance with a ``save(path)`` method (e.g. SentenceTransformer,
+            CrossEncoder).
+
+    Returns:
+        Absolute path to the local model directory.
+
+    Raises:
+        Exception: If download or save fails (from loader or model.save()).
+    """
+    import shutil
+
+    local_path = os.path.abspath(model_path)
+    if os.path.isdir(local_path) and os.path.exists(
+        os.path.join(local_path, "config.json")
+    ):
+        logger.info("Loading model from local path: %s", local_path)
+    else:
+        logger.info("Downloading model '%s' to %s", model_name, local_path)
+        model = loader(model_name)
+        tmp_path = local_path + ".tmp"
+        try:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            os.makedirs(tmp_path, exist_ok=True)
+            model.save(tmp_path)  # type: ignore[union-attr]
+            os.rename(tmp_path, local_path)
+        except Exception:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            raise
+        logger.info("Model saved to %s; future loads will use this path.", local_path)
+    return local_path
+
+
+def _ensure_embedding_model_local(model_path: str) -> str:
+    """Return a local path for the sentence-transformer embedding model.
+
+    Thin wrapper around :func:`ensure_model_local` that binds the HF model
+    name and loader for the embedding model.
+
+    Args:
+        model_path: Directory to store/load the sentence-transformer model.
+
+    Returns:
+        Absolute path to the local model directory.
+    """
+    from sentence_transformers import SentenceTransformer as _ST
+
+    return ensure_model_local(DEFAULT_EMBEDDING_MODEL, model_path, _ST)
 
 
 def chunk_text(
@@ -478,6 +551,7 @@ def initialize_vector_db(
     documents: list[dict[str, str]],
     persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
     collection_name: str = "rag_collection",
+    embedding_model_path: str = DEFAULT_EMBEDDING_MODEL_PATH,
 ) -> Collection:
     """Initialize ChromaDB, embed and store the provided documents, and return the collection.
 
@@ -486,12 +560,18 @@ def initialize_vector_db(
     chunks before storing for better embedding performance. Uses local embeddings
     to avoid external API dependencies.
 
+    On first call the embedding model is downloaded from Hugging Face and saved to
+    *embedding_model_path*. Subsequent calls load the model directly from disk,
+    so no network access to Hugging Face is required after the initial download.
+
     Args:
         documents: List of document dictionaries with 'id', 'source', and 'text' keys.
         persist_dir: Directory path to persist the ChromaDB collection.
                      Defaults to KNOWLEDGE_DB_DIRECTORY.
         collection_name: Name of the ChromaDB collection to create or retrieve.
                         Defaults to "rag_collection".
+        embedding_model_path: Local directory path to store/load the sentence-transformer
+                              embedding model. Defaults to DEFAULT_EMBEDDING_MODEL_PATH.
 
     Returns:
         ChromaDB Collection object with embedded documents ready for querying.
@@ -529,16 +609,12 @@ def initialize_vector_db(
         except NotFoundError:
             logger.debug(f"Collection {collection_name} did not exist, creating new one")
 
-        # Note 34: SentenceTransformerEmbeddingFunction is a ChromaDB-provided
-        # wrapper that calls the sentence-transformers library to produce dense
-        # vector embeddings. By passing DEFAULT_EMBEDDING_MODEL here, all
-        # embeddings in the collection use the same model — a requirement for
-        # meaningful cosine similarity comparisons.
-        # Initialize local sentence-transformers embedding function
-        # Using local embeddings to avoid HF Inference API issues
-        logger.debug("Initializing SentenceTransformer embeddings")
+        # Resolve the embedding model: load locally if available, else download
+        # and save so future calls are fully offline.
+        logger.debug("Resolving SentenceTransformer embedding model")
+        model_source = _ensure_embedding_model_local(embedding_model_path)
         embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=DEFAULT_EMBEDDING_MODEL
+            model_name=model_source
         )
         # Note 35: cast() is a type-annotation-only operation — it has no
         # runtime effect. It is used here to satisfy mypy, which cannot infer
@@ -640,15 +716,21 @@ def initialize_vector_db(
 def open_collection(
     persist_dir: str = KNOWLEDGE_DB_DIRECTORY,
     collection_name: str = "rag_collection",
+    embedding_model_path: str = DEFAULT_EMBEDDING_MODEL_PATH,
 ) -> Collection:
     """Open an existing ChromaDB collection without modifying its contents.
 
     Attaches the same SentenceTransformer embedding function used by
     initialize_vector_db so that semantic queries work correctly.
 
+    On first call the embedding model is downloaded from Hugging Face and saved to
+    *embedding_model_path*. Subsequent calls load the model directly from disk.
+
     Args:
         persist_dir: Directory path where the ChromaDB collection is persisted.
         collection_name: Name of the collection to open.
+        embedding_model_path: Local directory path to store/load the sentence-transformer
+                              embedding model. Defaults to DEFAULT_EMBEDDING_MODEL_PATH.
 
     Returns:
         ChromaDB Collection object ready for querying.
@@ -663,8 +745,9 @@ def open_collection(
     """
     try:
         client = chromadb.PersistentClient(path=persist_dir)
+        model_source = _ensure_embedding_model_local(embedding_model_path)
         embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=DEFAULT_EMBEDDING_MODEL
+            model_name=model_source
         )
         typed_embedding_function = cast(EmbeddingFunction[Embeddable], embedding_function)
         # Note 43: get_collection (not get_or_create_collection) is used here

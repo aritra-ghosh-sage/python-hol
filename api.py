@@ -216,6 +216,7 @@ def initialize_retriever() -> None:
             collection = open_collection(
                 persist_dir=KNOWLEDGE_DB_DIRECTORY,
                 collection_name=_config.collection_name,
+                embedding_model_path=_config.embedding_model_path,
             )
             logger.info("Loaded existing collection '%s'", _config.collection_name)
         else:
@@ -224,6 +225,7 @@ def initialize_retriever() -> None:
                 documents,
                 persist_dir=KNOWLEDGE_DB_DIRECTORY,
                 collection_name=_config.collection_name,
+                embedding_model_path=_config.embedding_model_path,
             )
             logger.info(
                 "Created new collection '%s' with %d sample documents",

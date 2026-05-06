@@ -2,13 +2,12 @@
 
 import logging
 import math
-import os
 from typing import Any
 
-from dotenv import load_dotenv
 from sentence_transformers import CrossEncoder
 
-load_dotenv()
+from .constants import DEFAULT_RERANKER_MODEL_PATH
+from .vectordb import ensure_model_local
 
 __all__ = ["CrossEncoderReranker"]
 
@@ -22,6 +21,10 @@ class CrossEncoderReranker:
     relevance judgments than embedding similarity alone. Uses the ms-marco MiniLM
     cross-encoder model for efficient computation.
 
+    On first initialization the model is downloaded from Hugging Face and saved to
+    *model_path*. Every subsequent initialization loads the weights directly from
+    disk, avoiding any network requests to Hugging Face.
+
     Attributes:
         model: The loaded cross-encoder model for predicting query-document relevance.
 
@@ -33,16 +36,24 @@ class CrossEncoderReranker:
 
     _MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-    def __init__(self) -> None:
-        """Initialize the cross-encoder reranker with pre-trained model.
+    def __init__(self, model_path: str = DEFAULT_RERANKER_MODEL_PATH) -> None:
+        """Initialize the cross-encoder reranker, loading from local path when available.
+
+        On first run the model is downloaded from Hugging Face and persisted to
+        *model_path*. Subsequent calls load directly from disk.
+
+        Args:
+            model_path: Directory path to store/load the cross-encoder model.
+                Defaults to DEFAULT_RERANKER_MODEL_PATH.
 
         Raises:
             ImportError: If sentence-transformers is not installed.
         """
         try:
-            logger.debug(f"Loading cross-encoder model: {self._MODEL_NAME}")
-            hf_token = os.environ.get("HF_TOKEN")
-            self.model = CrossEncoder(self._MODEL_NAME, token=hf_token)
+            local_path = ensure_model_local(
+                self._MODEL_NAME, model_path, CrossEncoder
+            )
+            self.model = CrossEncoder(local_path)
             logger.info("Cross-encoder reranker initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize cross-encoder reranker: {e}")

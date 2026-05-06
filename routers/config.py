@@ -44,6 +44,8 @@ def _config_to_response(cfg: object) -> ConfigResponse:
         enable_rerank=cfg.enable_rerank,
         pre_rerank_top_k=cfg.pre_rerank_top_k,
         collection_name=cfg.collection_name,
+        embedding_model_path=cfg.embedding_model_path,
+        reranker_model_path=cfg.reranker_model_path,
     )
 
 
@@ -142,6 +144,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
                 new_collection = open_collection(
                     persist_dir=api.KNOWLEDGE_DB_DIRECTORY,
                     collection_name=api._config.collection_name,
+                    embedding_model_path=api._config.embedding_model_path,
                 )
                 api.logger.info(
                     "Switched to existing collection '%s'", api._config.collection_name
@@ -152,6 +155,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
                     documents,
                     persist_dir=api.KNOWLEDGE_DB_DIRECTORY,
                     collection_name=api._config.collection_name,
+                    embedding_model_path=api._config.embedding_model_path,
                 )
                 api.logger.info(
                     "Created new collection '%s' with sample documents",

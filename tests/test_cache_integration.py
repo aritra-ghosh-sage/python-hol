@@ -236,6 +236,8 @@ async def test_config_endpoint_clears_cache_on_update() -> None:
     fake_config.keyword_weight = 0.3
     fake_config.enable_rerank = True
     fake_config.collection_name = "rag_collection"
+    fake_config.embedding_model_path = "./models/embedding"
+    fake_config.reranker_model_path = "./models/reranker"
     updated_config = MagicMock()
     for attr in ("semantic_top_k", "keyword_top_k", "final_top_k", "pre_rerank_top_k"):
         setattr(updated_config, attr, 10)
@@ -243,6 +245,8 @@ async def test_config_endpoint_clears_cache_on_update() -> None:
     updated_config.keyword_weight = 0.2
     updated_config.enable_rerank = True
     updated_config.collection_name = "rag_collection"
+    updated_config.embedding_model_path = "./models/embedding"
+    updated_config.reranker_model_path = "./models/reranker"
     fake_config.update.return_value = updated_config
 
     with (
@@ -278,6 +282,8 @@ async def test_config_endpoint_clears_cache_and_returns_200() -> None:
     fake_config.enable_rerank = True
     fake_config.pre_rerank_top_k = 20
     fake_config.collection_name = "rag_collection"
+    fake_config.embedding_model_path = "./models/embedding"
+    fake_config.reranker_model_path = "./models/reranker"
     updated_config = MagicMock()
     updated_config.semantic_top_k = 10
     updated_config.keyword_top_k = 10
@@ -287,6 +293,8 @@ async def test_config_endpoint_clears_cache_and_returns_200() -> None:
     updated_config.enable_rerank = True
     updated_config.pre_rerank_top_k = 20
     updated_config.collection_name = "rag_collection"
+    updated_config.embedding_model_path = "./models/embedding"
+    updated_config.reranker_model_path = "./models/reranker"
     fake_config.update.return_value = updated_config
 
     with (
@@ -645,6 +653,8 @@ async def test_config_clear_logs_operation() -> None:
     fake_config.keyword_weight = 0.5
     fake_config.enable_rerank = False
     fake_config.collection_name = "rag_collection"
+    fake_config.embedding_model_path = "./models/embedding"
+    fake_config.reranker_model_path = "./models/reranker"
     updated = MagicMock()
     for attr in ("semantic_top_k", "keyword_top_k", "final_top_k", "pre_rerank_top_k"):
         setattr(updated, attr, 5)
@@ -652,6 +662,8 @@ async def test_config_clear_logs_operation() -> None:
     updated.keyword_weight = 0.4
     updated.enable_rerank = False
     updated.collection_name = "rag_collection"
+    updated.embedding_model_path = "./models/embedding"
+    updated.reranker_model_path = "./models/reranker"
     fake_config.update.return_value = updated
 
     with (

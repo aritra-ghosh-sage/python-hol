@@ -11,7 +11,7 @@ from chromadb.api.models.Collection import Collection
 from sentence_transformers import SentenceTransformer
 
 from .config import HybridRetrieverConfig
-from .constants import DEFAULT_EMBEDDING_MODEL, STOP_WORDS
+from .constants import STOP_WORDS
 from .exceptions import RetrievalError
 from .reranker import CrossEncoderReranker
 
@@ -70,17 +70,20 @@ class HybridRetriever:
         logger.debug(f"Initializing HybridRetriever with config: {self.config}")
 
         try:
-            self.reranker = CrossEncoderReranker()
+            self.reranker = CrossEncoderReranker(
+                model_path=self.config.reranker_model_path
+            )
         except Exception as e:
             logger.warning(f"Failed to initialize reranker, reranking disabled: {e}")
             self.reranker = None
 
-        # Initialize encoder for embedding queries
+        # Resolve the embedding model path - load locally if available, otherwise
+        # download from Hugging Face and save so future starts bypass the network.
         try:
-            logger.debug("Initializing SentenceTransformer encoder")
-            self.encoder: SentenceTransformer = SentenceTransformer(
-                DEFAULT_EMBEDDING_MODEL
-            )
+            from .vectordb import _ensure_embedding_model_local
+
+            embedding_local = _ensure_embedding_model_local(self.config.embedding_model_path)
+            self.encoder: SentenceTransformer = SentenceTransformer(embedding_local)
         except Exception as e:
             logger.error(f"Failed to initialize encoder: {e}")
             raise
