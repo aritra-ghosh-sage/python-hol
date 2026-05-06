@@ -65,8 +65,8 @@ from hybrid_rag import (
     get_sample_documents,
     initialize_vector_db,
     list_existing_collections,
-    load_config_from_disk,
     open_collection,
+    resolve_startup_config,
 )
 from hybrid_rag.cache import CacheBackend
 from hybrid_rag.config import CacheSettings, create_cache_backend
@@ -189,10 +189,18 @@ _last_fallback_state: Optional[bool] = None
 def initialize_retriever() -> None:
     """Initialize the global hybrid retriever instance.
 
-    Sets up the vector database and creates a HybridRetriever with default
-    configuration. Called during application startup.
+    Config hydration order (highest → lowest precedence):
+      1. ``COLLECTION_NAME`` env var — if set, format-validated, and the named
+         collection exists in ChromaDB, its value overrides ``collection_name``.
+      2. ``knowledge_db/config.json`` — if it exists and its ``collection_name``
+         exists in ChromaDB, it is used as the base config.
+      3. ``DEFAULT_CONFIG`` — fallback when neither of the above applies.
+
+    Sets up the vector database and creates a HybridRetriever.
+    Called during application startup.
 
     Raises:
+        ValueError: If ``COLLECTION_NAME`` env var has an invalid format.
         VectorDBError: If vector database initialization fails.
         Exception: If any other initialization step fails.
     """
@@ -201,18 +209,8 @@ def initialize_retriever() -> None:
     try:
         logger.info("Initializing hybrid retriever...")
 
-        # Try to load persisted configuration first
-        _config = load_config_from_disk(KNOWLEDGE_DB_DIRECTORY)
-        if _config is not None:
-            logger.info("Loaded persisted configuration from disk")
-        else:
-            # Initialize with default configuration if no persisted config
-            logger.info("No persisted configuration found, using defaults")
-            _config = HybridRetrieverConfig(
-                semantic_weight=0.65, keyword_weight=0.35, enable_rerank=True
-            )
+        _config = resolve_startup_config(KNOWLEDGE_DB_DIRECTORY)
 
-        # Initialize vector database
         existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
         if _config.collection_name in existing:
             collection = open_collection(
@@ -235,13 +233,9 @@ def initialize_retriever() -> None:
                 len(documents),
             )
 
-        # Create retriever
         _retriever = HybridRetriever(collection, _config)
         logger.info("✓ Hybrid retriever initialized successfully")
 
-        # Build the authoritative corpus_version token now that _retriever is live.
-        # This grounds the token in the actual collection count (DB-grounded)
-        # so it stays meaningful after process restarts with the same data.
         _corpus_version = _build_corpus_version_token()
         logger.info("Corpus version token initialized: %s", _corpus_version)
 

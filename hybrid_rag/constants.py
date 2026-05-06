@@ -18,6 +18,7 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL",
     "DEFAULT_EMBEDDING_MODEL_PATH",
     "DEFAULT_RERANKER_MODEL_PATH",
+    "COLLECTION_NAME_INVALID_MSG",
 ]
 
 # Note 3: Using a relative path ("./knowledge_db") means the database is created
@@ -26,6 +27,10 @@ __all__ = [
 # absolute path via the persist_dir argument to initialize_vector_db().
 # Default directory for persisting ChromaDB collections
 KNOWLEDGE_DB_DIRECTORY = "./knowledge_db"
+
+# Single source of truth for the collection-name validation error message.
+# Referenced by is_valid_collection_name callers so the constraint is stated once.
+COLLECTION_NAME_INVALID_MSG = "must be 6-20 chars, alphanumeric/underscore/hyphen only"
 
 # Note 4: This constant was changed from "all-MiniLM-L6-v2" to
 # "BAAI/bge-small-en-v1.5" as part of ADR-0001 (EMB-006). The key reasons:
