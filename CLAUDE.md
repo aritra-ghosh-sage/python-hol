@@ -17,7 +17,7 @@ Full-stack monorepo: a **Python Hybrid RAG library** (`hybrid_rag/`) with a **Fa
 uv sync                                          # install
 pytest tests/ -v                                 # run tests
 pytest tests/ -v --cov=hybrid_rag --cov=api      # with coverage
-mypy hybrid_rag/ api.py                          # type check
+mypy hybrid_rag/ api.py api_models.py routers/   # type check
 uv run ruff check .                              # lint
 uvicorn api:app --reload                         # start server
 ```
@@ -75,13 +75,19 @@ Cache failures are fail-open. Monitor at `GET /cache/stats`. Configure via env v
 
 **Cache invalidation**: L1 cache keys embed a `corpus_version` token built from `_cache_generation` + live `collection.count()` (format: `gen{N}.n{count}`). Increment the global `_cache_generation` int in `api.py` to bust the L1 cache after ingestion or config changes. Register new cache event types in `CACHE_TELEMETRY_LABELS` in `constants.py`.
 
-### API Layer (`api.py`)
+### API Layer (`api.py` + `routers/`)
 
-FastAPI app (~1600 lines). Routes:
-- `WS /ws/chat` — real-time streaming chat (primary retrieval path; `POST /retrieve` was removed)
-- `GET /health`, `GET /config`, `PUT /config` (also invalidates L1 cache)
-- `GET /cache/stats`, `POST /documents`, `GET /documents/sources`
+FastAPI app. Entry point is `api.py`; routes are split into `routers/`:
+- `routers/websocket.py` — `WS /ws/chat` (primary retrieval; `POST /retrieve` removed)
+- `routers/health.py` — `GET /health`
+- `routers/config.py` — `GET /config`, `PUT /config` (invalidates L1 cache)
+- `routers/cache.py` — `GET /cache/stats`
+- `routers/documents.py` — `POST /documents`, `GET /documents/sources`
+- `routers/collections.py` — collection management endpoints
+- `api_models.py` — Pydantic request/response models
 - CORS middleware enabled
+
+Routers are registered at startup via `_register_routers_on_app()` (deferred to avoid circular imports).
 
 ### Frontend (`frontend/`)
 
@@ -98,6 +104,7 @@ Fixtures from `tests/conftest.py`:
 
 Prefer `fake_initialized_app` for tests that don't exercise the retrieval pipeline. Always check `collection.count()` before retrieval in integration tests. Async tests work without decorators (`asyncio_mode = "auto"`).
 
+Tests that download the embedding model or make network calls are marked `@pytest.mark.slow` and **skipped by default**. Run with `pytest tests/ --run-slow` to include them. The `fake_initialized_app` fixture patches `api.initialize_retriever` to a no-op so the app lifespan runs (registering routers) without triggering a model download.
 ## Agent Infrastructure
 
 Custom AI agents in `.github/agents/` (planner, orchestrator, implementer, debugger, reviewer, designer, researcher). Catalog and usage in `.github/AGENTS.md`. **For complex multi-step tasks, consult that file before starting.**
