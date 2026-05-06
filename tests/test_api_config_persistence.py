@@ -78,7 +78,7 @@ class TestConfigPersistenceAPI:
         with open(config_file, "w") as f:
             json.dump(persisted_config, f)
 
-        # Now initialize with patched directory; use ExitStack to avoid deep nesting
+        # Initialize with patched directory using ExitStack to avoid deep nesting
         with ExitStack() as stack:
             stack.enter_context(patch("api.KNOWLEDGE_DB_DIRECTORY", temp_knowledge_db))
             stack.enter_context(
@@ -104,6 +104,7 @@ class TestConfigPersistenceAPI:
 
             # Use TestClient as context manager to trigger startup_event
             with TestClient(new_app) as client:
+                # Verify persisted config values are loaded on startup
                 response = client.get("/config")
                 assert response.status_code == 200
 
