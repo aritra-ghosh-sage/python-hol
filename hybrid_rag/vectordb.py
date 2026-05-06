@@ -193,8 +193,8 @@ def _has_list_structure(text: str) -> bool:
     for line in text.split("\n"):
         stripped = line.lstrip()
         leading_spaces = len(line) - len(stripped)
-        is_list = stripped.startswith(("- ", "* ", "+ ", "• ")) or (
-            stripped and stripped[0].isdigit() and ". " in stripped[:4]
+        is_list = stripped.startswith(("- ", "* ", "+ ", "• ")) or re.match(
+            r"^\d+\.\s", stripped
         )
         if is_list:
             has_list = True
@@ -224,6 +224,7 @@ def _normalize_whitespace_preserve_structure(text: str) -> str:
     result = []
     in_code_block = False
     in_indented_code = False
+    in_pre_block = False
     code_block_indent = 0
     lines_list = text.splitlines()
 
@@ -239,6 +240,19 @@ def _normalize_whitespace_preserve_structure(text: str) -> str:
 
         # Preserve content inside markdown code blocks exactly as-is
         if in_code_block:
+            result.append(line)
+            continue
+
+        # Toggle HTML <pre> block mode
+        if "<pre" in stripped.lower():
+            in_pre_block = True
+        if "</pre>" in stripped.lower():
+            result.append(line)
+            in_pre_block = False
+            continue
+
+        # Preserve content inside HTML <pre> blocks exactly as-is
+        if in_pre_block:
             result.append(line)
             continue
 
@@ -260,16 +274,6 @@ def _normalize_whitespace_preserve_structure(text: str) -> str:
 
         if in_indented_code:
             # Preserve indented code exactly
-            result.append(line)
-            continue
-
-        # Preserve HTML <pre> blocks exactly as-is
-        if stripped.startswith("<pre"):
-            result.append(line)
-            continue
-
-        # Preserve lines that are part of HTML <pre> content
-        if "</pre>" not in line and "<pre" in "\n".join(result[-5:] if result else []):
             result.append(line)
             continue
 
@@ -502,6 +506,9 @@ def chunk_document(
         raise ValueError("chunk_overlap must be >= 0")
     if chunk_overlap >= chunk_size:
         raise ValueError("chunk_overlap must be < chunk_size")
+    # Normalize whitespace before chunking to remove noise from HTML-scraped
+    # content while preserving code blocks, tables, and lists (Issue #94).
+    text = _normalize_whitespace(text)
     # Note 13: The size_splitter is created ONCE here and passed down to every
     # private helper.  This is the "shared resource" pattern: all three paths
     # need identical size-cap behaviour, so building the splitter in one place

@@ -433,3 +433,56 @@ class TestChunkDocument:
                 chunk_size=100,
                 chunk_overlap=100,
             )
+
+    def test_normalization_applied_during_chunking(self) -> None:
+        """Verify that _normalize_whitespace() is called during chunk_document().
+
+        This integration test ensures the dead-code fix (Issue #96) works:
+        noisy input with excessive whitespace and blank lines should produce
+        clean chunks with normalized whitespace.
+
+        Args:
+            (none)
+
+        Returns:
+            None
+
+        Raises:
+            AssertionError: if noisy input is not normalized during chunking.
+        """
+        # Simulate HTML-scraped content with excessive blank lines and whitespace
+        # (typical from FAQ/Confluence sources that issue #94 addresses).
+        noisy_text = (
+            "Question: How to install?  \n"
+            "\n\n\n"
+            "Answer:  Run   pip install package  \n"
+            "\n\n"
+            "Some code:\n"
+            "```\n"
+            "    x = 1\n"
+            "    y = 2\n"
+            "```\n"
+            "\n\n\n"
+            "More text here  \n"
+        )
+
+        # Chunk the noisy text
+        result = chunk_document(noisy_text, source_hint="faq.txt", chunk_size=200)
+
+        # Verify chunking succeeded
+        assert result
+        all_text = " ".join(d["text"] for d in result)
+
+        # After normalization, excessive blank lines should be gone
+        # (the text should not contain \\n\\n\\n patterns)
+        assert "\n\n\n" not in all_text, (
+            "Noisy input was not normalized: excessive blank lines remain"
+        )
+
+        # Code block indentation should be preserved
+        assert "    x = 1" in all_text or any(
+            "    x = 1" in d["text"] for d in result
+        ), (
+            "Whitespace normalization broke code block indentation"
+        )
+
