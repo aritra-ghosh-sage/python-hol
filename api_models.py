@@ -172,6 +172,14 @@ class CollectionsResponse(BaseModel):
 class CacheStatsResponse(BaseModel):
     """Response model for cache statistics.
 
+    Note: Superseded by ``LayeredCacheStatsResponse`` (OPTB-008), which
+    separates L1 query-cache, L2 embedding-cache, and backend-health metrics
+    into distinct sections.  The ``GET /cache/stats`` endpoint returns
+    ``LayeredCacheStatsResponse``; this class is retained for backward
+    compatibility so that existing callers that import ``CacheStatsResponse``
+    from ``api`` or ``api_models`` continue to work without modification.
+    New code should use ``LayeredCacheStatsResponse`` instead.
+
     Contains detailed cache performance metrics for monitoring and debugging.
     Implements fail-open principle: never raises errors, always provides best-effort stats.
 
@@ -362,7 +370,15 @@ class LayeredCacheStatsResponse(BaseModel):
 
 
 class WsMessageBase(BaseModel):
-    """Base model for WebSocket messages."""
+    """Base model for WebSocket messages.
+
+    Note: This class is retained for backward compatibility only.  The active
+    WebSocket message types (WsStatusMessage, WsResultsMessage, WsErrorMessage)
+    each inherit directly from ``pydantic.BaseModel`` rather than from this
+    class.  External code that imports ``WsMessageBase`` from ``api`` or
+    ``api_models`` will continue to work, but new message types should also
+    inherit from ``pydantic.BaseModel`` directly.
+    """
 
     type: str = Field(..., description="Message type")
 

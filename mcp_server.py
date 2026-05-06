@@ -328,7 +328,7 @@ async def main() -> None:
     # so wrap the shutdown_event.wait() coroutine in a Task.
     shutdown_wait_task = asyncio.create_task(shutdown_event.wait())
     try:
-        done, pending = await asyncio.wait(
+        done, _pending = await asyncio.wait(
             [shutdown_wait_task, mcp_task], return_when=asyncio.FIRST_COMPLETED
         )
     finally:
