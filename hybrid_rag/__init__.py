@@ -72,6 +72,8 @@ __all__ = [
     "KNOWLEDGE_DB_DIRECTORY",
     "CACHE_TELEMETRY_LABELS",
     "DEFAULT_EMBEDDING_MODEL",
+    "DEFAULT_EMBEDDING_MODEL_PATH",
+    "DEFAULT_RERANKER_MODEL_PATH",
     "save_config_to_disk",
     "load_config_from_disk",
 ]
@@ -87,6 +89,8 @@ from .config import (
 from .constants import (
     CACHE_TELEMETRY_LABELS,
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_MODEL_PATH,
+    DEFAULT_RERANKER_MODEL_PATH,
     KNOWLEDGE_DB_DIRECTORY,
     MIN_RELEVANCE_SCORE,
     STOP_WORDS,

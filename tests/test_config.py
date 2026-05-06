@@ -75,6 +75,8 @@ class TestHybridRetrieverConfig:
             "enable_rerank",
             "pre_rerank_top_k",
             "collection_name",
+            "embedding_model_path",
+            "reranker_model_path",
         }
         assert set(config_dict.keys()) == expected_fields
         assert config_dict["collection_name"] == "complete_test"
