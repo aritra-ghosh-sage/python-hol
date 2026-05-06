@@ -37,7 +37,6 @@ def restore_module_state():
     mcp_server._corpus_version = original_corpus_version
 
 
-@pytest.mark.asyncio
 async def test_query_knowledge_base_returns_results(mock_retriever):
     """Test that query_knowledge_base returns properly formatted results."""
     # Initialize server state with mock
@@ -59,7 +58,6 @@ async def test_query_knowledge_base_returns_results(mock_retriever):
     assert "metadata" not in doc
 
 
-@pytest.mark.asyncio
 async def test_query_knowledge_base_filters_low_scores(mock_retriever):
     """Test that results below min_score_threshold are filtered."""
     mock_retriever.retrieve.return_value = [
@@ -76,7 +74,6 @@ async def test_query_knowledge_base_filters_low_scores(mock_retriever):
     assert result["results"][0]["score"] == 0.85
 
 
-@pytest.mark.asyncio
 async def test_query_knowledge_base_empty_query():
     """Test that empty queries are rejected."""
     mcp_server._retriever = MagicMock()
@@ -85,7 +82,6 @@ async def test_query_knowledge_base_empty_query():
         await mcp_server.query_knowledge_base("")
 
 
-@pytest.mark.asyncio
 async def test_query_knowledge_base_oversized_query():
     """Test that oversized queries are rejected."""
     mcp_server._retriever = MagicMock()
@@ -94,7 +90,6 @@ async def test_query_knowledge_base_oversized_query():
         await mcp_server.query_knowledge_base("x" * 501)
 
 
-@pytest.mark.asyncio
 async def test_query_knowledge_base_not_initialized():
     """Test that querying without initialization raises error."""
     mcp_server._retriever = None
@@ -103,7 +98,6 @@ async def test_query_knowledge_base_not_initialized():
         await mcp_server.query_knowledge_base("test")
 
 
-@pytest.mark.asyncio
 async def test_get_config():
     """Test that get_config returns current configuration."""
     mcp_server._config = DEFAULT_CONFIG
@@ -117,7 +111,6 @@ async def test_get_config():
     assert "enable_rerank" in result
 
 
-@pytest.mark.asyncio
 async def test_query_knowledge_base_enable_rerank_override(mock_retriever):
     """Test that enable_rerank parameter is passed through."""
     mcp_server._retriever = mock_retriever
@@ -142,7 +135,6 @@ def test_mcp_server_has_config_tool():
     assert "get_config" in tool_names
 
 
-@pytest.mark.asyncio
 async def test_initialize_retriever_uses_open_collection_when_collection_exists(monkeypatch):
     """Initialize retriever from an existing collection."""
     config = DEFAULT_CONFIG.update(collection_name="existing_collection")
@@ -175,7 +167,6 @@ async def test_initialize_retriever_uses_open_collection_when_collection_exists(
     assert mcp_server._retriever is mock_retriever_instance
 
 
-@pytest.mark.asyncio
 async def test_initialize_retriever_creates_collection_when_missing(monkeypatch):
     """Initialize retriever by creating a new collection if absent."""
     config = DEFAULT_CONFIG.update(collection_name="new_collection")
@@ -210,7 +201,6 @@ async def test_initialize_retriever_creates_collection_when_missing(monkeypatch)
     assert mcp_server._retriever is mock_retriever_instance
 
 
-@pytest.mark.asyncio
 async def test_main_uses_stdio_transport(monkeypatch):
     """main() runs stdio transport when configured."""
     monkeypatch.setattr(mcp_server, "_initialize_retriever", AsyncMock())
@@ -226,7 +216,6 @@ async def test_main_uses_stdio_transport(monkeypatch):
     http_mock.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_main_uses_http_transport(monkeypatch):
     """main() runs streamable HTTP transport when configured."""
     monkeypatch.setattr(mcp_server, "_initialize_retriever", AsyncMock())
@@ -259,7 +248,6 @@ def test_load_initial_config_accepts_valid_collection_name(monkeypatch):
     assert config.collection_name == "valid_col_1"
 
 
-@pytest.mark.asyncio
 async def test_query_knowledge_base_uses_cache_on_hit(mock_retriever):
     """query_knowledge_base serves from L1 cache on a hit without calling retrieve()."""
     cached_raw = [
@@ -286,7 +274,6 @@ async def test_query_knowledge_base_uses_cache_on_hit(mock_retriever):
     assert result["results"][0]["source"] == "cached.txt"
 
 
-@pytest.mark.asyncio
 async def test_query_knowledge_base_populates_cache_on_miss(mock_retriever):
     """query_knowledge_base calls retrieve() on a cache miss and writes the result."""
     mock_cache = MagicMock()
@@ -303,7 +290,6 @@ async def test_query_knowledge_base_populates_cache_on_miss(mock_retriever):
     assert result["total_results"] == 1
 
 
-@pytest.mark.asyncio
 async def test_main_surfaces_mcp_task_exception(monkeypatch):
     """main() should propagate exceptions from the MCP transport task."""
     monkeypatch.setattr(mcp_server, "_initialize_retriever", AsyncMock())
@@ -323,7 +309,6 @@ async def test_main_surfaces_mcp_task_exception(monkeypatch):
         await mcp_server.main()
 
 
-@pytest.mark.asyncio
 async def test_query_knowledge_base_fail_open_on_cache_error(mock_retriever):
     """query_knowledge_base falls back to retrieve() when the cache read raises."""
     mock_cache = MagicMock()
@@ -360,7 +345,6 @@ def test_build_corpus_version_token_without_retriever():
     assert token == "gen0.n0"
 
 
-@pytest.mark.asyncio
 async def test_main_graceful_shutdown_calls_mcp_shutdown_and_clears_cache(monkeypatch):
     """Simulate a shutdown signal and ensure mcp.shutdown is called and cache cleared."""
     # Arrange
@@ -394,7 +378,6 @@ async def test_main_graceful_shutdown_calls_mcp_shutdown_and_clears_cache(monkey
     assert mcp_server._retriever is None
 
 
-@pytest.mark.asyncio
 async def test_main_graceful_shutdown_uses_stop_when_shutdown_missing(monkeypatch):
     """If mcp.shutdown missing, main() should try fallback method like stop()."""
     # Arrange
