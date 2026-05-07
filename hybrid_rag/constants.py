@@ -12,7 +12,7 @@ same literal (e.g. 0.80) appears scattered across many files.
 # consumers are simply omitted from this list.
 __all__ = [
     "KNOWLEDGE_DB_DIRECTORY",
-    "MIN_RELEVANCE_SCORE",
+    "MIN_SCORE_RETRIEVAL",
     "STOP_WORDS",
     "CACHE_TELEMETRY_LABELS",
     "DEFAULT_EMBEDDING_MODEL",
@@ -67,13 +67,11 @@ DEFAULT_RERANKER_MODEL_PATH = "./models/reranker"
 # on the query side; omitting it degrades retrieval recall on asymmetric tasks.
 DEFAULT_QUERY_PREFIX = "Represent this sentence: "
 
-# Note 6: MIN_RELEVANCE_SCORE acts as a quality gate. The retriever discards
-# any candidate document whose combined hybrid score falls below this threshold
-# before returning results to the caller. Setting it too high may produce empty
-# result sets; too low lets low-quality matches through. 0.80 is a reasonable
-# starting point for cosine-distance-based similarity scores (which range 0–1).
-# Minimum relevance score threshold for retrieved documents
-MIN_RELEVANCE_SCORE = 0.80
+# Note 6: MIN_SCORE_RETRIEVAL is the output filter threshold applied by WebSocket
+# and MCP entry points before returning results to the user. Results with scores
+# below this threshold are filtered out. Set to 0.50 to balance between recall
+# (catching relevant documents) and precision (avoiding low-confidence matches).
+MIN_SCORE_RETRIEVAL = 0.50
 
 # Note 7: STOP_WORDS defines a manually curated set of English words that
 # carry little or no semantic meaning (articles, conjunctions, pronouns).
