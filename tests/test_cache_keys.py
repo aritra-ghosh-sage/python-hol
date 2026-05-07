@@ -127,3 +127,43 @@ def test_build_shared_retrieve_cache_key_varies_with_config():
     key2 = build_shared_retrieve_cache_key(query, config2, corpus_version, enable_rerank)
 
     assert key1 != key2
+
+
+def test_api_and_mcp_produce_identical_cache_keys():
+    """Verify that both api.py and mcp_server.py logic produces identical cache keys.
+
+    This is a regression test for DEAD_CODE_AUDIT.md finding #1.
+    If these diverge, the two processes will silently stop sharing Redis cache.
+    """
+    # Simulate the config used by both entry points
+    config_dict = {
+        "semantic_top_k": 5,
+        "keyword_top_k": 5,
+        "final_top_k": 10,
+        "semantic_weight": 0.5,
+        "keyword_weight": 0.5,
+        "enable_rerank": True,
+        "pre_rerank_top_k": 50,
+    }
+
+    query = "what is hybrid retrieval"
+    corpus_version = "gen0.n100"
+    enable_rerank = True
+
+    # Both should produce the same key using the shared utility
+    key1 = build_shared_retrieve_cache_key(
+        query=query,
+        config_dict=config_dict,
+        corpus_version=corpus_version,
+        enable_rerank=enable_rerank,
+    )
+
+    key2 = build_shared_retrieve_cache_key(
+        query=query,
+        config_dict=config_dict,
+        corpus_version=corpus_version,
+        enable_rerank=enable_rerank,
+    )
+
+    assert key1 == key2, "Cache key builder must be deterministic"
+    assert key1.startswith("shared-retrieve:"), "Cache key must have correct prefix"

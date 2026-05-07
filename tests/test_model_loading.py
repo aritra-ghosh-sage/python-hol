@@ -8,12 +8,8 @@ Covers:
 """
 
 import os
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
-
-import api
-from hybrid_rag import HybridRetrieverConfig
 from hybrid_rag.vectordb import ensure_model_local
 
 
@@ -90,7 +86,7 @@ class TestCrossEncoderRerankerModelLoading:
         with patch("hybrid_rag.reranker.CrossEncoder", mock_cross_encoder):
             from hybrid_rag.reranker import CrossEncoderReranker
 
-            reranker = CrossEncoderReranker(model_path=model_path)
+            CrossEncoderReranker(model_path=model_path)
 
         # token must not appear in any CrossEncoder call args
         for c in mock_cross_encoder.call_args_list:
