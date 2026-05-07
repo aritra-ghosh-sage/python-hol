@@ -68,7 +68,7 @@ __all__ = [
     "sanitize_collection_name",
     "DEFAULT_CONFIG",
     "STOP_WORDS",
-    "MIN_RELEVANCE_SCORE",
+    "MIN_SCORE_RETRIEVAL",
     "KNOWLEDGE_DB_DIRECTORY",
     "CACHE_TELEMETRY_LABELS",
     "DEFAULT_EMBEDDING_MODEL",
@@ -97,7 +97,7 @@ from .constants import (
     DEFAULT_QUERY_PREFIX,
     DEFAULT_RERANKER_MODEL_PATH,
     KNOWLEDGE_DB_DIRECTORY,
-    MIN_RELEVANCE_SCORE,
+    MIN_SCORE_RETRIEVAL,
     STOP_WORDS,
 )
 from .exceptions import (

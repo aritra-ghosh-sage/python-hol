@@ -405,46 +405,43 @@ class TestCorpusVersionFormatContract:
     CORPUS_VERSION_PATTERN: re.Pattern[str] = re.compile(r"^gen\d+\.n\d+$")
 
     def test_build_corpus_version_token_function_exists(self) -> None:
-        """api._build_corpus_version_token() must be a callable function.
+        """build_corpus_version_token() must be a callable function in cache_utils.
 
-        WHAT: Confirms the documented internal function exists and is callable.
-        WHY: External tooling documentation references _build_corpus_version_token
-        by name as the authoritative source for the token format.  Removing or
-        renaming this function would break the documentation link.
+        WHAT: Confirms the shared function exists and is callable.
+        WHY: The corpus_version token is now a shared utility used by both api.py
+        and mcp_server.py. The function must exist in hybrid_rag.cache_utils.
         """
-        # Note 17: `getattr(obj, name, default)` is the safe attribute-lookup
-        # form. It returns `default` (None here) if `name` doesn't exist on `obj`
-        # instead of raising AttributeError. `callable(x)` returns True if `x`
-        # has a __call__ method — i.e., can be invoked as a function.
-        # Together they form: "if this attribute exists AND is a function".
-        assert callable(getattr(api, "_build_corpus_version_token", None)), (
-            "api._build_corpus_version_token must exist and be callable"
+        from hybrid_rag.cache_utils import build_corpus_version_token
+
+        assert callable(build_corpus_version_token), (
+            "hybrid_rag.cache_utils.build_corpus_version_token must be callable"
         )
 
     def test_build_corpus_version_token_returns_string(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_build_corpus_version_token() must return a str.
+        """build_corpus_version_token() must return a str.
 
         WHAT: Confirms the return type contract is honoured.
         WHY: Cache key construction uses string concatenation with this value.
         A non-string return (int, None) would raise TypeError at the most
         inopportune moment — on the first cache write after a restart.
         """
-        monkeypatch.setattr(api, "_retriever", None)  # force fallback path
-        result = api._build_corpus_version_token()
+        from hybrid_rag.cache_utils import build_corpus_version_token
+
+        result = build_corpus_version_token(None, cache_generation=0)
         # Note 19: `isinstance(result, str)` is the idiomatic Python runtime type
         # check. Prefer it over `type(result) == str` because isinstance handles
         # subclasses correctly (a subclass of str IS a str). In test code it gives
         # a clear error when the contract is violated without needing mypy.
         assert isinstance(result, str), (
-            f"_build_corpus_version_token() must return str, got {type(result).__name__!r}"
+            f"build_corpus_version_token() must return str, got {type(result).__name__!r}"
         )
 
     def test_build_corpus_version_token_matches_pattern(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_build_corpus_version_token() return value must match gen{N}.n{count}.
+        """build_corpus_version_token() return value must match gen{N}.n{count}.
 
         WHAT: Validates the format contract of the corpus version token.
         WHY: The documented format is ``gen{N}.n{count}``.  Log parsers and
@@ -452,10 +449,11 @@ class TestCorpusVersionFormatContract:
         token like "0" (old format) or "v1-108" (hypothetical future change)
         would break those tools without a schema validation error.
         """
-        monkeypatch.setattr(api, "_retriever", None)  # exercises fallback path
-        token = api._build_corpus_version_token()
+        from hybrid_rag.cache_utils import build_corpus_version_token
+
+        token = build_corpus_version_token(None, cache_generation=0)
         assert self.CORPUS_VERSION_PATTERN.match(token), (
-            f"_build_corpus_version_token() returned {token!r}, "
+            f"build_corpus_version_token() returned {token!r}, "
             f"expected format matching gen{{N}}.n{{count}} (e.g. 'gen0.n0')"
         )
 
@@ -506,9 +504,9 @@ class TestCorpusVersionFormatContract:
         WHY: Tools that parse corpus_version tokens from logs must not need
         special-case handling for 'retriever not available' states.
         """
-        monkeypatch.setattr(api, "_retriever", None)
-        monkeypatch.setattr(api, "_cache_generation", 0)
-        token = api._build_corpus_version_token()
+        from hybrid_rag.cache_utils import build_corpus_version_token
+
+        token = build_corpus_version_token(None, cache_generation=0)
         assert self.CORPUS_VERSION_PATTERN.match(token), (
             f"Fallback token {token!r} does not match gen{{N}}.n{{count}} pattern"
         )

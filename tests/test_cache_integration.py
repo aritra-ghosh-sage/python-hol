@@ -777,8 +777,9 @@ def test_all_acceptance_criteria_implemented() -> None:
     routes = [r.path for r in api_module.app.routes]
     assert "/cache/stats" in routes
 
-    # _build_corpus_version_token is callable
-    assert callable(getattr(api_module, "_build_corpus_version_token", None))
+    # build_corpus_version_token is callable (now in cache_utils)
+    from hybrid_rag.cache_utils import build_corpus_version_token
+    assert callable(build_corpus_version_token)
 
     # _corpus_version module attribute exists
     assert hasattr(api_module, "_corpus_version")

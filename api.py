@@ -40,8 +40,6 @@ Monitoring:
 For detailed caching documentation, see docs/CACHE_DEPLOYMENT.md and docs/CACHE_PERF_REPORT.md
 """
 
-import hashlib
-import json
 import logging
 import os
 import sys
@@ -69,6 +67,10 @@ from hybrid_rag import (
     resolve_startup_config,
 )
 from hybrid_rag.cache import CacheBackend
+from hybrid_rag.cache_utils import (
+    build_corpus_version_token,
+    build_shared_retrieve_cache_key,
+)
 from hybrid_rag.config import CacheSettings, create_cache_backend
 
 # Re-export all Pydantic models so existing callers (tests, client code) that
@@ -236,7 +238,7 @@ def initialize_retriever() -> None:
         _retriever = HybridRetriever(collection, _config)
         logger.info("✓ Hybrid retriever initialized successfully")
 
-        _corpus_version = _build_corpus_version_token()
+        _corpus_version = build_corpus_version_token(_retriever, _cache_generation)
         logger.info("Corpus version token initialized: %s", _corpus_version)
 
     except VectorDBError as e:
@@ -410,38 +412,6 @@ class LazyCache(CacheBackend):
 lazy_cache = LazyCache()
 
 
-def _build_corpus_version_token() -> str:
-    """Build an authoritative corpus version token combining generation counter with live collection count.
-
-    This replaces the direct process-local _cache_generation usage in cache key
-    composition. The token is sourced from the retriever's collection count (DB-grounded)
-    combined with the monotonic generation counter (explicit invalidation events).
-
-    By grounding the token in the actual collection count we get two desirable
-    properties:
-      1. Stability across equivalent states — two processes that load the same corpus
-         produce the same token, so a warm-restart does not flush a usable cache.
-      2. Automatic invalidation on ingest — every document addition changes the count,
-         so the token changes even without an explicit _cache_generation bump.
-
-    Returns:
-        A string token like "gen0.n42" that encodes both generation and corpus size.
-        Falls back to "gen{N}.n0" if the retriever/collection is unavailable, preserving
-        the consistent token format for reliable log parsing and key-space analysis.
-    """
-    if _retriever is not None:
-        try:
-            count = _retriever.collection.count()
-            return f"gen{_cache_generation}.n{count}"
-        except Exception as exc:
-            # Warning (not debug): failure to read collection count is a degraded state
-            # that may indicate a connectivity or attribute problem with the retriever.
-            logger.warning("Could not read collection count for corpus_version: %s", exc)
-    # Keep the same "gen{N}.n{count}" format even in the fallback so that log
-    # parsers and cache key analysis tooling never encounter an unexpected shape.
-    return f"gen{_cache_generation}.n0"
-
-
 def _log_fallback_transition(current_fallback_active: bool) -> None:
     """Emit a structured log on fallback state transitions and update the tracker.
 
@@ -533,43 +503,20 @@ def _shared_retrieve_documents(
     )
     normalized_query = " ".join(query.split())
 
-    config_fingerprint_payload = {
-        "semantic_top_k": _config.semantic_top_k,
-        "keyword_top_k": _config.keyword_top_k,
-        "final_top_k": _config.final_top_k,
-        "semantic_weight": _config.semantic_weight,
-        "keyword_weight": _config.keyword_weight,
-        "enable_rerank": _config.enable_rerank,
-        "pre_rerank_top_k": _config.pre_rerank_top_k,
-    }
-    config_fingerprint = hashlib.sha256(
-        json.dumps(
-            config_fingerprint_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-
-    shared_identity = {
-        "query": normalized_query,
-        "effective_enable_rerank": effective_enable_rerank,
-        "config_fingerprint": config_fingerprint,
-        # Use the authoritative corpus_version token instead of the raw
-        # process-local _cache_generation integer.  _corpus_version encodes both
-        # the explicit invalidation generation counter AND the live collection count,
-        # so the key changes on both config updates and corpus mutations.
-        # Note: for ingest_type='add' only the count dimension changes (generation
-        # is not bumped), making existing cached queries for untouched topics still
-        # valid while new queries see the grown corpus.
-        "corpus_version": _corpus_version,
-    }
-    cache_key = "shared-retrieve:" + hashlib.sha256(
-        json.dumps(
-            shared_identity,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    cache_key = build_shared_retrieve_cache_key(
+        query=normalized_query,
+        config_dict={
+            "semantic_top_k": _config.semantic_top_k,
+            "keyword_top_k": _config.keyword_top_k,
+            "final_top_k": _config.final_top_k,
+            "semantic_weight": _config.semantic_weight,
+            "keyword_weight": _config.keyword_weight,
+            "enable_rerank": _config.enable_rerank,
+            "pre_rerank_top_k": _config.pre_rerank_top_k,
+        },
+        corpus_version=_corpus_version,
+        enable_rerank=effective_enable_rerank,
+    )
 
     # OPTB-012: Resolve correlation ID — use the caller-supplied value or
     # auto-generate a UUID so every log record is traceable even when the

@@ -6,8 +6,6 @@ streamable HTTP transport (e.g., Claude Desktop, hosted MCP gateways).
 
 import asyncio
 import signal
-import hashlib
-import json
 import logging
 import os
 import uuid
@@ -20,6 +18,7 @@ from hybrid_rag import (
     CACHE_TELEMETRY_LABELS,
     DEFAULT_CONFIG,
     KNOWLEDGE_DB_DIRECTORY,
+    MIN_SCORE_RETRIEVAL,
     CacheBackend,
     CacheSettings,
     HybridRetriever,
@@ -31,6 +30,10 @@ from hybrid_rag import (
     list_existing_collections,
     open_collection,
     resolve_startup_config,
+)
+from hybrid_rag.cache_utils import (
+    build_corpus_version_token,
+    build_shared_retrieve_cache_key,
 )
 
 # Load environment variables
@@ -73,26 +76,6 @@ def _load_initial_config() -> HybridRetrieverConfig:
     return resolve_startup_config(KNOWLEDGE_DB_DIRECTORY)
 
 
-def _build_corpus_version_token() -> str:
-    """Build a corpus version token combining the cache generation counter with the live collection count.
-
-    Mirrors the same helper in api.py so the two processes produce identical cache
-    keys when pointed at the same Chroma DB and Redis instance, enabling them to
-    share the warm L1 cache across restarts and deployments.
-
-    Returns:
-        Token string like ``"gen0.n42"`` encoding both generation and corpus size.
-        Falls back to ``"gen{N}.n0"`` when the collection is unavailable.
-    """
-    if _retriever is not None:
-        try:
-            count = _retriever.collection.count()
-            return f"gen{_cache_generation}.n{count}"
-        except Exception as exc:
-            logger.warning("Could not read collection count for corpus_version: %s", exc)
-    return f"gen{_cache_generation}.n0"
-
-
 async def _initialize_retriever() -> None:
     """Initialize the hybrid retriever and cache backend (called at server startup)."""
     global _config, _retriever, _cache, _corpus_version
@@ -131,7 +114,7 @@ async def _initialize_retriever() -> None:
             logger.warning("Cache initialization failed; continuing without cache")
             _cache = None
 
-        _corpus_version = _build_corpus_version_token()
+        _corpus_version = build_corpus_version_token(_retriever, _cache_generation)
         logger.info("Corpus version token: %s", _corpus_version)
     except Exception:
         logger.exception("Failed to initialize retriever")
@@ -173,33 +156,20 @@ async def query_knowledge_base(
 
         # Build a cache key that matches api.py's _shared_retrieve_documents so the
         # two processes share the same warm Redis cache when deployed together.
-        config_fingerprint = hashlib.sha256(
-            json.dumps(
-                {
-                    "semantic_top_k": _config.semantic_top_k,
-                    "keyword_top_k": _config.keyword_top_k,
-                    "final_top_k": _config.final_top_k,
-                    "semantic_weight": _config.semantic_weight,
-                    "keyword_weight": _config.keyword_weight,
-                    "enable_rerank": _config.enable_rerank,
-                    "pre_rerank_top_k": _config.pre_rerank_top_k,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-        cache_key = "shared-retrieve:" + hashlib.sha256(
-            json.dumps(
-                {
-                    "query": " ".join(query_str.split()),
-                    "effective_enable_rerank": effective_enable_rerank,
-                    "config_fingerprint": config_fingerprint,
-                    "corpus_version": _corpus_version,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        cache_key = build_shared_retrieve_cache_key(
+            query=" ".join(query_str.split()),
+            config_dict={
+                "semantic_top_k": _config.semantic_top_k,
+                "keyword_top_k": _config.keyword_top_k,
+                "final_top_k": _config.final_top_k,
+                "semantic_weight": _config.semantic_weight,
+                "keyword_weight": _config.keyword_weight,
+                "enable_rerank": _config.enable_rerank,
+                "pre_rerank_top_k": _config.pre_rerank_top_k,
+            },
+            corpus_version=_corpus_version,
+            enable_rerank=effective_enable_rerank,
+        )
         correlation_id = str(uuid.uuid4())
 
         # L1 cache read — fail-open on errors
@@ -255,7 +225,7 @@ async def query_knowledge_base(
                 "score": float(r["score"]),
             }
             for r in raw_results
-            if float(r.get("score", 0.0)) >= 0.40
+            if float(r.get("score", 0.0)) >= MIN_SCORE_RETRIEVAL
         ]
 
         return {

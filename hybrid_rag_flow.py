@@ -7,7 +7,7 @@ semantic and keyword-based document retrieval with optional reranking.
 from hybrid_rag import (
     HybridRetriever,
     HybridRetrieverConfig,
-    MIN_RELEVANCE_SCORE,
+    MIN_SCORE_RETRIEVAL,
     initialize_vector_db,
     get_sample_documents,
 )
@@ -31,7 +31,7 @@ results = retriever.retrieve("How do I update a location or edit a review on goo
 print("\n--- Hybrid Retrieval Results ---\n")
 
 for r in results:
-    if r["score"] >= MIN_RELEVANCE_SCORE:
+    if r["score"] >= MIN_SCORE_RETRIEVAL:
         print(
             f"{r['score']:.3f} | {r['metadata']['source']} | {r['text'][:80]}"
         )
