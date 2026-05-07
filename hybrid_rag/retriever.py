@@ -520,20 +520,6 @@ class HybridRetriever:
                 )[: self.config.pre_rerank_top_k]
 
                 reranked = self.reranker.rerank(cleaned_query, candidates)
-
-                # debug_lines = []
-                # for r in reranked:
-                #     metadata = r.get("metadata", {})
-                #     section_info = []
-                #     if "section_h2" in metadata:
-                #         section_info.append(metadata["section_h2"])
-                #     if "section_h1" in metadata:
-                #         section_info.append(metadata["section_h1"])
-                #     section_str = " - " + " ".join(section_info) if section_info else ""
-                #     debug_lines.append(
-                #         f'- #{r["id"]} | ({r["score"]:.3f}): {r["text"][:10]}{section_str}'
-                #     )
-                # logger.info("Reranked results:\n" + "\n".join(debug_lines))
                 final_results = self._dedupe_by_source(reranked)
             else:
                 logger.debug("Reranking disabled or unavailable")

@@ -247,9 +247,6 @@ async def get_config() -> dict[str, Any]:
         Dictionary with current configuration values (semantic_top_k,
         keyword_top_k, final_top_k, weights, reranking settings, etc.)
     """
-    if _config is None:
-        raise ValueError("Configuration not available")
-
     return _config.to_dict()
 
 
