@@ -32,8 +32,8 @@ Based on `git log --name-only --since=2025-01-01 | sort | uniq -c | sort -rn`:
 ### `_corpus_version` is Process-Local
 `_last_fallback_state` and `_corpus_version` are module-level globals. Under multi-worker uvicorn deployments each worker maintains independent state. `_cache_generation` would not be synchronized across workers, so cache invalidation events in one worker are invisible to others (documented in a comment in `api.py:750`). There is no distributed lock or shared counter.
 
-### Score Filtering Threshold Hardcoded in WS Handler
-`min_score_threshold=0.80` is hardcoded in `api.py:1425` inside the WebSocket handler. The constant `MIN_RELEVANCE_SCORE = 0.80` exists in `hybrid_rag/constants.py` but is not referenced by the WebSocket path — it is a silent divergence risk if the constant is ever changed.
+### Score Filtering Threshold Unified
+**RESOLVED (PR#100):** Consolidated score filtering threshold to single `MIN_SCORE_RETRIEVAL = 0.50` constant. Both WebSocket handler and MCP server now use shared utility from `hybrid_rag/cache_utils.py`, eliminating hardcoded divergence risk.
 
 ## Security Concerns
 
