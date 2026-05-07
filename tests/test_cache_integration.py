@@ -20,12 +20,6 @@ from hybrid_rag.config import CacheSettings, create_cache_backend
 # ============================================================================
 
 
-@pytest.fixture
-def mock_cache() -> InMemoryCache:
-    """Create a real in-memory cache for testing."""
-    return InMemoryCache(ttl_seconds=3600, max_size=10000)
-
-
 # ============================================================================
 # TEST: CACHE INITIALIZATION & STARTUP
 # ============================================================================
