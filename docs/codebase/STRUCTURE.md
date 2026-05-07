@@ -7,9 +7,6 @@
 ```
 python-hol/
 ├── api.py                    # FastAPI application (~1909 lines) — the backend entry point
-├── main.py                   # Minimal standalone launcher (thin wrapper)
-├── main_example.py           # Standalone library usage demo (not production code)
-├── hybrid_rag_flow.py        # Simplified demo/refactored flow (not production code)
 ├── pyproject.toml            # Python project config, dependencies, tool config
 ├── uv.lock                   # Locked dependency tree for uv
 ├── CLAUDE.md                 # Project guidance for Claude Code agents
@@ -17,6 +14,9 @@ python-hol/
 ├── .env.local.example        # Template for environment variables
 ├── .env                      # Actual env vars (git-ignored)
 ├── .python-version           # Pin file (Python version for uv)
+├── examples/                 # Demo scripts (not production code)
+│   ├── hybrid_rag_flow.py    # Hybrid RAG retrieval example
+│   └── main_example.py       # Standalone library usage demo
 ├── hybrid_rag/               # Core library package (importable)
 ├── tests/                    # All backend test files
 ├── frontend/                 # Next.js frontend application

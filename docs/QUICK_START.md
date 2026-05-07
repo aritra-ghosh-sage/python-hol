@@ -1,455 +1,186 @@
-"""Quick Start Guide for Hybrid RAG Library
+# Quick Start Guide
 
-Fast-track guide to using the refactored hybrid RAG library.
-"""
+## Prerequisites
 
-# Quick Start Guide - Hybrid RAG Library
+- Python 3.13+
+- Node 20.9+
+- `uv`
+- `pnpm` for the frontend
 
-## Installation
-
-Ensure you have Python 3.9+ and installed dependencies:
+## Install
 
 ```bash
-# If using uv
-uv pip install chromadb sentence-transformers fastapi uvicorn langchain_text_splitters
-
-# Or with pip
-pip install chromadb sentence-transformers fastapi uvicorn langchain_text_splitters
+uv sync
+cd frontend && pnpm install
 ```
 
-## Basic Usage
-
-### 1. Initialize the Library
-
-```python
-from hybrid_rag import (
-    HybridRetriever,
-    HybridRetrieverConfig,
-    initialize_vector_db,
-    get_sample_documents,
-)
-
-# Load documents
-documents = get_sample_documents()
-
-# Initialize vector database
-collection = initialize_vector_db(documents)
-
-# Create configuration
-config = HybridRetrieverConfig(
-    semantic_weight=0.7,      # Weight for semantic search
-    keyword_weight=0.3,        # Weight for keyword search
-    enable_rerank=True,        # Use cross-encoder reranking
-)
-
-# Create retriever
-retriever = HybridRetriever(collection, config)
-```
-
-### 2. Run Retrieval
-
-```python
-# Simple retrieval
-results = retriever.retrieve("How do I use offline maps?")
-
-# Process results
-for result in results:
-    print(f"Score: {result['score']:.3f}")
-    print(f"Source: {result['metadata']['source']}")
-    print(f"Text: {result['text'][:100]}...")
-```
-
-### 3. Process Custom Documents
-
-```python
-# Your custom documents
-my_docs = [
-    {
-        "id": "1",
-        "source": "https://example.com/doc1",
-        "text": "Document text content here...",
-    },
-    # More documents...
-]
-
-# Initialize with custom documents
-collection = initialize_vector_db(
-    my_docs,
-    persist_dir="./my_custom_db"
-)
-```
-
-## Using the FastAPI REST API
-
-### Start the API Server
+## Backend: Run the API
 
 ```bash
 source .venv/bin/activate
-python api.py
+uvicorn api:app --reload
 ```
 
-The server starts at `http://localhost:8000`
+Backend defaults:
 
-### API Endpoints
+- API base URL: `http://localhost:8000`
+- WebSocket URL: `ws://localhost:8000/ws/chat`
+- Swagger UI: `http://localhost:8000/docs`
 
-#### 1. Health Check
+## Frontend: Run the UI
+
+```bash
+cd frontend
+pnpm dev
+```
+
+## MCP Server (optional)
+
+An optional MCP server is provided at `mcp_server.py` to expose retrieval tools via MCP. Set these env vars to configure it:
+
+- `MCP_HOST` (default `127.0.0.1`)
+- `MCP_PORT` (default `8000`)
+- `MCP_TRANSPORT` (`stdio` | `streamable-http` — default `stdio`)
+
+Example:
+
+```bash
+MCP_TRANSPORT=streamable-http MCP_PORT=8001 python mcp_server.py
+```
+
+Frontend defaults:
+
+- App URL: `http://localhost:3000`
+- REST API env: `NEXT_PUBLIC_API_URL`
+- WebSocket env: `NEXT_PUBLIC_WS_URL`
+
+If no env vars are set, the frontend connects to `http://localhost:8000` and `ws://localhost:8000/ws/chat`.
+
+## Library examples
+
+Runnable demos live in `examples/`:
+
+```bash
+python examples/main_example.py
+python examples/hybrid_rag_flow.py
+```
+
+## API Surface
+
+HTTP routes:
+
+- `GET /`
+- `GET /health`
+- `GET /config`
+- `PUT /config`
+- `POST /documents`
+- `GET /documents/sources`
+- `GET /collections`
+- `GET /cache/stats`
+
+- `WS /ws/chat`
+
+Example health check:
+
 ```bash
 curl http://localhost:8000/health
-# Response:
-# {"status": "healthy", "retriever_ready": "yes"}
 ```
 
-#### 2. WebSocket Chat (Retrieval)
+Example WebSocket query with `websocat`:
 
 ```bash
-# Install websocat: cargo install websocat
-echo '{"query": "How do I use offline maps?"}' | websocat ws://localhost:8000/ws/chat
+echo '{"query":"How do I use offline maps?"}' | websocat ws://localhost:8000/ws/chat
 ```
 
-#### 4. Get Configuration
-```bash
-curl http://localhost:8000/config
-```
+## Config Basics
 
-### API Documentation
+Important `HybridRetrieverConfig` fields:
 
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+- `semantic_top_k`
+- `keyword_top_k`
+- `final_top_k`
+- `semantic_weight`
+- `keyword_weight`
+- `enable_rerank`
+- `pre_rerank_top_k`
+- `collection_name`
 
-## Configuration Options
+`semantic_weight + keyword_weight` must equal `1.0`.
 
-### HybridRetrieverConfig Parameters
+## Cache Basics
 
-```python
-config = HybridRetrieverConfig(
-    # Semantic search (embedding-based)
-    semantic_top_k=10,           # Results to get from semantic search
-    semantic_weight=0.65,        # Weight for semantic search (0-1)
-    
-    # Keyword search
-    keyword_top_k=10,            # Results to get from keyword search
-    keyword_weight=0.35,         # Weight for keyword search (0-1)
-    
-    # Reranking
-    enable_rerank=True,          # Enable cross-encoder reranking
-    pre_rerank_top_k=50,         # Candidates to consider for reranking
-    
-    # Output
-    final_top_k=5,               # Maximum results to return
-)
-```
+The platform uses layered caching:
 
-**Note**: `semantic_weight + keyword_weight` must equal 1.0
+- L1: full query-response cache
+- L2: embedding LRU cache inside `HybridRetriever`
+- L3: persistent ChromaDB storage
 
-## Configuring Cache
-
-The system includes automatic multi-layer caching for improved performance on repeated queries. No configuration is required—caching works out-of-the-box with sensible defaults.
-
-### Out-of-the-Box Caching
-
-By default, the system uses in-process TTL caching:
-- **Cache Backend**: Memory (development-friendly)
-- **TTL**: 3600 seconds (1 hour)
-- **Max Size**: 10000 entries with automatic LRU eviction
-
-### Environment Variables
-
-To customize caching behavior, set these environment variables in `.env.local`:
+Useful env vars:
 
 ```bash
-# Use in-memory cache (default, good for development)
 CACHE_BACKEND=memory
 CACHE_TTL_SECONDS=3600
 CACHE_MAX_SIZE=10000
 
-# Or use Redis for production deployments
+# production-style option
 CACHE_BACKEND=redis
 REDIS_URL=redis://localhost:6379
-CACHE_TTL_SECONDS=1800
 CACHE_KEY_PREFIX=hybrid_rag_cache:
 ```
 
-See `.env.local.example` for all available cache configuration options.
-
-### Monitoring Cache Performance
-
-Check cache statistics to understand hit rates and optimize performance:
+Check cache stats:
 
 ```bash
-# Get cache statistics
 curl http://localhost:8000/cache/stats
 ```
 
-Response includes:
-- `hits`: Total cache hits
-- `misses`: Total cache misses  
-- `hit_rate`: Calculated as hits/(hits+misses)
-- `size`: Current number of cached entries
-- `backend`: Which cache backend is active
+## Ingest Content
 
-Example response:
-```json
-{
-  "backend": "memory",
-  "hits": 1500,
-  "misses": 350,
-  "hit_rate": 0.811,
-  "size": 125,
-  "max_size": 10000,
-  "ttl_seconds": 3600,
-  "timestamp": "2026-04-20T10:30:45Z"
-}
-```
-
-### Bulk Document Ingestion
-
-When ingesting many documents, preserve the cache to avoid invalidation:
+Example text ingestion:
 
 ```bash
-# Preserve cache (recommended for bulk adds)
 curl -X POST http://localhost:8000/documents \
   -H "Content-Type: application/json" \
   -d '{
     "ingest_type": "add",
     "source_type": "text",
     "content": "Your document content here...",
-    "source_label": "bulk_import_1"
-  }'
-
-# Clear cache (for config changes - default behavior)
-curl -X POST http://localhost:8000/config \
-  -H "Content-Type: application/json" \
-  -d '{"semantic_weight": 0.8, "keyword_weight": 0.2}'
-```
-
-The `ingest_type` parameter controls cache behavior:
-- `"add"`: Preserve existing cache for incremental document additions
-- `"update"`: Clear cache after ingestion (default, ensures accuracy after bulk updates)
-
-### Clearing Cache
-
-Cache is automatically invalidated when configuration changes:
-
-```bash
-# Update configuration - cache automatically cleared
-curl -X PUT http://localhost:8000/config \
-  -H "Content-Type: application/json" \
-  -d '{
-    "semantic_weight": 0.8,
-    "keyword_weight": 0.2,
-    "enable_rerank": false
+    "source_label": "example_text"
   }'
 ```
 
-### Advanced: Production Redis Setup
-
-For production deployments with multiple instances:
-
-1. **Start Redis server**:
-   ```bash
-   docker run -d -p 6379:6379 redis:latest
-   ```
-
-2. **Configure environment**:
-   ```bash
-   export CACHE_BACKEND=redis
-   export REDIS_URL=redis://cache-server:6379/0
-   export CACHE_TTL_SECONDS=1800
-   export CACHE_KEY_PREFIX=myapp:
-   ```
-
-3. **Start API with Redis caching**:
-   ```bash
-   python api.py
-   ```
-
-4. **Monitor cache health**:
-   ```bash
-   # Via HTTP
-   curl http://localhost:8000/cache/stats
-   
-   # Or via Redis CLI
-   redis-cli INFO stats
-   ```
-
-For detailed production configuration, see [docs/CACHE_DEPLOYMENT.md](../docs/CACHE_DEPLOYMENT.md).
-
-## Error Handling
-
-The library defines custom exceptions:
-
-```python
-from hybrid_rag import (
-    HybridRAGException,
-    RetrievalError,
-    VectorDBError,
-)
-
-try:
-    results = retriever.retrieve(query)
-except RetrievalError as e:
-    print(f"Retrieval failed: {e}")
-except VectorDBError as e:
-    print(f"Database error: {e}")
-except HybridRAGException as e:
-    print(f"Library error: {e}")
-```
-
-## Logging
-
-Configure logging to debug issues:
-
-```python
-import logging
-
-# Set log level
-logging.basicConfig(
-    level=logging.DEBUG,  # Or INFO, WARNING, ERROR
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-# Log specific library
-logger = logging.getLogger('hybrid_rag')
-logger.setLevel(logging.DEBUG)
-```
-
-## Advanced Usage
-
-### Custom Vector DB Location
-
-```python
-collection = initialize_vector_db(
-    documents,
-    persist_dir="./my_embeddings",
-    collection_name="my_collection"
-)
-```
-
-### Fine-tune Weights for Your Use Case
-
-```python
-# More semantic (meaning-based)
-config = HybridRetrieverConfig(
-    semantic_weight=0.8,
-    keyword_weight=0.2,
-)
-
-# More keyword-focused (exact matches)
-config = HybridRetrieverConfig(
-    semantic_weight=0.5,
-    keyword_weight=0.5,
-)
-
-# Disable reranking for speed
-config = HybridRetrieverConfig(
-    enable_rerank=False,
-)
-```
-
-### Override Reranking Per Query
-
-```python
-from hybrid_rag.config import HybridRetrieverConfig
-
-# Default enabled
-config = HybridRetrieverConfig(enable_rerank=True)
-
-# WebSocket allows per-query override:
-# Send {"query": "...", "enable_rerank": false} to skip reranking
-```
+- `ingest_type="add"` preserves the warm cache.
+- `ingest_type="update"` clears cached query responses after the write.
 
 ## Example Scripts
 
-### Script 1: Simple Retrieval (main_example.py)
 ```bash
-source .venv/bin/activate
-python main_example.py
+python examples/main_example.py
+python examples/hybrid_rag_flow.py
 ```
 
-### Script 2: API Server (api.py)
+## Validate Changes
+
 ```bash
-source .venv/bin/activate
-python api.py
+uv run ruff check .
+uv run pytest tests/ -v
+cd frontend && pnpm lint && pnpm test:unit && pnpm build
 ```
-
-### Script 3: Demo Retrieval (hybrid_rag_flow.py)
-```bash
-source .venv/bin/activate
-python hybrid_rag_flow.py
-```
-
-## Performance Tips
-
-1. **Reranking**: Disable for real-time applications
-   ```python
-   config.enable_rerank = False
-   ```
-
-2. **Top-k Values**: Reduce for faster retrieval
-   ```python
-   config.semantic_top_k = 5  # Instead of 10
-   ```
-
-3. **Batch Queries**: Process multiple queries together
-   ```python
-   queries = ["query1", "query2", "query3"]
-   results_list = [retriever.retrieve(q) for q in queries]
-   ```
-
-4. **Cache Results**: For repeated queries, cache results externally
 
 ## Common Issues
 
-### Issue: Embedding Download Fails
-**Solution**: Ensure internet connection. Models download automatically on first run.
+- Model download fails:
+  Check network access and rerun after `uv sync`.
+- Backend starts but queries fail:
+  Confirm the retriever initialized and `GET /health` reports readiness.
+- Frontend cannot connect:
+  Check `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_WS_URL`.
+- Retrieval is slow:
+  Disable reranking or lower the top-k values.
 
-### Issue: CrossEncoder Not Available
-**Solution**: Will fallback gracefully - reranking disabled but retrieval still works
+## More Docs
 
-### Issue: Memory Usage High
-**Solution**: Reduce top-k values or process documents in batches
-
-### Issue: Slow Retrieval
-**Solution**: 
-- Disable reranking: `enable_rerank=False`
-- Reduce top-k values
-- Use fewer documents
-
-## Testing
-
-Basic test of functionality:
-
-```python
-from hybrid_rag import HybridRetriever, initialize_vector_db, get_sample_documents
-
-# Setup
-docs = get_sample_documents()
-collection = initialize_vector_db(docs)
-retriever = HybridRetriever(collection)
-
-# Test retrieval
-results = retriever.retrieve("test query")
-assert len(results) > 0
-assert all("score" in r for r in results)
-assert all(0 <= r["score"] <= 1 for r in results)
-
-print("✓ Library working correctly!")
-```
-
-## Additional Resources
-
-- **Design Documentation**: See [LIBRARY_DESIGN.md](LIBRARY_DESIGN.md)
-- **Refactoring Summary**: See [REFACTORING_SUMMARY.md](REFACTORING_SUMMARY.md)
-- **API Documentation**: http://localhost:8000/docs (when running api.py)
-
-## Next Steps
-
-1. ✅ Read the API documentation at `/docs`
-2. ✅ Try custom documents
-3. ✅ Experiment with configuration parameters
-4. ✅ Deploy the REST API
-5. ✅ Integrate into your application
-
----
-
-**Happy retrieving! 🚀**
+- `README.md`
+- `docs/HTTP_ENDPOINT_ALLOWLIST.md`
+- `docs/PRODUCT_PRD.md`
+- `CLAUDE.md`

@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Full-stack monorepo: a **Python Hybrid RAG library** (`hybrid_rag/`) with a **FastAPI REST/WebSocket API** (`api.py`) and a **Next.js 16 frontend** (`frontend/`). The RAG pipeline combines semantic search (ChromaDB embeddings) + keyword search (BM25-style) with optional cross-encoder reranking.
+- `hybrid_rag/`: Python hybrid retrieval library
+- `api.py` + `routers/`: FastAPI backend
+- `frontend/`: Next.js 16 frontend
 
 ## Ignore
 `ai_support_kb` folder and any underlying files during code scan
@@ -14,159 +16,123 @@ Full-stack monorepo: a **Python Hybrid RAG library** (`hybrid_rag/`) with a **Fa
 ### Python Backend
 
 ```bash
-uv sync                                          # install
-pytest tests/ -v                                 # run tests
-pytest tests/ -v --cov=hybrid_rag --cov=api      # with coverage
-mypy hybrid_rag/ api.py api_models.py routers/   # type check
-uv run ruff check .                              # lint
-uvicorn api:app --reload                         # start server
+uv sync
+uv run ruff check .
+pytest tests/ -v
+pytest tests/ -v --cov=hybrid_rag --cov=api
+mypy hybrid_rag/ api.py api_models.py routers/
+uvicorn api:app --reload
 ```
 
-pytest is configured with `asyncio_mode = "auto"` in `pyproject.toml` — no per-test async decorators needed.
+A Python change is only complete when:
 
-A **Python change is only complete** when `uv run ruff check .` and `pytest tests/ -v` (100% pass) both succeed.
+- `uv run ruff check .` passes
+- `pytest tests/ -v` passes
 
 ### Frontend
 
 ```bash
-cd frontend && pnpm install
-pnpm dev          # http://localhost:3000
-pnpm build && pnpm lint && pnpm test:unit
+cd frontend
+pnpm install
+pnpm lint && pnpm build
+pnpm test:unit
+pnpm dev
 ```
 
-A **frontend change is only complete** when `pnpm lint`, `pnpm test:unit`, and `pnpm build` all pass.
+A frontend change is only complete when `pnpm lint`, `pnpm test:unit`, and `pnpm build` all pass.
 
 ## Architecture
 
-### Hybrid RAG Pipeline (`hybrid_rag/`)
+### Retrieval pipeline
 
-Five-stage retrieval in `retriever.py`:
-1. Semantic search via ChromaDB (`vectordb.py`)
-2. Keyword search (stop-word filtered, `constants.py`)
-3. Score fusion (weighted combination, configurable in `config.py`)
-4. Cross-encoder reranking — model `cross-encoder/ms-marco-MiniLM-L-6-v2` (`reranker.py`)
-5. Source deduplication
+Five stages in `hybrid_rag/retriever.py`:
 
-Public API in `__init__.py` with `__all__`:
-- **Core**: `HybridRetriever`, `HybridRetrieverConfig`, `CrossEncoderReranker`, `DEFAULT_CONFIG`
-- **Cache**: `CacheBackend`, `InMemoryCache`, `RedisCache`, `CacheSettings`, `create_cache_backend`
-- **Exceptions**: `HybridRAGException`, `RetrieverNotInitializedError`, `RetrievalError`, `VectorDBError`
-- **Utilities**: `chunk_text`, `chunk_document`, `initialize_vector_db`, `open_collection`,
-  `get_sample_documents`, `is_valid_collection_name`, `sanitize_collection_name`,
-  `list_existing_collections`, `save_config_to_disk`, `load_config_from_disk`, `resolve_startup_config`
-- **Constants**: `STOP_WORDS`, `MIN_SCORE_RETRIEVAL`, `KNOWLEDGE_DB_DIRECTORY`,
-  `CACHE_TELEMETRY_LABELS`, `DEFAULT_EMBEDDING_MODEL`, `DEFAULT_QUERY_PREFIX`
+1. semantic search via ChromaDB
+2. keyword search with stop-word filtering
+3. score fusion
+4. optional reranking
+5. source deduplication
 
-Config uses validated dataclasses (`config.py`, `__post_init__` validation, defaults from `constants.py`). `HybridRetrieverConfig.update(**kwargs)` returns a new instance via `dataclasses.replace` — never mutates. Default collection name is `"rag_collection"` (ChromaDB enforces 6–20 chars; `is_valid_collection_name` / `sanitize_collection_name` validate/coerce).
+### Public API
 
-### Caching (`cache.py`)
+Exported from `hybrid_rag/__init__.py`:
 
-Three-layer design:
-- **L1** — Full query response cache (shared retrieval layer in `api.py`); backend switchable via `CACHE_BACKEND=memory|redis`
-- **L2** — LRU embedding cache inside `HybridRetriever` (session-scoped)
-- **L3** — ChromaDB persistent vector storage
+- core: `HybridRetriever`, `HybridRetrieverConfig`, `CrossEncoderReranker`, `DEFAULT_CONFIG`
+- cache: `CacheBackend`, `InMemoryCache`, `RedisCache`, `CacheSettings`, `create_cache_backend`
+- exceptions: `HybridRAGException`, `RetrieverNotInitializedError`, `RetrievalError`, `VectorDBError`
+- utilities: `chunk_text`, `chunk_document`, `initialize_vector_db`, `open_collection`, `get_sample_documents`, `is_valid_collection_name`, `sanitize_collection_name`, `list_existing_collections`, `save_config_to_disk`, `load_config_from_disk`, `resolve_startup_config`
+- constants: `STOP_WORDS`, `MIN_SCORE_RETRIEVAL`, `KNOWLEDGE_DB_DIRECTORY`, `CACHE_TELEMETRY_LABELS`, `DEFAULT_EMBEDDING_MODEL`, `DEFAULT_QUERY_PREFIX`
 
-Cache failures are fail-open. Monitor at `GET /cache/stats`. Configure via env vars:
-- `CACHE_BACKEND` — `memory` (default) or `redis`
-- `REDIS_URL` — e.g. `redis://localhost:6379`; production requires `rediss://` (TLS) with password
-- `CACHE_TTL_SECONDS` — entry lifespan (default: 3600)
-- `CACHE_KEY_PREFIX` — prefix for shared Redis instances (default: `hybrid_rag_cache:`)
-- `CACHE_MAX_SIZE` — max in-memory LRU entries (default: 10000)
+### API surface
 
-**Cache invalidation**: L1 cache keys embed a `corpus_version` token built from `_cache_generation` + live `collection.count()` (format: `gen{N}.n{count}`). Increment the global `_cache_generation` int in `api.py` to bust the L1 cache after ingestion or config changes. Register new cache event types in `CACHE_TELEMETRY_LABELS` in `constants.py`.
+- `GET /`
+- `GET /health`
+- `GET /config`
+- `PUT /config`
+- `POST /documents`
+- `GET /documents/sources`
+- `GET /collections`
+- `GET /cache/stats`
+- `WS /ws/chat`
 
-### API Layer (`api.py` + `routers/`)
+`POST /retrieve` is removed.
 
-FastAPI app. Entry point is `api.py`; routes are split into `routers/`:
-- `routers/websocket.py` — `WS /ws/chat` (primary retrieval; `POST /retrieve` removed)
-- `routers/health.py` — `GET /health`
-- `routers/config.py` — `GET /config`, `PUT /config` (invalidates L1 cache)
-- `routers/cache.py` — `GET /cache/stats`
-- `routers/documents.py` — `POST /documents`, `GET /documents/sources`
-- `routers/collections.py` — collection management endpoints
-- `api_models.py` — Pydantic request/response models
-- CORS middleware enabled
+### Caching
 
-Routers are registered at startup via `_register_routers_on_app()` (deferred to avoid circular imports).
+- L1: query-response cache shared by the API layer
+- L2: embedding LRU cache inside `HybridRetriever`
+- L3: ChromaDB persistence
 
-### Frontend (`frontend/`)
+Cache failures must fail open.
 
-Next.js 16.2.3 (App Router) + React 19 + Zustand + Tailwind v4. Components under `src/components/{chat,data,layout,settings,ui}/`. WebSocket client in `src/lib/ws.ts`. State in `src/stores/`.
+## Testing Guidance
 
-**Next.js 16 has breaking changes from 13/14.** Before writing frontend code, check `frontend/AGENTS.md` and current API patterns in `node_modules/next/dist/docs/`.
+Important fixtures in `tests/conftest.py`:
 
-## Testing
+- `initialized_app`: real retriever, slower
+- `fake_initialized_app`: stub retriever, preferred for HTTP-shape tests
+- `client_with_fresh_cache`: fake app with cleared cache
 
-Fixtures from `tests/conftest.py`:
-- `initialized_app` — real retriever + ChromaDB, ~10–18 s; skip if model unavailable
-- `fake_initialized_app` — stub retriever, no model download, <10 ms; use for HTTP shape tests
-- `client_with_fresh_cache` — cleared-cache variant (delegates to `fake_initialized_app`)
+Use `fake_initialized_app` unless the test truly needs the retrieval pipeline.
 
-Prefer `fake_initialized_app` for tests that don't exercise the retrieval pipeline. Always check `collection.count()` before retrieval in integration tests. Async tests work without decorators (`asyncio_mode = "auto"`).
+Slow tests are skipped by default. Use `pytest tests/ --run-slow` to include them.
 
-Tests that download the embedding model or make network calls are marked `@pytest.mark.slow` and **skipped by default**. Run with `pytest tests/ --run-slow` to include them. The `fake_initialized_app` fixture patches `api.initialize_retriever` to a no-op so the app lifespan runs (registering routers) without triggering a model download.
-## Agent Infrastructure
+## Editing Rules
 
-Custom AI agents in `.github/agents/` (planner, orchestrator, implementer, debugger, reviewer, designer, researcher). Catalog and usage in `.github/AGENTS.md`. **For complex multi-step tasks, consult that file before starting.**
+- Use `grep` before opening files.
+- Prefer small range reads over full-file reads.
+- Do not re-read files already in context unless needed.
+- Use `apply_patch` for text edits.
+- Preserve existing patterns and keep changes narrow.
 
-## Planning Discipline
+## Python Conventions
 
-**Use `/plan` before implementing any non-trivial feature or refactor.** The 3:1 fix-to-feature commit ratio in this repo comes from implementing before the approach is aligned. Plan first — it costs ~1k tokens; rework costs 5–10x that.
+- Ruff/Black-compatible formatting, max line length 88
+- Type hints on all functions
+- Google-style docstrings on public APIs
+- Dataclass config with validation in `__post_init__`
+- Use module loggers, not `print()`
+- Use custom exceptions from `hybrid_rag.exceptions`
 
-## File Read Discipline
+## Repo-Specific Rules
 
-High file-read token cost degrades every session. Required sequence for any symbol lookup:
+- Default collection name is `rag_collection`.
+- `HybridRetrieverConfig.update(**kwargs)` returns a new instance.
+- Router modules must access shared state through the `api` module.
+- Do not add direct `requests` or `chromadb` imports in routers.
+- `examples/` contains demo code and is not production code.
 
-1. **`grep` first** — locate exact line numbers before opening any file
-2. **Explore subagent for broad questions** — `subagent_type: "Explore"` rather than reading files directly
-3. **Range reads only** — always pass `offset` + `limit` to `Read` (±20 lines around grep result)
-4. **No re-reads** — if a file is already in context, reference it; don't read again
-5. Full-file reads only for files under ~80 lines
+## Known Test Failures
 
-## Key Conventions
+Do not fix these as part of unrelated work:
 
-### Python
-
-- **Formatting/lint**: RUFF, max 88 chars (Black-compatible). Run `uv run ruff check .` before committing.
-- **Imports**: Three groups — stdlib, third-party, local — separated by blank lines
-- **Type hints**: Required on all functions. Modern syntax: `list[str]`, `dict[str, Any]`. Use `Optional[T]` or `T | None`. `py.typed` marker present (PEP 561).
-- **Naming**: `snake_case` functions, `PascalCase` classes, `UPPER_SNAKE_CASE` constants, `_single_underscore` private members
-- **Docstrings**: Google style on all public functions, classes, modules
-- **Errors**: Custom exceptions from `hybrid_rag.exceptions`. No bare `except Exception` except at fail-open boundaries. Module-level loggers only — no `print()`.
-- **Config**: `@dataclass` with `__post_init__` validation. `replace()` for updates (immutable).
-- **Tests**: 80% coverage minimum, 100% pass rate. `test_<method>_<condition>_<outcome>` naming. One test class per module.
-
-### Git
-
-Branch: `<type>/<name>` (types: `feature/`, `epic/`, `bugfix/`, `hotfix/`, `patch/`, `docs/`, `refactor/`, `test/`)
-
-Commit: `<type>(<scope>): <subject>` (types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `perf`). Breaking changes: `feat(scope)!:` + `BREAKING CHANGE:` footer.
-
-## Pre-Commit Checklist
-- [ ] `pytest tests/ -v` — 100% pass
-- [ ] `pytest --cov=hybrid_rag --cov=api` — ≥80% coverage
-- [ ] `uv run ruff check .` — zero errors
-- [ ] Type hints on all new functions
-- [ ] Google-style docstrings on public functions
-- [ ] No `print()` (use `logger`)
-- [ ] Custom exceptions (no bare `Exception`)
-- [ ] Updated `__all__` if adding public APIs
+- `test_all_acceptance_criteria_implemented`
+- `test_url_html_ingestion_stores_heading_metadata`
+- `test_ingest_update_clears_cache`
+- `test_ingest_add_preserves_cache`
 
 ## Environment
 
-Copy `.env.local.example` to `.env.local`. Python 3.13+ and Node 20.9+ required.
-
-## GitHub Access
-
-GitHub MCP is not needed — `gh pr view`, `gh pr diff`, `gh api` cover all PR access without it.
-
-## Routers — Shared State Access
-
-All router modules (`routers/*.py`) access `api.logger`, `api.requests.get()`, `api.chromadb.PersistentClient()` via the `api` module (not local imports). This keeps existing `monkeypatch("api.requests.get")` patches working. Never add `import requests` or `import chromadb` directly in routers.
-
-## Known Pre-existing Test Failures
-
-These fail in CI/sandbox environments and should not be fixed:
-- `test_all_acceptance_criteria_implemented` — checks routes on bare `FastAPI()` with no routers registered
-- `test_url_html_ingestion_stores_heading_metadata` — DNS blocked in sandbox
-- `test_ingest_update_clears_cache` / `test_ingest_add_preserves_cache` — 404 on uninitialized app fixture
+ - Copy `.env.local.example` to `.env.local` when needed.
+ - Python 3.13+ and Node 20.9+ are required.
+ - GitHub MCP is not required; `gh` CLI is sufficient for PR inspection.

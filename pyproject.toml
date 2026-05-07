@@ -43,4 +43,4 @@ markers = [
 ]
 
 [tool.ruff]
-exclude = ["jupyter-playground.ipynb"]
+exclude = ["jupyter-playground.ipynb", "examples/"]
