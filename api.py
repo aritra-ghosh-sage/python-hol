@@ -78,7 +78,6 @@ from hybrid_rag.config import CacheSettings, create_cache_backend
 # continue to work without modification.
 from api_models import (
     BackendHealthStats,
-    CacheStatsResponse,
     CollectionInfo,
     CollectionsResponse,
     ConfigResponse,
@@ -93,8 +92,6 @@ from api_models import (
     LayeredCacheStatsResponse,
     SourcesResponse,
     WsErrorMessage,
-    WsMessageBase,
-    WsQueryMessage,
     WsResultsMessage,
     WsStatusMessage,
 )
@@ -145,7 +142,6 @@ __all__ = [
     # Models — re-exported so ``from api import X`` and ``api.X`` continue to
     # work for existing tests and client code after the models moved to api_models.py.
     "BackendHealthStats",
-    "CacheStatsResponse",
     "CollectionInfo",
     "CollectionsResponse",
     "ConfigResponse",
@@ -160,8 +156,6 @@ __all__ = [
     "LayeredCacheStatsResponse",
     "SourcesResponse",
     "WsErrorMessage",
-    "WsMessageBase",
-    "WsQueryMessage",
     "WsResultsMessage",
     "WsStatusMessage",
 ]
