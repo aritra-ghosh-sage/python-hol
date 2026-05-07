@@ -135,7 +135,8 @@ def test_api_and_mcp_produce_identical_cache_keys():
     This is a regression test for DEAD_CODE_AUDIT.md finding #1.
     If these diverge, the two processes will silently stop sharing Redis cache.
     """
-    # Simulate the config used by both entry points
+    # Config dict structure must match both api.py and mcp_server.py
+    # See api.py:_shared_retrieve_documents() and mcp_server.py:query_knowledge_base()
     config_dict = {
         "semantic_top_k": 5,
         "keyword_top_k": 5,
@@ -150,7 +151,7 @@ def test_api_and_mcp_produce_identical_cache_keys():
     corpus_version = "gen0.n100"
     enable_rerank = True
 
-    # Both should produce the same key using the shared utility
+    # Call the shared utility twice with identical inputs
     key1 = build_shared_retrieve_cache_key(
         query=query,
         config_dict=config_dict,
@@ -165,5 +166,12 @@ def test_api_and_mcp_produce_identical_cache_keys():
         enable_rerank=enable_rerank,
     )
 
+    # Verify determinism
     assert key1 == key2, "Cache key builder must be deterministic"
     assert key1.startswith("shared-retrieve:"), "Cache key must have correct prefix"
+
+    # Verify config fields are as expected (regression guard against field additions/removals)
+    expected_fields = {"semantic_top_k", "keyword_top_k", "final_top_k",
+                       "semantic_weight", "keyword_weight", "enable_rerank", "pre_rerank_top_k"}
+    assert set(config_dict.keys()) == expected_fields, \
+        "Config dict fields must match both api.py and mcp_server.py implementations"

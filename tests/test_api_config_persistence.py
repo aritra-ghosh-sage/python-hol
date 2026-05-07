@@ -96,7 +96,7 @@ class TestConfigPersistenceAPI:
             stack.enter_context(patch("api.open_collection", return_value=MagicMock()))
             stack.enter_context(patch("api.HybridRetriever", return_value=MagicMock()))
             stack.enter_context(
-                patch("api._build_corpus_version_token", return_value="gen0.n0")
+                patch("hybrid_rag.cache_utils.build_corpus_version_token", return_value="gen0.n0")
             )
 
             # Create new app instance to trigger startup

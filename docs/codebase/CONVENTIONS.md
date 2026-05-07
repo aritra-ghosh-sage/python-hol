@@ -10,7 +10,7 @@
 |---|---|---|
 | Functions | `snake_case`, verb phrases | `retrieve_documents`, `create_cache_backend` |
 | Classes | `PascalCase`, nouns | `HybridRetriever`, `CacheBackend` |
-| Constants | `UPPER_SNAKE_CASE` | `DEFAULT_CONFIG`, `STOP_WORDS`, `MIN_RELEVANCE_SCORE` |
+| Constants | `UPPER_SNAKE_CASE` | `DEFAULT_CONFIG`, `STOP_WORDS`, `MIN_SCORE_RETRIEVAL` |
 | Private attributes | Single underscore | `_retriever`, `_cache_generation`, `_embedding_cache` |
 | Test methods | `test_<action>_<condition>_<expected_outcome>` | `test_cache_returns_none_for_missing_key` |
 | Module exports | `__all__` list at top of each module | Verified in every `hybrid_rag/*.py` file |
