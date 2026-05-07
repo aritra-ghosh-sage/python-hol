@@ -18,6 +18,7 @@ from hybrid_rag import (
     CACHE_TELEMETRY_LABELS,
     DEFAULT_CONFIG,
     KNOWLEDGE_DB_DIRECTORY,
+    MIN_SCORE_RETRIEVAL,
     CacheBackend,
     CacheSettings,
     HybridRetriever,
@@ -224,7 +225,7 @@ async def query_knowledge_base(
                 "score": float(r["score"]),
             }
             for r in raw_results
-            if float(r.get("score", 0.0)) >= 0.40
+            if float(r.get("score", 0.0)) >= MIN_SCORE_RETRIEVAL
         ]
 
         return {
