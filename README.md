@@ -68,14 +68,13 @@ python examples/hybrid_rag_flow.py
 
 ### 5. Manage ChromaDB collections
 
+The repository includes a comprehensive CLI tool for collection and model management:
+
 ```bash
 uv run rag-collections -h
 ```
 
-`status` reports document counts and whether a collection looks corrupted based on
-its persisted SQLite metadata and vector-segment files inside `knowledge_db/`.
-`backup` archives the active configured Chroma persistence state into `backup/`
-using the format `mm_dd_yy_HH_MM_SS.bak`.
+**See [`docs/QUICK_START.md`](docs/QUICK_START.md#cli-manage-chromadb-collections) for detailed usage examples.**
 
 ## MCP Server (optional)
 

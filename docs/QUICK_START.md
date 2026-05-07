@@ -159,6 +159,81 @@ python examples/main_example.py
 python examples/hybrid_rag_flow.py
 ```
 
+## CLI: Manage ChromaDB Collections
+
+The `rag-collections` CLI tool provides commands for backing up, restoring, and configuring ChromaDB collections and model state:
+
+```bash
+uv run rag-collections -h
+```
+
+### Collection & Database Commands
+
+```bash
+# List all ChromaDB collections
+uv run rag-collections list
+
+# Show collection status (document count, health check)
+uv run rag-collections status
+
+# Backup the active vector database (ChromaDB)
+uv run rag-collections backup
+
+# Restore from the last timestamped backup (interactive with confirmation)
+uv run rag-collections restore
+
+# Restore without confirmation
+uv run rag-collections restore --force
+```
+
+### Model Backup & Restore
+
+```bash
+# Backup sentence-transformer models (models/embedding + models/custom_embed)
+uv run rag-collections model-backup st
+
+# Backup cross-encoder reranker models (models/reranker)
+uv run rag-collections model-backup ce
+
+# Restore latest sentence-transformer backup
+uv run rag-collections model-restore st
+
+# Restore latest cross-encoder backup
+uv run rag-collections model-restore ce
+
+# Restore without interactive confirmation
+uv run rag-collections model-restore st --force
+```
+
+### MCP Server Configuration
+
+```bash
+# Configure MCP server host, port, transport, and collection name
+# Creates collection if it doesn't exist
+uv run rag-collections set-environment \
+  --mcp-host 127.0.0.1 \
+  --mcp-port 8000 \
+  --mcp-transport streamable-http \
+  --collection my_collection
+```
+
+### Backup Format
+
+Backups are stored in the `./backup/` directory with timestamped filenames:
+
+- Database: `db_MM_DD_YY_HH_MM_SS.bak`
+- Sentence-transformer: `st_MM_DD_YY_HH_MM_SS.bak`
+- Cross-encoder: `ce_MM_DD_YY_HH_MM_SS.bak`
+
+All backups are ZIP archives with DEFLATE compression. The latest timestamped backup is automatically selected for restore operations.
+
+### Safety Features
+
+- **Destructive action confirmation**: Restore operations show source, target, and timestamp before requiring confirmation
+- **Path traversal protection**: ZIP extraction validates and rejects suspicious paths
+- **Atomic swaps**: Extracted content is staged before replacing target directories
+- **Force override**: Use `--force` flag to bypass confirmation prompts (for automation)
+
 ## Validate Changes
 
 ```bash
