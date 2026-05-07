@@ -26,6 +26,9 @@ dependencies = [
     "uvicorn>=0.44.0",
 ]
 
+[project.scripts]
+rag-collections = "tools.collections_cli:main"
+
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",
@@ -40,6 +43,7 @@ dev = [
 asyncio_mode = "auto"
 markers = [
     "slow: tests that download models or make real network calls (run with --run-slow)",
+    "cli: opt-in CLI tests excluded from default pytest runs (run with --run-cli)",
 ]
 
 [tool.ruff]

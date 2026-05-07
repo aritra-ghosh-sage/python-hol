@@ -37,17 +37,24 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="Run tests marked @pytest.mark.slow (downloads models, makes network calls).",
     )
+    parser.addoption(
+        "--run-cli",
+        action="store_true",
+        default=False,
+        help="Run tests marked @pytest.mark.cli.",
+    )
 
 
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    if config.getoption("--run-slow"):
-        return
     skip_slow = pytest.mark.skip(reason="slow test — pass --run-slow to enable")
+    skip_cli = pytest.mark.skip(reason="cli test — pass --run-cli to enable")
     for item in items:
-        if item.get_closest_marker("slow"):
+        if item.get_closest_marker("slow") and not config.getoption("--run-slow"):
             item.add_marker(skip_slow)
+        if item.get_closest_marker("cli") and not config.getoption("--run-cli"):
+            item.add_marker(skip_cli)
 
 
 def _make_fake_retriever() -> HybridRetriever:

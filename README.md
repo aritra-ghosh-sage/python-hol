@@ -66,6 +66,17 @@ python examples/main_example.py
 python examples/hybrid_rag_flow.py
 ```
 
+### 5. Manage ChromaDB collections
+
+```bash
+uv run rag-collections -h
+```
+
+`status` reports document counts and whether a collection looks corrupted based on
+its persisted SQLite metadata and vector-segment files inside `knowledge_db/`.
+`backup` archives the active configured Chroma persistence state into `backup/`
+using the format `mm_dd_yy_HH_MM_SS.bak`.
+
 ## MCP Server (optional)
 
 The repository includes an MCP server entrypoint at `mcp_server.py` that exposes the hybrid RAG tools over an MCP transport. It supports these environment variables:
