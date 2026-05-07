@@ -145,7 +145,7 @@ async def test_initialize_retriever_uses_open_collection_when_collection_exists(
     mcp_server._config = DEFAULT_CONFIG
 
     monkeypatch.setattr(
-        mcp_server, "_load_initial_config", MagicMock(return_value=config)
+        mcp_server, "resolve_startup_config", MagicMock(return_value=config)
     )
     monkeypatch.setattr(
         mcp_server,
@@ -178,7 +178,7 @@ async def test_initialize_retriever_creates_collection_when_missing(monkeypatch)
     mcp_server._config = DEFAULT_CONFIG
 
     monkeypatch.setattr(
-        mcp_server, "_load_initial_config", MagicMock(return_value=config)
+        mcp_server, "resolve_startup_config", MagicMock(return_value=config)
     )
     monkeypatch.setattr(
         mcp_server, "list_existing_collections", MagicMock(return_value=[])
@@ -231,41 +231,41 @@ async def test_main_uses_http_transport(monkeypatch):
     stdio_mock.assert_not_awaited()
 
 
-def test_load_initial_config_rejects_invalid_collection_name(monkeypatch):
+def test_resolve_startup_config_rejects_invalid_collection_name(monkeypatch):
     """Invalid COLLECTION_NAME env var raises ValueError before Chroma startup."""
     monkeypatch.setenv("COLLECTION_NAME", "my.col")  # dots not allowed
 
     with pytest.raises(ValueError, match="Invalid COLLECTION_NAME"):
-        mcp_server._load_initial_config()
+        mcp_server.resolve_startup_config(mcp_server.KNOWLEDGE_DB_DIRECTORY)
 
 
-def test_load_initial_config_accepts_valid_collection_name(monkeypatch):
+def test_resolve_startup_config_accepts_valid_collection_name(monkeypatch):
     """Valid COLLECTION_NAME env var is applied when the collection exists in ChromaDB."""
     monkeypatch.setenv("COLLECTION_NAME", "valid_col_1")
     monkeypatch.setattr(
         "hybrid_rag.persistence.list_existing_collections", lambda _: ["valid_col_1"]
     )
 
-    config = mcp_server._load_initial_config()
+    config = mcp_server.resolve_startup_config(mcp_server.KNOWLEDGE_DB_DIRECTORY)
 
     assert config.collection_name == "valid_col_1"
 
 
-def test_load_initial_config_falls_back_when_collection_missing(monkeypatch):
+def test_resolve_startup_config_falls_back_when_collection_missing(monkeypatch):
     """COLLECTION_NAME not in ChromaDB is ignored; result is the config.json-level fallback."""
     monkeypatch.setenv("COLLECTION_NAME", "missing_col")
     monkeypatch.setattr(
         "hybrid_rag.persistence.list_existing_collections", lambda _: []
     )
 
-    config = mcp_server._load_initial_config()
+    config = mcp_server.resolve_startup_config(mcp_server.KNOWLEDGE_DB_DIRECTORY)
 
     # Both config.json's collection and the env var collection are absent from
     # the mocked empty list, so the result is DEFAULT_CONFIG.
     assert config == DEFAULT_CONFIG
 
 
-def test_load_initial_config_uses_disk_config_when_collection_verified(monkeypatch):
+def test_resolve_startup_config_uses_disk_config_when_collection_verified(monkeypatch):
     """config.json is used when its collection_name exists in ChromaDB and no env var is set."""
     monkeypatch.delenv("COLLECTION_NAME", raising=False)
     monkeypatch.setattr(
@@ -276,13 +276,13 @@ def test_load_initial_config_uses_disk_config_when_collection_verified(monkeypat
         lambda _: DEFAULT_CONFIG.update(semantic_weight=0.9, keyword_weight=0.1),
     )
 
-    config = mcp_server._load_initial_config()
+    config = mcp_server.resolve_startup_config(mcp_server.KNOWLEDGE_DB_DIRECTORY)
 
     assert config.collection_name == "rag_collection"
     assert config.semantic_weight == 0.9
 
 
-def test_load_initial_config_writes_back_env_var_collection_to_disk(monkeypatch):
+def test_resolve_startup_config_writes_back_env_var_collection_to_disk(monkeypatch):
     """Applying COLLECTION_NAME env var also persists the collection_name to config.json."""
     monkeypatch.setenv("COLLECTION_NAME", "env_coll_1")
     monkeypatch.setattr(
@@ -294,7 +294,7 @@ def test_load_initial_config_writes_back_env_var_collection_to_disk(monkeypatch)
         lambda cfg, _dir: saved.append(cfg.collection_name),
     )
 
-    config = mcp_server._load_initial_config()
+    config = mcp_server.resolve_startup_config(mcp_server.KNOWLEDGE_DB_DIRECTORY)
 
     assert config.collection_name == "env_coll_1"
     assert saved == ["env_coll_1"]

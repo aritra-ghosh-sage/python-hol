@@ -50,21 +50,6 @@ def pytest_collection_modifyitems(
             item.add_marker(skip_slow)
 
 
-def _is_retriever_collection_healthy() -> bool:
-    """Return True when the global retriever has an accessible collection."""
-    if api._retriever is None:
-        return False
-
-    try:
-        collection = api._retriever.collection
-        # count() forces a round-trip to Chroma and surfaces stale/deleted handles.
-        _ = collection.count()
-        return True
-    except Exception as exc:
-        logger.warning("Retriever collection health check failed: %s", exc)
-        return False
-
-
 def _make_fake_retriever() -> HybridRetriever:
     """Build a HybridRetriever stub that never loads the sentence-transformer model.
 

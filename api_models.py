@@ -169,54 +169,6 @@ class CollectionsResponse(BaseModel):
     )
 
 
-class CacheStatsResponse(BaseModel):
-    """Response model for cache statistics.
-
-    Note: Superseded by ``LayeredCacheStatsResponse`` (OPTB-008), which
-    separates L1 query-cache, L2 embedding-cache, and backend-health metrics
-    into distinct sections.  The ``GET /cache/stats`` endpoint returns
-    ``LayeredCacheStatsResponse``; this class is retained for backward
-    compatibility so that existing callers that import ``CacheStatsResponse``
-    from ``api`` or ``api_models`` continue to work without modification.
-    New code should use ``LayeredCacheStatsResponse`` instead.
-
-    Contains detailed cache performance metrics for monitoring and debugging.
-    Implements fail-open principle: never raises errors, always provides best-effort stats.
-
-    Attributes:
-        backend: Cache backend identifier ('memory' or 'redis').
-        hits: Total number of cache hits since initialization.
-        misses: Total number of cache misses since initialization.
-        hit_rate: Cache hit rate as a float (0.0-1.0).
-            Calculated as: hits / (hits + misses), or 0.0 if no activity.
-        size: Current number of entries in the cache.
-        max_size: Maximum capacity of the cache in entries.
-        ttl_seconds: Configured time-to-live for cache entries in seconds.
-        timestamp: When these statistics were captured (UTC datetime).
-
-    Example:
-        >>> response = CacheStatsResponse(
-        ...     backend="memory",
-        ...     hits=1500,
-        ...     misses=350,
-        ...     hit_rate=0.811,
-        ...     size=125,
-        ...     max_size=10000,
-        ...     ttl_seconds=3600,
-        ...     timestamp=datetime.now(timezone.utc)
-        ... )
-        >>> print(f"Hit rate: {response.hit_rate:.1%}")  # 81.1%
-    """
-
-    backend: str = Field(..., description="Cache backend ('memory' or 'redis')")
-    hits: int = Field(..., ge=0, description="Total cache hits")
-    misses: int = Field(..., ge=0, description="Total cache misses")
-    hit_rate: float = Field(..., ge=0.0, le=1.0, description="Cache hit rate (0.0-1.0)")
-    size: int = Field(..., ge=0, description="Current cache size in entries")
-    max_size: int = Field(..., ge=0, description="Maximum cache capacity")
-    ttl_seconds: int = Field(..., ge=0, description="Configured TTL in seconds")
-    timestamp: datetime = Field(..., description="When stats were captured (UTC)")
-
 
 # ---------------------------------------------------------------------------
 # OPTB-008: Layered cache stats schema
@@ -367,31 +319,6 @@ class LayeredCacheStatsResponse(BaseModel):
         ..., description="Cache backend connectivity and health"
     )
     timestamp: datetime = Field(..., description="When stats were captured (UTC)")
-
-
-class WsMessageBase(BaseModel):
-    """Base model for WebSocket messages.
-
-    Note: This class is retained for backward compatibility only.  The active
-    WebSocket message types (WsStatusMessage, WsResultsMessage, WsErrorMessage)
-    each inherit directly from ``pydantic.BaseModel`` rather than from this
-    class.  External code that imports ``WsMessageBase`` from ``api`` or
-    ``api_models`` will continue to work, but new message types should also
-    inherit from ``pydantic.BaseModel`` directly.
-    """
-
-    type: str = Field(..., description="Message type")
-
-
-class WsQueryMessage(BaseModel):
-    """WebSocket message sent by client (query request)."""
-
-    query: str = Field(
-        ..., min_length=1, max_length=500, description="Search query"
-    )
-    enable_rerank: Optional[bool] = Field(
-        None, description="Override reranking setting"
-    )
 
 
 class WsStatusMessage(BaseModel):

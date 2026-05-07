@@ -61,21 +61,6 @@ _cache_generation: int = 0
 _corpus_version: str = "0"
 
 
-def _load_initial_config() -> HybridRetrieverConfig:
-    """Load startup configuration using the standard three-level precedence cascade.
-
-    Delegates to ``hybrid_rag.resolve_startup_config``. See that function for
-    the full precedence rules (COLLECTION_NAME env var → config.json → DEFAULT_CONFIG).
-
-    Returns:
-        Resolved HybridRetrieverConfig.
-
-    Raises:
-        ValueError: If COLLECTION_NAME env var has an invalid format.
-    """
-    return resolve_startup_config(KNOWLEDGE_DB_DIRECTORY)
-
-
 async def _initialize_retriever() -> None:
     """Initialize the hybrid retriever and cache backend (called at server startup)."""
     global _config, _retriever, _cache, _corpus_version
@@ -84,7 +69,7 @@ async def _initialize_retriever() -> None:
         return  # Already initialized
 
     try:
-        config = _load_initial_config()
+        config = resolve_startup_config(KNOWLEDGE_DB_DIRECTORY)
         existing = list_existing_collections(KNOWLEDGE_DB_DIRECTORY)
         if config.collection_name in existing:
             collection = open_collection(
@@ -247,9 +232,6 @@ async def get_config() -> dict[str, Any]:
         Dictionary with current configuration values (semantic_top_k,
         keyword_top_k, final_top_k, weights, reranking settings, etc.)
     """
-    if _config is None:
-        raise ValueError("Configuration not available")
-
     return _config.to_dict()
 
 

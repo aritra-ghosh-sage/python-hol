@@ -5,7 +5,6 @@ cache clear on config updates, conditional cache clear on ingest,
 cache stats endpoint, and response headers.
 """
 
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,12 +17,6 @@ from hybrid_rag.config import CacheSettings, create_cache_backend
 # ============================================================================
 # TEST FIXTURES
 # ============================================================================
-
-
-@pytest.fixture
-def mock_cache() -> InMemoryCache:
-    """Create a real in-memory cache for testing."""
-    return InMemoryCache(ttl_seconds=3600, max_size=10000)
 
 
 # ============================================================================
@@ -88,65 +81,6 @@ def test_create_cache_backend_validates_settings() -> None:
 # ============================================================================
 # TEST: CACHE STATS RESPONSE MODEL
 # ============================================================================
-
-
-@pytest.mark.asyncio
-async def test_cache_stats_response_model() -> None:
-    """Test CacheStatsResponse Pydantic model validation."""
-    from pydantic import BaseModel, Field
-
-    class CacheStatsResponse(BaseModel):
-        """Response model for cache statistics."""
-
-        backend: str = Field(..., description="Cache backend (e.g., 'redis' | 'memory')")
-        hits: int = Field(..., ge=0, description="Total cache hits")
-        misses: int = Field(..., ge=0, description="Total cache misses")
-        hit_rate: float = Field(..., ge=0.0, le=1.0, description="Cache hit rate (0-1)")
-        size: int = Field(..., ge=0, description="Current cache size in entries")
-        max_size: int = Field(..., ge=0, description="Maximum cache capacity")
-        ttl_seconds: int = Field(..., ge=0, description="Configured TTL in seconds")
-        timestamp: datetime = Field(..., description="When stats were captured")
-
-    # Valid response
-    response = CacheStatsResponse(
-        backend="memory",
-        hits=100,
-        misses=50,
-        hit_rate=0.667,
-        size=25,
-        max_size=10000,
-        ttl_seconds=3600,
-        timestamp=datetime.now(),
-    )
-    assert response.backend == "memory"
-    assert response.hits == 100
-    assert response.hit_rate == pytest.approx(0.667, abs=0.001)
-
-    # Invalid: hit_rate > 1.0
-    with pytest.raises(ValueError):
-        CacheStatsResponse(
-            backend="memory",
-            hits=100,
-            misses=50,
-            hit_rate=1.5,  # Invalid
-            size=25,
-            max_size=10000,
-            ttl_seconds=3600,
-            timestamp=datetime.now(),
-        )
-
-    # Invalid: negative hits
-    with pytest.raises(ValueError):
-        CacheStatsResponse(
-            backend="memory",
-            hits=-1,  # Invalid
-            misses=50,
-            hit_rate=0.5,
-            size=25,
-            max_size=10000,
-            ttl_seconds=3600,
-            timestamp=datetime.now(),
-        )
 
 
 # ============================================================================

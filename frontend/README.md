@@ -1,36 +1,85 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Frontend
 
-## Getting Started
+This is the Next.js 16 frontend for Python HOL.
 
-First, run the development server:
+It provides three main operator flows:
+
+- query knowledge over `WS /ws/chat`
+- ingest content through REST endpoints
+- update retriever settings through REST endpoints
+
+## Stack
+
+- Next.js 16.2.3
+- React 19
+- Zustand
+- Tailwind CSS v4
+- Vitest
+
+## Install
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Run
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Default app URL: `http://localhost:3000`
 
-## Learn More
+## Required Backend
 
-To learn more about Next.js, take a look at the following resources:
+Start the FastAPI backend separately:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+cd ..
+source .venv/bin/activate
+uvicorn api:app --reload
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Environment Variables
 
-## Deploy on Vercel
+- `NEXT_PUBLIC_API_URL`
+  Defaults to `http://localhost:8000`
+- `NEXT_PUBLIC_WS_URL`
+  Defaults to `ws://localhost:8000/ws/chat`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Scripts
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+pnpm dev
+pnpm build
+pnpm start
+pnpm lint
+pnpm test:unit
+```
+
+## What the UI Uses
+
+REST:
+
+- `GET /config`
+- `PUT /config`
+- `POST /documents`
+- `GET /documents/sources`
+
+WebSocket:
+
+- `WS /ws/chat`
+
+## Validate
+
+```bash
+pnpm lint
+pnpm test:unit
+pnpm build
+```
+
+## Notes
+
+- Keep backend and frontend contracts aligned when editing request or response models.
+- If the UI cannot connect, verify the two `NEXT_PUBLIC_*` variables first.
+- For broader repo guidance, see the root `README.md` and `CLAUDE.md`.
