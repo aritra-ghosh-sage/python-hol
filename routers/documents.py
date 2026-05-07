@@ -30,6 +30,7 @@ from hybrid_rag import (
     VectorDBError,
     chunk_document,
 )
+from hybrid_rag.cache_utils import build_corpus_version_token
 
 # All log calls use ``api.logger`` directly so that tests which patch
 # ``api.logger`` (e.g. ``with patch("api.logger") as mock_logger:``)
@@ -412,7 +413,7 @@ async def add_documents(
             if effective_ingest_type == "update":
                 prev_version = api._corpus_version
                 api._cache_generation += 1
-                api._corpus_version = api._build_corpus_version_token()
+                api._corpus_version = build_corpus_version_token(api._retriever, api._cache_generation)
                 api.logger.info(
                     "cache.invalidation event=ingest_update prev_version=%s new_version=%s",
                     prev_version,
@@ -428,7 +429,7 @@ async def add_documents(
                     api.logger.debug("Ingest complete (type='update'); cache not initialized")
             else:
                 prev_version = api._corpus_version
-                api._corpus_version = api._build_corpus_version_token()
+                api._corpus_version = build_corpus_version_token(api._retriever, api._cache_generation)
                 api.logger.info(
                     "cache.invalidation event=ingest_add prev_version=%s new_version=%s",
                     prev_version,

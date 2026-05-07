@@ -18,6 +18,7 @@ from hybrid_rag import (
     open_collection,
     save_config_to_disk,
 )
+from hybrid_rag.cache_utils import build_corpus_version_token
 
 # All log calls use ``api.logger`` so that tests which capture the ``api``
 # logger (via ``caplog.at_level(logger="api")`` or ``patch("api.logger")``)
@@ -169,7 +170,7 @@ async def update_config(request: ConfigUpdateRequest) -> ConfigResponse:
 
         prev_version = api._corpus_version
         api._cache_generation += 1
-        api._corpus_version = api._build_corpus_version_token()
+        api._corpus_version = build_corpus_version_token(api._retriever, api._cache_generation)
         api.logger.info(
             "cache.invalidation event=config_change prev_version=%s new_version=%s",
             prev_version,

@@ -39,12 +39,12 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, tmp_path_str: str) -> None:
     Patches:
     - api.KNOWLEDGE_DB_DIRECTORY  → tmp_path_str (avoids touching the real DB)
     - api.HybridRetriever         → MagicMock (no model download)
-    - api._build_corpus_version_token → returns "gen0.n0" (avoids real DB call)
+    - build_corpus_version_token  → returns "gen0.n0" (avoids real DB call)
     """
     monkeypatch.setattr("api.KNOWLEDGE_DB_DIRECTORY", tmp_path_str)
     monkeypatch.setattr("api.HybridRetriever", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr(
-        "api._build_corpus_version_token", lambda: "gen0.n0"
+        "hybrid_rag.cache_utils.build_corpus_version_token", lambda retriever, cache_generation: "gen0.n0"
     )
 
 
@@ -231,7 +231,7 @@ class TestInitializeRetrieverConfigHydration:
         _reset_api_state()
         monkeypatch.setattr("api.KNOWLEDGE_DB_DIRECTORY", tmp_path_str)
         monkeypatch.setattr("api.HybridRetriever", MagicMock(return_value=MagicMock()))
-        monkeypatch.setattr("api._build_corpus_version_token", lambda: "gen0.n0")
+        monkeypatch.setattr("hybrid_rag.cache_utils.build_corpus_version_token", lambda retriever, cache_generation: "gen0.n0")
         monkeypatch.setattr("api.open_collection", MagicMock(return_value=MagicMock()))
         monkeypatch.setattr("api.initialize_vector_db", MagicMock(return_value=MagicMock()))
         monkeypatch.setattr("api.get_sample_documents", MagicMock(return_value=[]))

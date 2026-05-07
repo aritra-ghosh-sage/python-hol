@@ -377,22 +377,21 @@ async def test_query_knowledge_base_fail_open_on_cache_error(mock_retriever):
 
 
 def test_build_corpus_version_token_with_retriever(mock_retriever):
-    """_build_corpus_version_token reads collection count from the retriever."""
-    mock_retriever.collection.count.return_value = 42
-    mcp_server._retriever = mock_retriever
-    mcp_server._cache_generation = 1
+    """build_corpus_version_token reads collection count from the retriever."""
+    from hybrid_rag.cache_utils import build_corpus_version_token
 
-    token = mcp_server._build_corpus_version_token()
+    mock_retriever.collection.count.return_value = 42
+
+    token = build_corpus_version_token(mock_retriever, cache_generation=1)
 
     assert token == "gen1.n42"
 
 
 def test_build_corpus_version_token_without_retriever():
-    """_build_corpus_version_token falls back gracefully when retriever is None."""
-    mcp_server._retriever = None
-    mcp_server._cache_generation = 0
+    """build_corpus_version_token falls back gracefully when retriever is None."""
+    from hybrid_rag.cache_utils import build_corpus_version_token
 
-    token = mcp_server._build_corpus_version_token()
+    token = build_corpus_version_token(None, cache_generation=0)
 
     assert token == "gen0.n0"
 
