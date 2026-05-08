@@ -618,12 +618,6 @@ def cmd_add(args: argparse.Namespace) -> int:
 
 
 def cmd_delete(args: argparse.Namespace) -> int:
-    # try:
-    #     _validate_collection_name(args.name)
-    # except ValueError as exc:
-    #     print(str(exc), file=sys.stderr)
-    #     return 2
-
     names = set(_get_collection_names(args.persist_dir))
     if args.name not in names:
         print(f"Collection '{args.name}' does not exist.", file=sys.stderr)
@@ -801,7 +795,7 @@ def cmd_model_restore(args: argparse.Namespace) -> int:
 
     if latest_backup is None:
         if args.model_type == "st":
-            print("no sentence transformer backip found", file=sys.stderr)
+            print("no sentence transformer backup found", file=sys.stderr)
         else:
             print("no cross encoder backup found", file=sys.stderr)
         return 1

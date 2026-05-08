@@ -550,7 +550,7 @@ def test_model_restore_returns_sentence_transformer_not_found_message(
 
     captured = capsys.readouterr()
     assert exit_code == 1
-    assert "no sentence transformer backip found" in captured.err
+    assert "no sentence transformer backup found" in captured.err
 
 
 def test_model_restore_returns_cross_encoder_not_found_message(
