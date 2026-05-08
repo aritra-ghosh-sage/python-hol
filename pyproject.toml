@@ -26,9 +26,6 @@ dependencies = [
     "uvicorn>=0.44.0",
 ]
 
-[project.scripts]
-rag-collections = "tools.collections_cli:main"
-
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",

@@ -208,13 +208,9 @@ uv run rag-collections model-restore st --force
 ### MCP Server Configuration
 
 ```bash
-# Configure MCP server host, port, transport, and collection name
-# Creates collection if it doesn't exist
-uv run rag-collections set-environment \
-  --mcp-host 127.0.0.1 \
-  --mcp-port 8000 \
-  --mcp-transport streamable-http \
-  --collection my_collection
+# Configure the environment for an existing collection
+# The collection must already exist or this command will fail
+uv run rag-collections set-environment my_collection
 ```
 
 ### Backup Format
