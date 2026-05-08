@@ -946,7 +946,7 @@ def build_parser() -> argparse.ArgumentParser:
         "model-restore",
         help=(
             "Restore the latest model-family backup (st_<timestamp>.bak or "
-            "ce_<timestamp>.bak) into the persistence directory."
+            "ce_<timestamp>.bak) into the configured model directories."
         ),
     )
     model_restore_parser.add_argument(
