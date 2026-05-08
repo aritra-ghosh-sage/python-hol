@@ -203,10 +203,10 @@ def _create_backup_archive_from_sources(
             for path in sorted(resolved_source_dir.rglob("*")):
                 if not path.is_file():
                     continue
-                archive.write(
-                    path,
-                    arcname=archive_root / path.relative_to(resolved_source_dir),
-                )
+                # Normalize arcname to POSIX-style forward slashes for portability
+                arcname = str(archive_root / path.relative_to(resolved_source_dir))
+                arcname = arcname.replace("\\", "/")
+                archive.write(path, arcname=arcname)
 
     return output_path
 
@@ -379,11 +379,38 @@ def _restore_backup_to_target_dir(
 
 
 def _replace_directory_from_staging(staged_dir: Path, target_dir: Path) -> None:
+    """Atomically replace target_dir with staged_dir using rename-based swap.
+
+    This implementation ensures the restore is recoverable on failure by:
+    1. Moving existing target to a backup name
+    2. Moving staged directory into place
+    3. Deleting the old backup only after the new directory is in place
+    """
     resolved_target_dir = target_dir.resolve()
-    if resolved_target_dir.exists():
-        shutil.rmtree(resolved_target_dir)
     resolved_target_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(staged_dir), str(resolved_target_dir))
+
+    # Create a temporary backup directory name
+    backup_dir = None
+    if resolved_target_dir.exists():
+        backup_dir = resolved_target_dir.with_name(
+            f"{resolved_target_dir.name}.backup.{os.getpid()}"
+        )
+        # Atomically move existing target to backup location
+        shutil.move(str(resolved_target_dir), str(backup_dir))
+
+    try:
+        # Move staged directory into final location
+        shutil.move(str(staged_dir), str(resolved_target_dir))
+        # Only after successful move, delete the old backup
+        if backup_dir is not None and backup_dir.exists():
+            shutil.rmtree(backup_dir)
+    except Exception:
+        # If the move fails, restore from backup
+        if backup_dir is not None and backup_dir.exists():
+            if resolved_target_dir.exists():
+                shutil.rmtree(resolved_target_dir)
+            shutil.move(str(backup_dir), str(resolved_target_dir))
+        raise
 
 
 def _restore_sentence_transformer_backup(
