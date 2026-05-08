@@ -66,6 +66,16 @@ python examples/main_example.py
 python examples/hybrid_rag_flow.py
 ```
 
+### 5. Manage ChromaDB collections
+
+The repository includes a comprehensive CLI tool for collection and model management:
+
+```bash
+uv run rag-collections -h
+```
+
+**See [`docs/QUICK_START.md`](docs/QUICK_START.md#cli-manage-chromadb-collections) for detailed usage examples.**
+
 ## MCP Server (optional)
 
 The repository includes an MCP server entrypoint at `mcp_server.py` that exposes the hybrid RAG tools over an MCP transport. It supports these environment variables:

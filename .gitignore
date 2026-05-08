@@ -34,3 +34,5 @@ frontend/tmp-e2e/screenshots/
 .claude/context/
 .opencode/
 
+#backups
+backup/

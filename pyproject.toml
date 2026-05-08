@@ -40,6 +40,7 @@ dev = [
 asyncio_mode = "auto"
 markers = [
     "slow: tests that download models or make real network calls (run with --run-slow)",
+    "cli: opt-in CLI tests excluded from default pytest runs (run with --run-cli)",
 ]
 
 [tool.ruff]
