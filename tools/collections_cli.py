@@ -903,8 +903,8 @@ def build_parser() -> argparse.ArgumentParser:
     model_backup_parser = subparsers.add_parser(
         "model-backup",
         help=(
-            "Archive the active collection with a model-family prefix in the "
-            "backup filename."
+            "Archive the selected model-family directory with a model-family "
+            "prefix in the backup filename."
         ),
     )
     model_backup_parser.add_argument(
