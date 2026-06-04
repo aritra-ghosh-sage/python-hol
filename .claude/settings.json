@@ -6,7 +6,15 @@
       "Bash(pnpm lint *)",
       "Bash(pnpm test:unit *)",
       "mcp__github__pull_request_read",
-      "mcp__github__issue_read"
+      "mcp__github__issue_read",
+      "mcp__codegraph__codegraph_explore",
+      "mcp__codegraph__codegraph_search",
+      "mcp__codegraph__codegraph_node",
+      "mcp__codegraph__codegraph_callers",
+      "mcp__codegraph__codegraph_callees",
+      "mcp__codegraph__codegraph_impact",
+      "mcp__codegraph__codegraph_files",
+      "mcp__codegraph__codegraph_status"
     ]
   }
 }
